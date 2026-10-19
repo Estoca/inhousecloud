@@ -8,6 +8,8 @@ Conventions in this file:
 - `$DIR` is the install directory. Default `/opt/open-company-harness`.
 - Every command runs **on the box**, as the user that ran the install (the one who can read `$DIR/.env`). If your terminal is on another machine, run each command through `ssh <box> '<command>'` and write files on the box (a heredoc through ssh, or `scp`).
 
+Operating a box that is already installed (diagnosis, disk, backup, restarts) is a different job with its own rules: [`operator-contract.md`](operator-contract.md) and [`runbooks/`](runbooks/); `scripts/harness-operator.sh brief` prints the map of the box.
+
 ## 0. Where am I?
 
 On a fresh box there is no checkout yet: `install.sh` and every later command run from a copy of this repository **on the box**, not from the one your terminal has open. Look for it, and put one there if it is missing:

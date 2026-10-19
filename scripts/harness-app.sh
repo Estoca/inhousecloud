@@ -355,6 +355,8 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
 
   inventory_record
   ok "inventory.json: $SLUG, owner $M_OWNER${GITHUB_REPOSITORY:+, repository $GITHUB_REPOSITORY}"
+  # The operator agent's map follows the inventory (agent profile only; never fails a deploy).
+  [ -d "$INSTALL_DIR/agent/reference" ] && { "$HARNESS_ROOT/scripts/harness-operator.sh" brief --install-dir "$INSTALL_DIR" --out "$INSTALL_DIR/agent/reference" >/dev/null 2>&1 || warn "operator brief not refreshed"; }
   if [ "$JSON_OUTPUT" = true ]; then
     jsonq build slug="$SLUG" url="$APP_URL" env_file="$APP_ENV" overlay="$APP_DIR/compose.harness.yml" resources="${RESOURCES# }"
   fi

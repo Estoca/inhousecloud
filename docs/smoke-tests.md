@@ -116,7 +116,22 @@ scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-b smoke.tx
 #       bucket app-<slug> and a key; the second provision keeps A's key (same id and
 #       secret); A's PUT and GET through the proxy answer 200 and return what was written;
 #       A's PUT and GET on B's bucket answer 403
+
+# 20. The operator agent (skipped only when the agent profile is off)
+docker compose -f "$HARNESS_COMPOSE_FILE" ps agent agent-docker-proxy
+python3 -c '...' "$AGENT_DIR/reference/brief.json"                  # services, access matrix, no secret value
+docker exec <agent> node -e 'fetch(DOCKER_API + "/containers/<postgres>/restart", {method: "POST"})'
+docker inspect <agent>                                               # mounts, networks, environment
+# PASS: both containers healthy; the brief names the core services, has an access matrix
+#       and contains no value of .env or of an app's env file; through the agent's Docker
+#       API a restart of a core container, a container create and a DELETE answer 403
+#       (whatever ops.agent.allow_write says), the container list 200, and an inspect has
+#       Env as names only; the agent has no Docker socket, no mount reaching .env, apps/
+#       or local/, is not on the ops network, and has no harness secret in its environment
+#       except GITEA_READONLY_TOKEN and its own AGENT_* keys
 ```
+
+Test 20 does not talk to the LLM or the chat channel: the installer never has their keys. A conversation is checked by a human after putting the keys in `.env` ([`operator-contract.md`](operator-contract.md), section 7).
 
 Test 18 signs in for real, with the smoke user's password from `.env`: it proves the binding to `harness-admins`, not just that a route exists. The positive side (an admin reaches a shell and the file list) needs the admin's password, which a human replaces after the first sign-in, so it is not a smoke test; `scripts/sso-login-check.sh --target https://terminal.<BASE_DOMAIN>` checks it by hand with `--expect allowed`. Without the box, `scripts/tests/ops-mounts.sh` checks the mounts of the compose file in the repository, including that a file browser mounting the install directory, `apps/` or `local/` is refused.
 

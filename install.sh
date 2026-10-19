@@ -86,6 +86,7 @@ install:
     core: true
     storage: $A_STORAGE
     ops: $A_OPS
+    agent: $A_AGENT
 ingress:
   mode: $A_INGRESS
   base_domain: $A_DOMAIN
@@ -137,6 +138,8 @@ ci:
   gitea_runner:
     registration_token_env: HARNESS_GITEA_RUNNER_TOKEN
 ops:
+  agent:
+    allow_write: false
   portainer: $A_OPS
   glances: $A_OPS
   wetty:
@@ -201,6 +204,7 @@ interactive_config() {
   if [ "$A_OPS" = true ]; then
     A_WETTY_KEY=$(ask_yn "Let the web terminal sign in as $(id -un): add its dedicated key to ~/.ssh/authorized_keys?" y)
   fi
+  A_AGENT=$(ask_yn "Enable the operator agent (needs an LLM API key and a chat channel)?" n)
   A_SCHEME=https; [ "$A_TLS" = off ] && A_SCHEME=http
   INSTALL_DIR="$A_DIR"
 }
@@ -255,6 +259,7 @@ derive() {
   case "$TUNNEL_PROVIDER" in cloudflared|tailscale) PROFILES="$PROFILES,$TUNNEL_PROVIDER" ;; esac
   BACKUP_ENABLED="${CFG_backup__enabled:-true}"
   [ "$BACKUP_ENABLED" = true ] && PROFILES="$PROFILES,backup"
+  [ "${CFG_install__profile__agent:-false}" = true ] || [ "${CFG_ops__agent__enabled:-false}" = true ] && PROFILES="$PROFILES,agent"
   PROFILES="${PROFILES#,}"
   BACKUP_DEST_ENV="${CFG_backup__destination_env:-${CFG_backup__remote__destination_env:-HARNESS_BACKUP_DESTINATION}}"
   BACKUP_KEY_ENV="${CFG_backup__encryption_key_env:-${CFG_backup__remote__encryption_key_env:-HARNESS_BACKUP_ENCRYPTION_KEY}}"
@@ -267,6 +272,7 @@ derive() {
   BACKUP_DEST="${BACKUP_DEST%/}"
   ADMIN_EMAIL="${CFG_admin__email:-admin@example.com}"
   derive_ops
+  derive_agent
   RESUME_PREFIX="$SELF --apply --install-dir $INSTALL_DIR"
 }
 
@@ -332,6 +338,131 @@ derive_ops() {
 }
 # `ci` is kept as an alias: the runners are core, so it is always on.
 has_profile_ci() { return 0; }
+
+# ------------------------------------------------------------------- agent
+# The agent profile: an operator agent on the box (docs/operator-contract.md), opt-in.
+# Reference implementation OpenClaw, in <install-dir>/agent/: state/ (its config and
+# sessions), workspace/ (AGENTS.md and its notes), reference/ (the contract, the
+# runbooks, the brief, harness-ro; mounted read only). It sees the Docker API only through
+# agent-docker-proxy (read only unless ops.agent.allow_write) and never the install
+# directory, its .env or the socket. Its LLM key and chat tokens are AGENT_* in .env, put
+# there by a human (or read from HARNESS_AGENT_* at install time): never generated.
+AGENT_SECRETS="AGENT_ANTHROPIC_API_KEY AGENT_OPENAI_API_KEY AGENT_SLACK_BOT_TOKEN AGENT_SLACK_APP_TOKEN AGENT_TELEGRAM_BOT_TOKEN AGENT_GITEA_TOKEN"
+
+derive_agent() {
+  AGENT_ON=false
+  if has_profile agent; then AGENT_ON=true; fi
+  AGENT_ALLOW_WRITE="${CFG_ops__agent__allow_write:-false}"
+  AGENT_DIR="$INSTALL_DIR/agent"
+}
+
+# agent_var NAME: the value in .env, else HARNESS_<NAME> from the environment.
+agent_var() {
+  local v=""
+  [ -f "$ENV_FILE" ] && v="$(env_get "$1")"
+  [ -z "$v" ] && eval "v=\${HARNESS_$1:-}"
+  printf '%s' "$v"
+}
+
+agent_preflight() {
+  local llm=false chan=""
+  [ -n "$(agent_var AGENT_ANTHROPIC_API_KEY)$(agent_var AGENT_OPENAI_API_KEY)" ] && llm=true
+  [ -n "$(agent_var AGENT_SLACK_BOT_TOKEN)" ] && [ -n "$(agent_var AGENT_SLACK_APP_TOKEN)" ] && chan="slack"
+  [ -n "$(agent_var AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan, }telegram"
+  [ "$llm" = true ] && ok "agent: LLM API key present" || warn "agent: no LLM API key (AGENT_ANTHROPIC_API_KEY or AGENT_OPENAI_API_KEY): it comes up, reads the box, and cannot answer until one is set"
+  [ -n "$chan" ] && ok "agent: chat channel $chan" || warn "agent: no chat channel (AGENT_SLACK_BOT_TOKEN + AGENT_SLACK_APP_TOKEN, or AGENT_TELEGRAM_BOT_TOKEN): only the admin can talk to it, through docker compose exec"
+  [ "$AGENT_ALLOW_WRITE" = true ] && warn "agent: ops.agent.allow_write is true: it may restart app containers and prune the build cache (docs/security.md)"
+  return 0
+}
+
+agent_env() {
+  local k v
+  for k in OPENCLAW_IMAGE AGENT_PROXY_IMAGE; do
+    v="$(envfile get "$HARNESS_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
+  done
+  env_default HARNESS_AGENT_NETWORK harness-agent
+  env_set AGENT_DIR "$AGENT_DIR"
+  env_set AGENT_ALLOW_WRITE "$AGENT_ALLOW_WRITE"
+  env_set AGENT_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
+  env_set AGENT_MODEL "${CFG_ops__agent__model:-}"
+  env_set AGENT_ALLOW_FROM "${CFG_ops__agent__allow_from:-}"
+  env_set AGENT_TZ "${CFG_ops__agent__timezone:-${CFG_backup__timezone:-UTC}}"
+  # Rootless Docker: container root is this user. Rootful: run as this user, not root.
+  if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then env_set AGENT_USER "0:0"
+  else env_set AGENT_USER "$(id -u):$(id -g)"; fi
+  for k in $AGENT_SECRETS; do env_default "$k" "$(agent_var "$k")"; done
+}
+
+# render_agent_config: <install-dir>/agent/state/openclaw.json. The keys the harness owns
+# are set on every run; anything else in the file (added by OpenClaw or by the admin) stays.
+render_agent_config() {
+  $PY - "$AGENT_DIR/state/openclaw.json" "$(env_get AGENT_MODEL)" "$(env_get AGENT_ALLOW_FROM)" \
+    "$( [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && [ -n "$(env_get AGENT_SLACK_APP_TOKEN)" ] && echo true || echo false)" \
+    "$( [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && echo true || echo false)" <<'PY'
+import json, os, sys
+path, model, allow, slack, telegram = sys.argv[1:6]
+try:
+    c = json.load(open(path))
+except (OSError, ValueError):
+    c = {}
+c.setdefault("gateway", {})["mode"] = "local"
+d = c.setdefault("agents", {}).setdefault("defaults", {})
+d["workspace"] = "/agent/workspace"
+d["skipBootstrap"] = True
+if model:
+    d.setdefault("model", {})["primary"] = model
+allow = [a.strip() for a in allow.split(",") if a.strip()]
+access = {"dmPolicy": "allowlist", "allowFrom": allow} if allow else {"dmPolicy": "pairing"}
+ch = c.setdefault("channels", {})
+if slack == "true":
+    s = ch.setdefault("slack", {})
+    s.update({"enabled": True, "botToken": {"source": "env", "provider": "default", "id": "SLACK_BOT_TOKEN"},
+              "appToken": {"source": "env", "provider": "default", "id": "SLACK_APP_TOKEN"}}, **access)
+elif "slack" in ch:
+    ch["slack"]["enabled"] = False
+if telegram == "true":
+    t = ch.setdefault("telegram", {})
+    t.update({"enabled": True}, **access)
+elif "telegram" in ch:
+    ch["telegram"]["enabled"] = False
+fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(c, f, indent=2); f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+}
+
+agent_up() {
+  local out probe llm chan
+  mkdir -p "$AGENT_DIR/state/home" "$AGENT_DIR/workspace" "$AGENT_DIR/reference" "$INSTALL_DIR/agent-proxy" "$(env_get AGENT_BACKUP_REPORTS_DIR)" 2>/dev/null || true
+  chmod 700 "$AGENT_DIR/state"
+  cp "$HARNESS_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
+  chmod 644 "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
+  render_agent_config || return 1
+  "$HARNESS_ROOT/scripts/harness-operator.sh" agent-sync --install-dir "$INSTALL_DIR" || return 1
+  dc up -d agent-docker-proxy agent || return 1
+  wait_healthy 240 agent-docker-proxy agent || return 1
+  # The read-only path works end to end, and a write is refused.
+  out="$(dc exec -T agent harness-ro docker /_ping 2>&1 | tr -d '[:space:]')"
+  [ "$out" = OK ] && ok "agent reads the Docker API through agent-docker-proxy" || { fail "agent cannot reach agent-docker-proxy: $out"; return 1; }
+  llm=false; [ -n "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ] && llm=true
+  chan=""; [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && chan=slack; [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan,}telegram"
+  probe="$(jsonq build enabled:=true image="$(env_get OPENCLAW_IMAGE)" workspace="$AGENT_DIR/workspace" brief="$AGENT_DIR/reference/brief.md" docker_api="read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo ' + app restart, build cache prune')" llm_key:="$llm" channel="${chan:-none}")"
+  state stage optional_profiles set probe "{\"agent\":$probe}"
+  state stage optional_profiles set resources "[\"dir:$AGENT_DIR\",\"container:agent\",\"container:agent-docker-proxy\"]"
+}
+
+agent_handoff() {
+  "$HARNESS_ROOT/scripts/harness-operator.sh" agent-sync --install-dir "$INSTALL_DIR" >/dev/null 2>&1 || true
+  _out "  agent      the operator agent reads $AGENT_DIR/reference/brief.md; contract docs/operator-contract.md"
+  if [ -z "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ]; then
+    _out "  The agent has no LLM key yet. Put AGENT_ANTHROPIC_API_KEY (or AGENT_OPENAI_API_KEY) and a channel"
+    _out "  (AGENT_SLACK_BOT_TOKEN + AGENT_SLACK_APP_TOKEN, or AGENT_TELEGRAM_BOT_TOKEN) in $ENV_FILE yourself, then:"
+    _out "    $SELF --apply --install-dir $INSTALL_DIR --from optional_profiles"
+  fi
+  [ -z "$(env_get AGENT_ALLOW_FROM)" ] && _out "  Chat access is by pairing: approve the first DM with  docker compose --project-directory $INSTALL_DIR exec agent node dist/index.js pairing list <slack|telegram>, then pairing approve <channel> <code>"
+  return 0
+}
 
 # ------------------------------------------------------------------ stages
 STAGES="$($PY "$HARNESS_LIB/state.py" /dev/null stages | tr '\n' ' ')"
@@ -418,6 +549,7 @@ stage_preflight() {
       fail "ops: refused ops.filebrowser.paths (see above)"; errors=$((errors+1))
     fi
   fi
+  [ "$AGENT_ON" = true ] && agent_preflight
   [ "$TLS_MODE" = internal ] && warn "tls internal: the proxy hosts are created without a certificate; upload a development certificate in the proxy admin (docs/first-run.md)"
   probe="$(jsonq build os="$os" docker="${docker_v:-}" compose="${compose_v:-}" memory_mb="${mem_mb:-}" disk_free_gib="$((${disk_kb:-0}/1048576))" ingress="$INGRESS/$TLS_MODE/$TUNNEL_PROVIDER" backup_destination="$BACKUP_DEST" errors:="$errors")"
   state stage preflight set probe "$probe"
@@ -433,6 +565,7 @@ stage_plan() {
   has_profile cloudflared && services="$services cloudflared"
   has_profile tailscale && services="$services tailscale"
   has_profile backup && services="$services backup"
+  has_profile agent && services="$services agent-docker-proxy agent"
   log "install directory : $INSTALL_DIR"
   log "profiles          : core${PROFILES:+,$PROFILES}"
   log "services          : $services"
@@ -455,6 +588,7 @@ stage_plan() {
     fi
     log "file browser      : $FB_APP_DATA (rw), $FB_REPORTS (ro)"
   fi
+  [ "$AGENT_ON" = true ] && log "operator agent    : $(envfile get "$HARNESS_ROOT/docker/.env.example" OPENCLAW_IMAGE) in $INSTALL_DIR/agent, Docker API read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo " + restart of app containers and build cache prune (ops.agent.allow_write)"); LLM key and chat channel from AGENT_* in .env (docs/operator-contract.md)"
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
   log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label harness-deploy, image $INSTALL_DIR/deployer)"
   log "human afterwards  : DNS/tunnel, MFA for the admin, replace bootstrap password, SMTP (docs/first-run.md)"
@@ -581,6 +715,7 @@ stage_secrets() {
   env_set FILEBROWSER_REPORTS_DIR "$FB_REPORTS"
   env_default AUTHENTIK_SMOKE_USER harness-smoke-user
   env_secret AUTHENTIK_SMOKE_USER_PASSWORD HARNESS_AUTHENTIK_SMOKE_USER_PASSWORD 32
+  agent_env
   mkdir -p "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"; chmod 700 "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"
   [ -e "$WETTY_KEY_DIR/known_hosts" ] || (umask 077; : > "$WETTY_KEY_DIR/known_hosts")
   if [ "$OPS_ON" = true ]; then
@@ -851,6 +986,7 @@ stage_optional_profiles() {
   if has_profile storage; then COMPOSE_PROJECT_NAME="$(env_get COMPOSE_PROJECT_NAME)" garage_layout_init "$(env_get GARAGE_CAPACITY)" || return 1; fi
   OPS_PROBE='{"enabled":false}'
   if has_profile ops; then ops_terminal; else dc rm -sf wetty filebrowser portainer glances >/dev/null 2>&1 || true; fi
+  if has_profile agent; then agent_up || return 1; else dc rm -sf agent agent-docker-proxy >/dev/null 2>&1 || true; fi
   state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }" ops:="$OPS_PROBE")"
 }
 
@@ -1011,6 +1147,7 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
       _out "  terminal   not installed: the reason is in $STATE_FILE (stages.optional_profiles.probe.ops); docs/security.md"
     fi
   fi
+  [ "$AGENT_ON" = true ] && agent_handoff
   if [ "$INGRESS" = local ]; then
     _out "  local ingress: these URLs answer on this box only. From another computer, keep a tunnel of its port 80 open:"
     _out "    sudo ssh -N -L 80:127.0.0.1:80 $(id -un)@<this box>   (port 80 only: the sign-in redirect drops any other port)"

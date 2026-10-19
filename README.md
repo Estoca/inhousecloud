@@ -59,6 +59,7 @@ That machine runs the control plane, the support plane, and the apps:
 - internal apps run as Docker Compose projects;
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
+- an optional operator agent answers "why is it down" in Slack or Telegram from a generated map of the box, read only by default, inside a written contract (the `agent` profile, [`docs/operator-contract.md`](docs/operator-contract.md));
 - an app portal records what should exist, what is running, and what changed;
 - coding agents connect to the same machine and use the same contracts as humans.
 
@@ -291,6 +292,7 @@ install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
 scripts/harness-app.sh new, provision, checkout, wait: the app loop (docs/gitops-flow.md)
 scripts/smoke-tests.sh The checks that decide "installed"
+scripts/harness-operator.sh brief: the generated map an operator reads first (docs/operator-contract.md)
 bootstrap/             config.example.yaml and state.example.json for the installer
 packages/cli/          Placeholder for validation and workflow tooling
 ```
@@ -309,9 +311,10 @@ Done:
 - PR 4: the app loop: `harness-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
 - PR 5: the agent path (`AGENTS.md`, `docs/llm-bootstrap.md`, `docs/agent-setup-contract.md`) rewritten for the loop above and tested with a cold agent run.
 
+- PR 7: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/harness-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
+
 Next:
 
-- `agent` profile: an operator agent on the box, opt-in, that answers people and repairs apps inside the same contract.
 - The real portal: read-only inventory, deploy runs, health, backups, and `GET /api/platform/status` for agents.
 - `private` (tailnet) and `public` (tunnel) ingress, tested end to end.
 
