@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 18 tests,, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 18 of the install sequence, 19 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -9,7 +9,8 @@ docker compose -f "$HARNESS_COMPOSE_FILE" config --quiet
 
 # 2. Every core service is running and healthy
 docker compose -f "$HARNESS_COMPOSE_FILE" ps --format json
-# PASS: all core services running/healthy, the two Actions runners included
+# PASS: all core services running/healthy, the two Actions runners included, and garage
+#       when the storage profile is on
 
 # 3. The shared Postgres accepts connections
 docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres \
@@ -103,6 +104,18 @@ docker compose -f "$HARNESS_COMPOSE_FILE" config --format json | scripts/lib/ops
 #       the portal container fails (the ops tools are not on the apps' network); and the
 #       file browser mounts only app data and the backup reports (read only), Wetty only
 #       its key directory (read only)
+
+# 19. Object storage (skipped only when the storage profile is off)
+docker compose -f "$HARNESS_COMPOSE_FILE" exec garage /garage health
+# provision smoke-s3-a twice and smoke-s3-b once (scripts/lib/garage.sh, the code of
+# harness-app provision), from the template manifest with object_storage.required: true
+scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-a smoke.txt   # key of A
+scripts/lib/s3.py get http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-a smoke.txt   # key of A
+scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-b smoke.txt   # key of A
+# PASS: garage healthy and the cluster has quorum (a layout is applied); each app gets a
+#       bucket app-<slug> and a key; the second provision keeps A's key (same id and
+#       secret); A's PUT and GET through the proxy answer 200 and return what was written;
+#       A's PUT and GET on B's bucket answer 403
 ```
 
 Test 18 signs in for real, with the smoke user's password from `.env`: it proves the binding to `harness-admins`, not just that a route exists. The positive side (an admin reaches a shell and the file list) needs the admin's password, which a human replaces after the first sign-in, so it is not a smoke test; `scripts/sso-login-check.sh --target https://terminal.<BASE_DOMAIN>` checks it by hand with `--expect allowed`. Without the box, `scripts/tests/ops-mounts.sh` checks the mounts of the compose file in the repository, including that a file browser mounting the install directory, `apps/` or `local/` is refused.
@@ -110,5 +123,7 @@ Test 18 signs in for real, with the smoke user's password from `.env`: it proves
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
 Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `harness-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It leaves `smoke-app` running, listed in `inventory.json` and reachable by the users group; every run adds one commit to its repository. The harness never deletes it; remove it by hand if it bothers you. The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
+
+Test 19 provisions with the same function `harness-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
 
 Test 6 is the one most often wrong on a real box: a Gitea configured to require sign-in answers 403 to an anonymous version call, and a probe without the token reports the service down while everything works.

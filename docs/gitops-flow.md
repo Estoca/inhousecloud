@@ -46,10 +46,10 @@ The workflow in the template ([`templates/app/.gitea/workflows/deploy.yml`](../t
 1. **`harness-app checkout`** fetches the pushed commit from Gitea over the internal network with the job's own token (through `GIT_ASKPASS`, never in a URL).
 2. **`harness-app provision <slug>`** is the executor. It refuses before changing anything when the manifest or the compose file breaks a rule, then makes sure, idempotently, of:
    - a valid manifest whose slug is the repository name and the argument;
-   - a compose file that brings no Postgres, Redis or MinIO of its own (the rule below);
+   - a compose file that brings no Postgres, Redis or S3 server of its own (the rule below);
    - with `database.required: true`, a database `app_<slug>` owned by a role `app_<slug>` on the shared Postgres: `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`, random password, `CONNECT` and `TEMPORARY` revoked from `PUBLIC`;
    - with `dependencies.redis.required: true`, a Redis ACL user `app-<slug>` that can only touch keys and channels under `<slug>:`, persisted in the ACL file the shared Redis loads at start;
-   - with `object_storage.required: true` and the `storage` profile on, a bucket `app-<slug>` with its own MinIO user and a policy on that bucket only (never the root credential); with the profile off, a clear failure;
+   - with `object_storage.required: true` and the `storage` profile on, a bucket `app-<slug>` on Garage and an access key `app-<slug>` that reads and writes that bucket only (never Garage's RPC secret or admin token; [`scripts/lib/garage.sh`](../scripts/lib/garage.sh)); with the profile off, a clear failure before anything changes;
    - `<install-dir>/apps/<slug>/.env`, mode `0600`, with `PORT`, `APP_SLUG`, `APP_BASE_URL`, `DATABASE_URL` and `PG*`, `REDIS_URL` and `REDIS_PREFIX`, `S3_*`, plus the keys of the app's `.env.example` it does not have yet (`LOCAL_*` keys excluded). Existing values are kept: a second run never changes a password;
    - `<install-dir>/apps/<slug>/compose.harness.yml`, an overlay that puts every service of the app on the harness network (the main one with the alias `<slug>`), drops published host ports and points `env_file` at the file above;
    - an Authentik proxy provider `app-<slug>` (forward auth, single application, the healthcheck path skipped), an application `<slug>` bound to the users group (`AUTHENTIK_APP_GROUP`), and the provider added to the embedded outpost;
@@ -64,10 +64,10 @@ The job is the record: who pushed, which commit, what each step printed, in the 
 
 ## The rule: no local infrastructure
 
-Apps built inside the cloud use the shared Postgres, Redis and MinIO; they do not bring their own. `provision` refuses, with the alternative in the message:
+Apps built inside the cloud use the shared Postgres, Redis and object storage; they do not bring their own. `provision` refuses, with the alternative in the message:
 
-- a compose service whose image is `postgres` (or `postgis`, `timescaledb`, `pgvector`), `redis` (or `valkey`, `keydb`, `redis-stack`) or `minio`, or a service named like one;
-- a manifest that declares a local one (`database.shared: false`, `dependencies.<redis|postgres|minio>.shared: false`, a `provider: local...`);
+- a compose service whose image is `postgres` (or `postgis`, `timescaledb`, `pgvector`), `redis` (or `valkey`, `keydb`, `redis-stack`) or an S3 server, or a service named like one;
+- a manifest that declares a local one (`database.shared: false`, `dependencies.<redis|postgres|s3>.shared: false`, a `provider: local...`);
 - `infrastructure.exception`: exceptions need a review the executor cannot do; such an app is deployed by hand until the portal reviews them.
 
 It also refuses host networking, privileged mode and a mounted Docker socket.

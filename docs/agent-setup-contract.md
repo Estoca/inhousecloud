@@ -65,7 +65,7 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 
 ## The agent never
 
-- adds `postgres`, `redis`, `minio` (or `valkey`, `keydb`, `postgis`...) services to an app's `docker-compose.yml`: the app uses the shared ones through `DATABASE_URL`, `REDIS_URL`, `S3_*`;
+- adds `postgres`, `redis`, an S3 server (or `valkey`, `keydb`, `postgis`...) services to an app's `docker-compose.yml`: the app uses the shared ones through `DATABASE_URL`, `REDIS_URL`, `S3_*`;
 - mounts the Docker socket, uses `network_mode: host`, `privileged: true` or publishes host ports for an app;
 - reads or edits another app's `<install-dir>/apps/<other>/.env`, or edits its own by hand (`provision` writes it);
 - prints a secret: the values in `<install-dir>/.env` or any app env file. Key names only (`python3 scripts/lib/envfile.py keys <file>`);

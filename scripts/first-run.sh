@@ -162,7 +162,9 @@ ensure_proxy_host "$AUTHENTIK_HOST" authentik-server 9000 ""
 ensure_proxy_host "$GITEA_HOST" gitea 3000 ""
 ensure_proxy_host "$PORTAL_HOST" portal 8080 "$FORWARD_AUTH_CONF"
 case ",$COMPOSE_PROFILES," in
-  *,storage,*) ensure_proxy_host "s3.$BASE_DOMAIN" minio 9000 ""; ensure_proxy_host "s3-console.$BASE_DOMAIN" minio 9001 "" ;;
+  # The S3 API: requests are signed per app key, so no forward auth (it would break every
+  # client). Garage has no console; its admin API is never routed.
+  *,storage,*) ensure_proxy_host "s3.$BASE_DOMAIN" garage 3900 "" ;;
 esac
 # Ops tools: forward auth with nothing public; Portainer keeps its own login behind it.
 for t in $OPS_TOOLS; do

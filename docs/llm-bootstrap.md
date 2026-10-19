@@ -45,7 +45,7 @@ Success: all of them print a version. If Docker or Compose is missing, **stop an
 | Admin email | `admin.email`, `authentik.bootstrap_email`, `portal.super_admin_emails` | none: ask |
 | Gitea organization (the company name, lowercase) | `gitea.organization` | `company` |
 | Backup destination (a path on another disk) | `backup.destination` | `<install dir>/backups` (same disk: warned) |
-| Object storage (MinIO)? | `install.profile.storage` | `false` |
+| Object storage (S3-compatible, Garage)? | `install.profile.storage` | `false` |
 | Portainer and Glances? | `install.profile.ops` | `false` |
 
 For `private` and `public`, the TLS mode and tunnel follow the matrix in [`install-design.md`](install-design.md); a tunnel token is read from the environment variable named in the config (`ingress.cloudflared.tunnel_token_env`), which the human exports before the run.
@@ -128,7 +128,7 @@ Rules the deploy enforces or the app needs on the box:
 - The signed-in person arrives in the headers `X-authentik-email`, `X-authentik-name`, `X-authentik-username`, `X-authentik-groups`. Do not build a login page or store passwords.
 - Every route except `/health` is behind the company sign-in. Use relative links and form actions (`/expenses`, not `http://localhost:8080/expenses`).
 - Dependencies are installed by the `Dockerfile`. If you add dependencies and there is no lock file, keep `RUN npm install --omit=dev` (not `npm ci`).
-- Never add a `postgres`, `redis` or `minio` service, `network_mode: host`, `privileged` or a mounted Docker socket to `docker-compose.yml`: the deploy refuses them.
+- Never add a `postgres`, `redis` or S3 server service, `network_mode: host`, `privileged` or a mounted Docker socket to `docker-compose.yml`: the deploy refuses them.
 
 Check before pushing, in the app folder:
 
@@ -216,7 +216,7 @@ Lines with `[xx]` are the harness's own errors and say what to change. Then:
 | Symptom in the log | Command that shows more | Fix |
 |---|---|---|
 | `company-app.yaml is not deployable` | `python3 scripts/lib/appmanifest.py vars "$HOME/apps/<slug>/company-app.yaml" <slug>` | the field it names |
-| `the compose file brings services the cloud provides` | the lines above it in the log | remove the `postgres` / `redis` / `minio` service; use `DATABASE_URL` / `REDIS_URL` |
+| `the compose file brings services the cloud provides` | the lines above it in the log | remove the `postgres` / `redis` / S3 service; use `DATABASE_URL` / `REDIS_URL` / `S3_*` |
 | `asks for object storage but the storage profile is off` | — | `object_storage.required: false`, or ask the human to turn the profile on |
 | step "Build and start" failed | `cd "$HOME/apps/<slug>" && docker compose build` | the `Dockerfile` must install everything the app imports |
 | `did not come up: /health ... answered '502'`, container `running` | `docker logs --tail 50 <slug>-app-1` | the app does not listen on `runtime.port` (8080) or has no `/health`: make them match |

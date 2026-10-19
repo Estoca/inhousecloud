@@ -3,10 +3,11 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 18. Test 14 runs `harness-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 19. Test 14 runs `harness-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core); the app stays on the box. Tests 17 and 18
-# cover the ops tools and are skipped only when the ops profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
+# storage and is skipped only when the storage profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   HARNESS_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -16,6 +17,8 @@ set -eu
 HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$HARNESS_ROOT/scripts/lib/common.sh"
+# shellcheck source=lib/garage.sh
+. "$HARNESS_ROOT/scripts/lib/garage.sh"
 
 INSTALL_DIR="${HARNESS_INSTALL_DIR:-/opt/open-company-harness}"
 while [ $# -gt 0 ]; do
@@ -47,13 +50,14 @@ result() { # NUMBER NAME STATUS DETAIL
 }
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
 CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer"
+STORAGE=false; case ",$COMPOSE_PROFILES," in *,storage,*) STORAGE=true; CORE="$CORE garage" ;; esac
 INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
 SCHEME_URL=https; [ "$TLS_MODE" = off ] && SCHEME_URL=http
 
 # 1. compose file valid
 if dc config --quiet 2>/dev/null; then result 1 compose-valid pass "compose.yml validates"; else result 1 compose-valid fail "docker compose config failed"; fi
 
-# 2. every core service running and healthy
+# 2. every core service running and healthy (and Garage with the storage profile)
 bad=""
 for s in $CORE; do h="$(container_health "$s")"; case "$h" in healthy|none) ;; *) bad="$bad $s=$h" ;; esac; done
 [ -z "$bad" ] && result 2 core-healthy pass "$(echo $CORE | wc -w | tr -d ' ') services healthy" || result 2 core-healthy fail "not healthy:$bad"
@@ -270,6 +274,50 @@ else
   [ -z "$bad" ] && result 18 ops-admins-only pass "$(echo $svcs | wc -w | tr -d ' ') containers healthy; $AUTHENTIK_SMOKE_USER denied$(wetty_running && echo ' terminal and') files; unreachable from apps; mounts: app data + reports (ro)" \
     || result 18 ops-admins-only fail "${bad# }"
 fi
+
+# 19. object storage: Garage is healthy with a layout; two apps (smoke-s3-a, smoke-s3-b)
+#     declaring object_storage.required: true each get a bucket and a key through the
+#     same code as harness-app provision; a second provision keeps the key; app A writes
+#     and reads an object in its bucket through s3.<BASE_DOMAIN> and is denied on B's.
+#     Their env files stay in <install-dir>/local/smoke-storage/ (0700), so re-runs reuse them.
+t19() {
+  local dir="$INSTALL_DIR/local/smoke-storage" work m a b id1 id2 code got want bad="" host="s3.$BASE_DOMAIN"
+  [ "$(container_health garage)" = healthy ] || { result 19 object-storage fail "garage is $(container_health garage)"; return; }
+  garage_need 2>/dev/null && garage_healthy || { result 19 object-storage fail "garage health: cluster unavailable (no layout?): install.sh --apply --from optional_profiles"; return; }
+  (umask 077; mkdir -p "$dir"); chmod 700 "$dir"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/harness-smoke19.XXXXXX")"
+  cp "$HARNESS_ROOT/templates/app/company-app.yaml" "$work/company-app.yaml"
+  $PY - "$work/company-app.yaml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace("object_storage:\n  required: false", "object_storage:\n  required: true")
+s = s.replace("__APP_SLUG__", "smoke-s3-a").replace("__APP_NAME__", "Smoke S3").replace("__OWNER_EMAIL__", "smoke@example.com").replace("__APP_DOMAIN__", "smoke-s3-a.example.com")
+open(p, "w").write(s)
+PY
+  m="$($PY "$HARNESS_LIB/appmanifest.py" vars "$work/company-app.yaml" smoke-s3-a 2>/dev/null | grep '^M_BUCKET=' || true)"
+  rm -rf "$work"
+  case "$m" in *true*) ;; *) result 19 object-storage fail "the template manifest with object_storage.required: true did not ask for a bucket ($m)"; return ;; esac
+  a="$dir/smoke-s3-a.env"; b="$dir/smoke-s3-b.env"
+  for f in "$a" "$b"; do [ -f "$f" ] || (umask 077; : > "$f"); done
+  garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-a failed (run: harness-app provision with object storage)"; return; }
+  id1="$(envfile get "$a" S3_ACCESS_KEY_ID)"
+  garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null; id2="$(envfile get "$a" S3_ACCESS_KEY_ID)"
+  [ -n "$id1" ] && [ "$id1" = "$id2" ] && [ "$GARAGE_RESULT" = kept ] || bad="$bad second-provision:$GARAGE_RESULT"
+  garage_app_bucket smoke-s3-b "$b" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-b failed"; return; }
+  s3() { ( set -a; . "$a"; set +a; $PY "$HARNESS_LIB/s3.py" "$@" ); }
+  want="smoke 19 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  code="$(printf '%s' "$want" | s3 put "$PROXY" "$host" app-smoke-s3-a smoke.txt)"
+  [ "$code" = 200 ] || bad="$bad put-own=$code"
+  got="$(s3 get "$PROXY" "$host" app-smoke-s3-a smoke.txt 3>&1 >/dev/null)"
+  [ "$got" = "$want" ] || bad="$bad get-own=mismatch"
+  code="$(printf x | s3 put "$PROXY" "$host" app-smoke-s3-b smoke.txt)"
+  [ "$code" = 403 ] || bad="$bad put-other=$code"
+  code="$(s3 get "$PROXY" "$host" app-smoke-s3-b smoke.txt 3>/dev/null)"
+  [ "$code" = 403 ] || bad="$bad get-other=$code"
+  [ -z "$bad" ] && result 19 object-storage pass "garage healthy; buckets and keys for smoke-s3-a/b, key kept on re-provision; PUT+GET 200 on its bucket through $host, 403 on the other's" \
+    || result 19 object-storage fail "${bad# }"
+}
+if [ "$STORAGE" = true ]; then t19; else result 19 object-storage skip "storage profile off"; fi
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

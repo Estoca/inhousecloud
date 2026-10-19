@@ -3,7 +3,7 @@
 # Every value comes from .env (see .env.example); install.sh generates that file.
 # Services with no `profiles:` key are the `core` profile and always run.
 # Optional profiles are enabled through COMPOSE_PROFILES in .env:
-#   storage      MinIO (S3-compatible object storage for apps)
+#   storage      Garage (S3-compatible object storage for apps)
 #   ops          admin tools: Portainer, Glances, Wetty (web terminal), FileBrowser
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node (ingress private)
@@ -262,25 +262,32 @@ services:
       start_period: 10s
 
   # --------------------------------------------------------------- storage
-  minio:
+  garage:
+    # S3 API on garage:3900 for apps, s3.<BASE_DOMAIN> through the proxy. No console:
+    # Garage has none. The admin API (3903) answers only with GARAGE_ADMIN_TOKEN and is
+    # not routed. install.sh renders ./garage/garage.toml (no secrets in it) and applies
+    # the single-node layout; harness-app provision creates one bucket and key per app.
     profiles: ["storage"]
-    image: ${MINIO_IMAGE}
-    command: ["server", "/data", "--console-address", ":9001"]
+    image: ${GARAGE_IMAGE}
     restart: unless-stopped
     logging: *default-logging
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BROWSER_REDIRECT_URL: ${MINIO_CONSOLE_URL}
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_METRICS_TOKEN: ${GARAGE_METRICS_TOKEN}
+      RUST_LOG: ${GARAGE_LOG_LEVEL:-garage=info}
     volumes:
-      - minio-data:/data
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
     networks: [harness]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      # The image has no shell: the node answering its own RPC is "healthy". Whether the
+      # layout gives it storage is `garage health`, checked by install.sh and smoke test 19.
+      test: ["CMD", "/garage", "status"]
       interval: 15s
       timeout: 5s
       retries: 8
-      start_period: 20s
+      start_period: 10s
 
   # ------------------------------------------------------------ runners (core)
   # Two runners on purpose (docs/gitops-flow.md). Both daemons need the Docker socket to
@@ -533,7 +540,7 @@ services:
       - authentik-media:/volumes/authentik-media:ro
       - authentik-templates:/volumes/authentik-templates:ro
       - authentik-certs:/volumes/authentik-certs:ro
-      - minio-data:/volumes/minio-data:ro
+      - garage-data:/volumes/garage-data:ro
     networks: [harness]
     healthcheck:
       test: ["CMD-SHELL", "pgrep crond >/dev/null"]
@@ -559,7 +566,7 @@ volumes:
   postgres-data:
   redis-data:
   gitea-data:
-  minio-data:
+  garage-data:
   gitea-runner-data:
   gitea-deployer-data:
   portainer-data:

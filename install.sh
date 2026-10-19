@@ -19,6 +19,8 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 HARNESS_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
 . "$HARNESS_ROOT/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/garage.sh
+. "$HARNESS_ROOT/scripts/lib/garage.sh"
 
 DEFAULT_INSTALL_DIR="/opt/open-company-harness"
 MODE=""              # plan | apply
@@ -123,10 +125,9 @@ postgres:
     role: authentik
     password_env: HARNESS_AUTHENTIK_DATABASE_PASSWORD
 storage:
-  provider: $( [ "$A_STORAGE" = true ] && echo minio || echo none )
+  provider: $( [ "$A_STORAGE" = true ] && echo garage || echo none )
   endpoint_public_url: $A_SCHEME://s3.$A_DOMAIN
-  root_user_env: HARNESS_MINIO_ROOT_USER
-  root_password_env: HARNESS_MINIO_ROOT_PASSWORD
+  capacity: 100G
 portal:
   enabled: true
   domain: portal.$A_DOMAIN
@@ -194,7 +195,7 @@ interactive_config() {
   ask A_BACKUP "Backup destination (a path on another disk or mount)" "${HARNESS_BACKUP_DESTINATION:-${A_DIR%/}/backups}"
   case "$A_BACKUP" in /*) ;; *) die "the backup destination must be an absolute path" ;; esac
   same_disk "$A_BACKUP" "$(dirname "$A_DIR")" && warn "that is the same disk as the installation: a dead disk takes both. Fine for a try; for real use point it at another disk (docs/backup.md)"
-  A_STORAGE=$(ask_yn "Enable object storage (MinIO)?" n)
+  A_STORAGE=$(ask_yn "Enable object storage (S3-compatible, for apps that store files)?" n)
   A_OPS=$(ask_yn "Enable the ops tools (Portainer, Glances, web terminal, file browser)? Admins only, through the SSO" y)
   A_WETTY_KEY=false
   if [ "$A_OPS" = true ]; then
@@ -243,7 +244,9 @@ derive() {
   GITEA_HOST="${GITEA_BASE_URL#*://}"; GITEA_HOST="${GITEA_HOST%%/*}"
   BIND_ADDRESS=0.0.0.0; [ "$INGRESS" = local ] && BIND_ADDRESS=127.0.0.1
   PROFILES=""
-  [ "${CFG_install__profile__storage:-false}" = true ] || [ "${CFG_storage__provider:-none}" = minio ] && PROFILES="$PROFILES,storage"
+  # The provider value of configs written before the switch to Garage still turns storage on.
+  case "${CFG_storage__provider:-none}" in garage|minio) STORAGE_PROVIDER_ON=true ;; *) STORAGE_PROVIDER_ON=false ;; esac
+  [ "${CFG_install__profile__storage:-false}" = true ] || [ "$STORAGE_PROVIDER_ON" = true ] && PROFILES="$PROFILES,storage"
   # The Gitea Actions runners are core (push to main deploys): no ci profile any more.
   CI_IGNORED=""
   [ -n "${CFG_install__profile__ci:-}" ] && CI_IGNORED="install.profile.ci"
@@ -423,7 +426,7 @@ stage_preflight() {
 
 stage_plan() {
   local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal"
-  has_profile storage && services="$services minio"
+  has_profile storage && services="$services garage"
   services="$services gitea-runner gitea-deployer"
   has_profile ops && services="$services portainer glances filebrowser"
   [ "$WETTY_ON" = true ] && services="$services wetty"
@@ -494,7 +497,7 @@ stage_secrets() {
   env_set PORTAL_BASE_URL "$PORTAL_BASE_URL"; env_set AUTHENTIK_BASE_URL "$AUTHENTIK_BASE_URL"; env_set GITEA_BASE_URL "$GITEA_BASE_URL"
   # Images: defaults from docker/.env.example, kept once written so upgrades are explicit.
   local k v
-  for k in PROXY_IMAGE AUTHENTIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE MINIO_IMAGE PORTAINER_IMAGE GLANCES_IMAGE WETTY_IMAGE FILEBROWSER_IMAGE CLOUDFLARED_IMAGE TAILSCALE_IMAGE; do
+  for k in PROXY_IMAGE AUTHENTIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE GARAGE_IMAGE PORTAINER_IMAGE GLANCES_IMAGE WETTY_IMAGE FILEBROWSER_IMAGE CLOUDFLARED_IMAGE TAILSCALE_IMAGE; do
     v="$(envfile get "$HARNESS_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
   done
   env_default PROXY_ADMIN_EMAIL "$ADMIN_EMAIL"
@@ -531,9 +534,19 @@ stage_secrets() {
   env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-HARNESS_PLATFORM_DATABASE_PASSWORD}" 32
   env_default PORTAL_BUILD_CONTEXT ./portal-placeholder
   env_default PORTAL_SUPER_ADMIN_EMAILS "${CFG_portal__super_admin_emails:-$ADMIN_EMAIL}"
-  eval "v=\${${CFG_storage__root_user_env:-HARNESS_MINIO_ROOT_USER}:-harness-root}"; env_default MINIO_ROOT_USER "$v"
-  env_secret MINIO_ROOT_PASSWORD "${CFG_storage__root_password_env:-HARNESS_MINIO_ROOT_PASSWORD}" 32
-  env_default MINIO_CONSOLE_URL "$SCHEME://s3-console.$BASE_DOMAIN"
+  # Garage: the RPC secret must be 32 bytes in hex. Generated even with storage off, so
+  # turning the profile on later is only a config change.
+  if [ -z "$(env_get GARAGE_RPC_SECRET)" ]; then
+    v="${HARNESS_GARAGE_RPC_SECRET:-}"; [ -n "$v" ] || v="$($PY -c 'import secrets;print(secrets.token_hex(32))')"
+    printf '%s' "$v" | grep -Eq '^[0-9a-f]{64}$' || die "HARNESS_GARAGE_RPC_SECRET must be 64 hex characters"
+    env_set GARAGE_RPC_SECRET "$v"
+  fi
+  SECRET_FPS="$SECRET_FPS,\"GARAGE_RPC_SECRET\":\"$(sha_fp "$(env_get GARAGE_RPC_SECRET)")\""
+  env_secret GARAGE_ADMIN_TOKEN HARNESS_GARAGE_ADMIN_TOKEN 48
+  env_secret GARAGE_METRICS_TOKEN HARNESS_GARAGE_METRICS_TOKEN 48
+  env_default GARAGE_S3_REGION garage
+  env_set GARAGE_CAPACITY "${CFG_storage__capacity:-100G}"
+  env_default GARAGE_LOG_LEVEL garage=info
   env_default GITEA_RUNNER_TOKEN "$(eval "printf '%s' \"\${${CFG_ci__gitea_runner__registration_token_env:-HARNESS_GITEA_RUNNER_TOKEN}:-}\"")"
   env_default GITEA_DEPLOY_RUNNER_TOKEN ""
   env_set DOCKER_SOCKET "$(detect_docker_socket)"
@@ -644,6 +657,35 @@ YAML
   chmod 644 "$INSTALL_DIR/runner/ci.yaml" "$INSTALL_DIR/runner/deploy.yaml"
 }
 
+# render_garage_config: <install-dir>/garage/garage.toml for the storage profile. No
+# secret in it: the RPC secret and the tokens come from .env as GARAGE_* variables.
+render_garage_config() {
+  mkdir -p "$INSTALL_DIR/garage"
+  cat > "$INSTALL_DIR/garage/garage.toml" <<TOML
+# Generated by install.sh: Garage, single node (the storage profile). Re-rendered on every
+# run. Secrets are not here: GARAGE_RPC_SECRET, GARAGE_ADMIN_TOKEN and GARAGE_METRICS_TOKEN
+# come from .env. Data and metadata live in the named volume garage-data.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+# A consistent copy of the metadata in meta/snapshots/: the backup reads the volume live,
+# and a restore starts from the newest snapshot (docs/backup.md).
+metadata_auto_snapshot_interval = "6h"
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+s3_region = "$(env_get GARAGE_S3_REGION)"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"
+TOML
+  chmod 644 "$INSTALL_DIR/garage/garage.toml"
+}
+
 # build_deployer: the image deploy jobs run in (docker/deployer), with this checkout's
 # scripts and templates. Rebuilt on every foundation run so it follows the harness.
 build_deployer() {
@@ -663,7 +705,8 @@ stage_foundation() {
   cp "$HARNESS_ROOT/docker/backup/Dockerfile" "$HARNESS_ROOT/docker/backup/scheduler.sh" "$INSTALL_DIR/backup-job/"
   cp "$HARNESS_ROOT/scripts/harness-backup.sh" "$INSTALL_DIR/backup-job/harness-backup.sh"
   render_runner_configs
-  ok "rendered compose.yml, portal-placeholder/, backup-job/ and runner/ into $INSTALL_DIR"
+  render_garage_config
+  ok "rendered compose.yml, portal-placeholder/, backup-job/, runner/ and garage/ into $INSTALL_DIR"
   dc config --quiet || die "compose file does not validate"
   ok "compose file validates"
   step "pulling images and creating containers, network and volumes (first run takes a few minutes)"
@@ -800,11 +843,12 @@ stage_optional_profiles() {
     docker image inspect "$(env_get COMPOSE_PROJECT_NAME)-deployer:local" >/dev/null 2>&1 || build_deployer || { fail "deployer image missing"; return 1; }
     svcs="$svcs gitea-runner gitea-deployer"
   fi
-  has_profile storage && svcs="$svcs minio"
+  has_profile storage && svcs="$svcs garage"
   has_profile ops && svcs="$svcs portainer glances filebrowser"
   if [ -z "$svcs" ]; then log "no optional profile selected"; state stage optional_profiles set probe '{"profiles":"none"}'; return 0; fi
   dc up -d $svcs || return 1
   wait_healthy 240 $svcs || return 1
+  if has_profile storage; then COMPOSE_PROJECT_NAME="$(env_get COMPOSE_PROJECT_NAME)" garage_layout_init "$(env_get GARAGE_CAPACITY)" || return 1; fi
   OPS_PROBE='{"enabled":false}'
   if has_profile ops; then ops_terminal; else dc rm -sf wetty filebrowser portainer glances >/dev/null 2>&1 || true; fi
   state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }" ops:="$OPS_PROBE")"

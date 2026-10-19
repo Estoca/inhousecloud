@@ -21,7 +21,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 # alias would shadow them on the shared network) and the platform's own hostnames.
 RESERVED = {
     "proxy", "authentik-postgres", "authentik-server", "authentik-worker", "postgres",
-    "redis", "gitea", "portal", "minio", "gitea-runner", "portainer", "glances", "wetty",
+    "redis", "gitea", "portal", "garage", "gitea-runner", "portainer", "glances", "wetty",
     "filebrowser", "terminal", "files", "gitea-deployer",
     "cloudflared", "tailscale", "backup", "auth", "git", "s3", "s3-console", "harness",
     "authentik", "www", "api", "admin", "localhost", "harness-smoke",
@@ -30,7 +30,7 @@ RESERVED = {
 INFRA = {
     "postgres": ("postgres", "postgis", "timescaledb", "pgvector"),
     "redis": ("redis", "redis-stack", "redis-stack-server", "valkey", "keydb"),
-    "minio": ("minio",),
+    "s3": ("minio", "garage", "seaweedfs"),
 }
 ALTERNATIVE = {
     "postgres": "use the shared Postgres: remove the service and set `database.required: true`; "
@@ -39,9 +39,9 @@ ALTERNATIVE = {
     "redis": "use the shared Redis: remove the service and set `dependencies.redis.required: true`; "
              "harness-app provision creates an ACL user limited to the `<slug>:` key prefix and "
              "writes REDIS_URL and REDIS_PREFIX",
-    "minio": "use the shared MinIO: remove the service and set `object_storage.required: true` "
-             "(the `storage` profile must be on); harness-app provision creates the app's bucket "
-             "and credential and writes S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY",
+    "s3": "use the shared object storage: remove the service and set `object_storage.required: true` "
+          "(the `storage` profile must be on); harness-app provision creates the app's bucket "
+          "and access key and writes S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY",
 }
 
 
@@ -111,7 +111,7 @@ def cmd_vars(path, expected):
     if domain and not str(domain).startswith(slug + "."):
         errors.append("deploy.domain %r: the harness serves the app at <slug>.<BASE_DOMAIN>; set it to %s.<BASE_DOMAIN> or leave it out" % (domain, slug))
     # Local infrastructure declared in the manifest
-    for key, kind in (("database", "postgres"), ("object_storage", "minio")):
+    for key, kind in (("database", "postgres"), ("object_storage", "s3")):
         sec = get(m, key, {})
         if isinstance(sec, dict) and (sec.get("shared") is False or str(sec.get("provider", "")).startswith("local")):
             errors.append("%s declares a local service: %s" % (key, ALTERNATIVE[kind]))
@@ -119,7 +119,7 @@ def cmd_vars(path, expected):
     if isinstance(deps, dict):
         for name, dep in deps.items():
             kind = "postgres" if name in ("postgres", "postgresql", "database") else \
-                   "redis" if name in INFRA["redis"] else "minio" if name in ("minio", "s3", "object_storage") else None
+                   "redis" if name in INFRA["redis"] else "s3" if name in ("minio", "garage", "seaweedfs", "s3", "object_storage") else None
             if kind and isinstance(dep, dict) and dep.get("shared") is False:
                 errors.append("dependencies.%s.shared is false: %s" % (name, ALTERNATIVE[kind]))
     if get(m, "infrastructure.exception"):
@@ -166,7 +166,7 @@ def cmd_compose_check(service):
             if img in names or name.lower() in names:
                 what = ("runs the image %s" % svc.get("image")) if img in names else "is named like one"
                 errors.append("service %r %s, a local %s: apps built inside the cloud do not bring their own "
-                              "Postgres, Redis or MinIO; %s" % (name, what, kind, ALTERNATIVE[kind]))
+                              "Postgres, Redis or object storage; %s" % (name, what, {"s3": "S3 server"}.get(kind, kind), ALTERNATIVE[kind]))
         if svc.get("network_mode") == "host" or svc.get("privileged"):
             errors.append("service %r asks for host networking or privileged mode; the harness runs apps on "
                           "its internal network without privileges" % name)
