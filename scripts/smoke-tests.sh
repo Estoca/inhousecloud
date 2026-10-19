@@ -118,9 +118,13 @@ else
 fi
 [ "$head_ref" = HEAD ] && result 12 git-ls-remote pass "HEAD returned $where" || result 12 git-ls-remote fail "ls-remote returned nothing ($where)"
 
-# 13. the portal's database role is isolated
-row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT rolname, rolsuper FROM pg_roles WHERE rolname='$PORTAL_DB_ROLE';" 2>/dev/null | tr -d '[:space:]')"
-[ "$row" = "$PORTAL_DB_ROLE|f" ] && result 13 portal-db-role pass "$PORTAL_DB_ROLE exists, rolsuper=false" || result 13 portal-db-role fail "got '$row'"
+# 13. the portal's and Gitea's database roles are isolated (not superusers)
+bad=""
+for pair in "$PORTAL_DB_ROLE" "$GITEA_DB_USER"; do
+  row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT rolname, rolsuper FROM pg_roles WHERE rolname='$pair';" 2>/dev/null | tr -d '[:space:]')"
+  [ "$row" = "$pair|f" ] || bad="$bad $pair='$row'"
+done
+[ -z "$bad" ] && result 13 db-roles-isolated pass "$PORTAL_DB_ROLE and $GITEA_DB_USER exist, rolsuper=false" || result 13 db-roles-isolated fail "unexpected:$bad"
 
 # 14. backup verification: not available until the backup job exists
 result 14 backup-verify skip "backup job not installed yet"

@@ -48,10 +48,14 @@ gitea:
 postgres:
   shared:                        # for apps built inside the cloud
     enabled: true
-  portal:                        # core tools may own their database
+  portal:                        # core tools own their database on the shared instance
     database: harness_platform
     role: harness_platform
     password_env: HARNESS_PLATFORM_DATABASE_PASSWORD
+  gitea:
+    database: gitea
+    role: gitea
+    password_env: HARNESS_GITEA_DATABASE_PASSWORD
   authentik:                     # identity never depends on app data
     database: authentik
     role: authentik

@@ -376,6 +376,9 @@ stage_secrets() {
   env_default GITEA_OIDC_SOURCE_NAME authentik
   env_default GITEA_OIDC_CLIENT_ID "gitea-$(random_secret 16)"
   env_secret GITEA_OIDC_CLIENT_SECRET HARNESS_GITEA_OIDC_CLIENT_SECRET 48
+  env_default GITEA_DB_NAME "${CFG_postgres__gitea__database:-gitea}"
+  env_default GITEA_DB_USER "${CFG_postgres__gitea__role:-gitea}"
+  env_secret GITEA_DB_PASSWORD "${CFG_postgres__gitea__password_env:-HARNESS_GITEA_DATABASE_PASSWORD}" 32
   env_default POSTGRES_DB harness; env_default POSTGRES_USER harness
   env_secret POSTGRES_PASSWORD HARNESS_POSTGRES_PASSWORD 32
   env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-harness_platform}"
@@ -427,13 +430,10 @@ stage_authentik() {
   state stage authentik set probe '{"ready":true}'
 }
 
-stage_shared_data() {
-  dc up -d postgres redis
-  wait_healthy 120 postgres redis
-  local role db pw
-  role="$(env_get PORTAL_DB_ROLE)"; db="$(env_get PORTAL_DB_NAME)"; pw="$(env_get PORTAL_DB_PASSWORD)"
-  # Role and database for the portal: LOGIN NOSUPERUSER, no public connect. The
-  # password goes in on stdin, never on a command line.
+# ensure_database ROLE DB PASSWORD: role LOGIN NOSUPERUSER owning its database, no
+# public connect. The password goes in on stdin, never on a command line.
+ensure_database() {
+  local role="$1" db="$2" pw="$3"
   dc exec -T postgres psql -v ON_ERROR_STOP=1 -U "$(env_get POSTGRES_USER)" -d postgres -q <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$role') THEN
@@ -446,8 +446,15 @@ SELECT 'CREATE DATABASE "$db" OWNER "$role"' WHERE NOT EXISTS (SELECT 1 FROM pg_
 REVOKE CONNECT ON DATABASE "$db" FROM PUBLIC;
 GRANT CONNECT ON DATABASE "$db" TO "$role";
 SQL
-  ok "portal database $db and role $role present (LOGIN NOSUPERUSER)"
+  ok "database $db and role $role present (LOGIN NOSUPERUSER, no public connect)"
   state stage shared_data set resources "[\"postgres:role:$role\",\"postgres:database:$db\"]"
+}
+
+stage_shared_data() {
+  dc up -d postgres redis
+  wait_healthy 120 postgres redis
+  ensure_database "$(env_get PORTAL_DB_ROLE)" "$(env_get PORTAL_DB_NAME)" "$(env_get PORTAL_DB_PASSWORD)"
+  ensure_database "$(env_get GITEA_DB_USER)" "$(env_get GITEA_DB_NAME)" "$(env_get GITEA_DB_PASSWORD)"
 }
 
 stage_proxy_ingress() {

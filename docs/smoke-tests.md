@@ -53,11 +53,11 @@ gitea admin auth list
 GIT_ASKPASS="$HARNESS_GIT_ASKPASS" git ls-remote "$GITEA_SMOKE_REPOSITORY"
 # PASS: exit 0 and HEAD returned
 
-# 13. The portal's database role is isolated
+# 13. The portal's and Gitea's database roles are isolated
 docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres \
   psql -U "$POSTGRES_USER" -d postgres -Atc \
-  "SELECT rolname, rolsuper FROM pg_roles WHERE rolname='harness_platform';"
-# PASS: the role exists and rolsuper = false
+  "SELECT rolname, rolsuper FROM pg_roles WHERE rolname IN ('harness_platform','gitea');"
+# PASS: both roles exist and rolsuper = false
 
 # 14. The backup runs in verification mode
 harness-backup --verify --latest
