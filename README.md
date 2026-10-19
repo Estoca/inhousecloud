@@ -310,7 +310,6 @@ Done:
 - PR 3: backup job (restic sidecar, lock, hard timeout, status file).
 - PR 4: the app loop: `harness-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
 - PR 5: the agent path (`AGENTS.md`, `docs/llm-bootstrap.md`, `docs/agent-setup-contract.md`) rewritten for the loop above and tested with a cold agent run.
-
 - PR 7: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/harness-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
 
 Next:
