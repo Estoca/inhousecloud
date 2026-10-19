@@ -6,6 +6,8 @@ The project is designed for teams that want one server to behave like a practica
 
 Internal tools are often small enough to build quickly but important enough to need Git, SSO, databases, health checks, backups, auditability, and a clear deployment path. AI coding agents make the building faster. This harness focuses on the system around them: the single-box cloud that turns generated apps into operated software.
 
+> **Sibling project:** [Open Company OS](https://github.com/Estoca/open-company-os) is the people-and-work half: a protocol for giving every person a personal LLM agent, a private second brain, a shared tracker and a company compass. It runs on top of this harness (its services are ordinary harness apps) and is adopted separately.
+
 ## What This Is
 
 Open Company App Harness is a reference architecture and starter kit for a self-hosted internal platform that includes:
