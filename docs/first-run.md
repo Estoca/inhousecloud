@@ -60,6 +60,16 @@ Gitea is configured for auto-registration on first OIDC login (`ENABLE_AUTO_REGI
 
 Before finishing, the script checks from the box itself that `auth`, `git` and the portal's `/health` answer through the proxy and that an anonymous request to the portal is redirected to the outpost. It records the ids it created under `stages.first_run.resources` in `state.json`.
 
+The whole SSO path can then be proven with curl, the way a browser would walk it:
+
+```bash
+scripts/sso-login-check.sh --install-dir /opt/open-company-harness
+```
+
+It starts at Gitea's `/user/oauth2/authentik`, signs in as `akadmin` through Authentik's flow executor API with the bootstrap password from `.env`, follows the code back to Gitea's callback and reports the signed-in user and the linked account. It is not a smoke test because it needs a password, and the bootstrap password is meant to be replaced by a human. On a fresh box the result is `signed in as 'admin'`: Authentik's `akadmin` and the Gitea admin share the admin email, so Gitea links them (`ACCOUNT_LINKING=auto`); any other Authentik user is created on first login.
+
+A lesson from testing: curl resolves every `*.localhost` name to loopback by itself (RFC 6761), ignoring DNS and Docker's network aliases. Inside a container that means `curl http://auth.harness.localhost` never reaches the proxy; Go programs such as Gitea and busybox `wget` use the resolver and do. The scripts use `--resolve` on the host and `wget` inside containers for that reason.
+
 ## Human
 
 Asked for, or left to you, never guessed:
