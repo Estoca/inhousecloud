@@ -10,6 +10,15 @@ Conventions in this file:
 
 ## 0. Where am I?
 
+On a fresh box there is no checkout yet: `install.sh` and every later command run from a copy of this repository **on the box**, not from the one your terminal has open. Look for it, and put one there if it is missing:
+
+```bash
+ls ~/open-company-app-harness/install.sh                                         # already there?
+git clone https://github.com/Estoca/open-company-app-harness.git ~/open-company-app-harness
+```
+
+If the box cannot reach GitHub, copy your local folder instead: `scp -r <this folder> <box>:open-company-app-harness`. Keep the copy on the box after the install: `$HARNESS` below is that folder. Copying files is not an install; no yes is needed for it.
+
 ```bash
 cd "$HARNESS"
 ./install.sh status --install-dir "$DIR" --json
@@ -52,7 +61,7 @@ For `private` and `public`, the TLS mode and tunnel follow the matrix in [`insta
 
 **Never ask for a password, token or key.** The installer generates every secret into `$DIR/.env` (mode 0600).
 
-If the install directory is under `/opt`, the human creates it once: `sudo install -d -o "$USER" -g "$USER" /opt/open-company-harness`.
+If the install directory is under `/opt`, it has to exist and belong to the installing user before the plan: `sudo install -d -o "$USER" -g "$(id -gn)" /opt/open-company-harness`. If `sudo -n true` succeeds on the box, run that one command yourself and say so with the plan; otherwise ask the human to run it (it asks for their password, which you never see). Nothing else in the install needs `sudo`.
 
 ### 1.3 Write the answers, show the plan
 
@@ -92,7 +101,17 @@ Completed stages are skipped; every action probes before it creates. Never delet
 python3 scripts/lib/envfile.py keys "$DIR/.env"    # names of the credentials, never the values
 ```
 
-Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), section "Human": first sign-in to Authentik as `akadmin` with the password in `AUTHENTIK_BOOTSTRAP_PASSWORD`, which they read from `.env` themselves; MFA; SMTP; DNS or tunnel for non-local ingress).
+Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), section "Human": first sign-in to Authentik as `akadmin` with the password in `AUTHENTIK_BOOTSTRAP_PASSWORD`; MFA; copying `BACKUP_ENCRYPTION_KEY` off the box; SMTP; DNS or tunnel for non-local ingress).
+
+**Passwords stay off the chat.** Do not read them, and do not paste them. Give the human the command that prints one on their own screen, for example `ssh <box> 'python3 ~/open-company-app-harness/scripts/lib/envfile.py get /opt/open-company-harness/.env AUTHENTIK_BOOTSTRAP_PASSWORD'`, and say it is theirs to run.
+
+**How the human opens the URLs.** With `ingress.mode: local` the URLs answer only on the box itself. If the human reaches the box from another computer (you got an `ssh` command, not a desktop), the URLs will **not** open on their computer as they are. Do not tell them to just open them. Give them a tunnel that holds **port 80** on their computer, kept open in its own terminal window while they use the cloud:
+
+```bash
+sudo ssh -N -L 80:127.0.0.1:80 <the same ssh arguments they gave you>
+```
+
+`sudo` because port 80 is privileged (it asks for their computer's password; if their `ssh` command uses a key file or `-F` config, keep those arguments). Another local port does not work: the sign-in redirects drop it and send the browser to port 80. Then they open `http://portal.<BASE_DOMAIN>` in Chrome, Edge or Firefox, which resolve `*.localhost` by themselves; Safari needs the names in `/etc/hosts` pointing at `127.0.0.1`. If something on their computer already listens on port 80, the tunnel fails with "Address already in use": that program has to stop first.
 
 ## 2. Create an app and put it on the air
 
@@ -189,7 +208,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<BASE_DOMAIN>/health   # 
 curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<BASE_DOMAIN>/         # 302: sent to the sign-in
 ```
 
-With `ingress.mode: local`, names under `.localhost` resolve to the box itself (curl and browsers do this): open them in a browser on the box, or from a laptop through `ssh -L 8080:127.0.0.1:80 <box>` and `http://<slug>.harness.localhost:8080`.
+With `ingress.mode: local`, names under `.localhost` resolve to the box itself (curl and browsers do this): open them in a browser on the box, or from a laptop through the port-80 tunnel of section 1.6 (`sudo ssh -N -L 80:127.0.0.1:80 <box>`). A tunnel on another port (`-L 8080:...`) reaches `/health` but not a page behind the sign-in: the redirect to Authentik drops the port.
 
 To try a page behind the sign-in from the box without a browser, call the app container with the header the proxy would add:
 

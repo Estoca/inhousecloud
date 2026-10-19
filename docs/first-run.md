@@ -74,7 +74,7 @@ A lesson from testing: curl resolves every `*.localhost` name to loopback by its
 
 Asked for, or left to you, never guessed:
 
-- **DNS and tunnel.** `local` ingress needs nothing on Linux (`*.localhost` resolves to loopback); on macOS add the three names to `/etc/hosts`. `private` needs split DNS for `BASE_DOMAIN` on your Tailscale network and the auth key in `HARNESS_TAILSCALE_AUTHKEY`. `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
+- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs split DNS for `BASE_DOMAIN` on your Tailscale network and the auth key in `HARNESS_TAILSCALE_AUTHKEY`. `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
 - **First login, MFA, bootstrap password.** Sign in to Authentik as `akadmin` with `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`, enrol MFA, save recovery codes, then change the password; the value in `.env` is then stale by design.
 - **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours.
 - **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled.
