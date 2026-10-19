@@ -1011,7 +1011,11 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
       _out "  terminal   not installed: the reason is in $STATE_FILE (stages.optional_profiles.probe.ops); docs/security.md"
     fi
   fi
-  [ "$INGRESS" = local ] && _out "  on a machine without *.localhost resolution, add these names to /etc/hosts pointing at 127.0.0.1"
+  if [ "$INGRESS" = local ]; then
+    _out "  local ingress: these URLs answer on this box only. From another computer, keep a tunnel of its port 80 open:"
+    _out "    sudo ssh -N -L 80:127.0.0.1:80 $(id -un)@<this box>   (port 80 only: the sign-in redirect drops any other port)"
+    _out "  then open them in Chrome, Edge or Firefox; elsewhere add the names to /etc/hosts pointing at 127.0.0.1"
+  fi
   _out "Generated credentials live in $ENV_FILE (mode 0600): AUTHENTIK_BOOTSTRAP_PASSWORD, GITEA_ADMIN_PASSWORD, PROXY_ADMIN_PASSWORD."
   if [ "$(env_get BACKUP_ENABLED)" = true ]; then
     _out "Backup: '$(env_get BACKUP_SCHEDULE)' ($(env_get BACKUP_TZ)) into $(env_get BACKUP_DESTINATION)/restic; status file $(env_get BACKUP_DESTINATION)/reports/latest-status.json."

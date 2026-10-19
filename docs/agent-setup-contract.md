@@ -53,7 +53,7 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 
 ## The agent must
 
-- Run commands on the box, as the user that installed it. From another machine, through `ssh`.
+- Run commands on the box, as the user that installed it, from a checkout of this repository on the box (clone or copy it there first). From another machine, through `ssh`.
 - Use `install.sh` to install and `scripts/harness-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
 - Keep the app inside [`app-contract.md`](app-contract.md): listen on `PORT`, answer `/health`, read `DATABASE_URL` and `REDIS_URL`, create its tables on start, take the user from the `X-authentik-*` headers.
 - Push to `main` to deploy, then confirm three things before saying it is live:
@@ -89,6 +89,6 @@ Creating an app and pushing it to `main` is not a checkpoint when the human aske
 
 ## Done means
 
-For an install: `./install.sh status --json` says `completed`, the smoke tests passed, and the human has the URLs, the path of `.env` and the list of steps left to them.
+For an install: `./install.sh status --json` says `completed`, the smoke tests passed, and the human has the URLs, how to open them from their own computer (for `local` ingress on a box they reach by `ssh`: the port-80 tunnel), the command that shows the first password on their screen, the path of `.env` and the list of steps left to them.
 
 For an app: the three checks above pass, and the human has the URL and knows it asks for the company sign-in.
