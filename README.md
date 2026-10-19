@@ -66,28 +66,23 @@ This is not meant to replace AWS, Kubernetes, or a mature platform team. It is m
 
 ## Target Agent Experience
 
-The intended setup experience is:
+Two requests, each one sentence from a person who does not need to know the stack:
 
 ```text
-User sends the GitHub repository URL to a terminal-connected LLM.
-The LLM reads the repo, explains the stack, asks for local choices, generates a plan, applies approved steps, starts approved services, verifies health, and leaves the box ready for new app deploys.
+"Set up this machine as our company cloud."
+"Build an internal app for expense reports and put it on the air."
 ```
 
-The LLM should explain what will be installed before changing the machine:
+What a terminal-connected agent does with them, today:
 
-- tunnel and ingress;
-- reverse proxy;
-- SSO/auth gateway;
-- Git server and automation;
-- Docker Compose runtime;
-- shared Postgres, Redis, and storage options;
-- Portainer and Glances;
-- app portal;
-- templates, schemas, and the push-to-deploy flow.
+1. Reads `AGENTS.md`, which routes it to `docs/agent-setup-contract.md` (what to ask, what never to do) and `docs/llm-bootstrap.md` (the commands, with success conditions).
+2. **Install.** Asks for the install directory, ingress mode and domain, admin email, Gitea organization, backup destination and optional profiles; never for a password (the installer generates them). Shows `./install.sh --plan`, applies after a yes, and reports the URLs and the steps left to the human. About 4 minutes on a clean box.
+3. **App.** Runs `scripts/harness-app.sh new <slug>`, writes the app in the generated repository (shared Postgres and Redis through `DATABASE_URL` and `REDIS_URL`, the user from the SSO headers), pushes to `main`, and confirms the deploy run is green, `/health` answers 200 and `/` asks for the sign-in.
+4. **Repair.** On a red run, reads the job log, fixes the app and pushes again.
 
-The LLM should ask for values such as admin email, admin username, admin password or permission to generate one, base domain, install directory, tunnel provider, and whether it may start Docker services or create public routes.
+The test of this is a cold run: an agent given only the repository and a one-line request in a layperson's words. Results in `docs/first-run.md`, "Cold agent run".
 
-See `docs/agent-setup-contract.md` for the full agent-readable contract, and `docs/install-design.md` for the design of the one-command installer that contract drives (profiles, ingress matrix, stage model, first-run automation, backup minimum, and what the first production box taught us).
+Not yet: the read-only portal with `GET /api/platform/status` for agents (a placeholder answers today), and tested `private` and `public` ingress.
 
 The harness should also expose live app-building rules for day-to-day app creation. See `docs/app-rules-example.md` for a generalized example based on a real internal app platform rules file.
 
@@ -209,7 +204,7 @@ One path, from the first deploy to the hundredth:
 4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, runs `harness-app provision <slug>` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), builds and starts the app on the harness network, and waits for its healthcheck through the proxy.
 5. The run log in Gitea is the record; the portal reads it.
 
-There is no deploy request and no operator agent in the loop. The first box had both and retired them: the steps an operator repeated by hand became the executor, and the approval moved to where review already happened, the app's own `main` (`docs/gitops-flow.md`, "Why there is no deploy request").
+Nobody else acts between the push and the app on the air: the run log is the record and the push is the approval (`docs/gitops-flow.md`).
 
 The deploy runner has the Docker socket and the install directory: a job there is root on the box, which is why it serves the organization's repositories only, and why write access in the organization should go to people you would trust with a shell on the box.
 
@@ -273,7 +268,7 @@ The key lessons:
 
 - A template is not enough. Teams need a contract, checks, and a deploy path.
 - A manifest beats scattered README instructions because it can be validated.
-- The approval belongs where review already happens: the app's own `main`. A separate deploy-request repository was a second approval of the same change.
+- The approval belongs where review already happens: the app's own `main`.
 - Agents should prepare and repair deployment artifacts; the deploy itself is a script anyone can read, not an agent improvising on the box.
 - Health checks need to be part of the contract, not an afterthought.
 - Auth should be the default for internal apps, with explicit exceptions.
@@ -303,6 +298,22 @@ packages/cli/          Placeholder for validation and workflow tooling
 ## Status
 
 Early extraction. `install.sh` brings up the core cloud on one box and `harness-app` takes an app from `new` to the air by push to `main`; both pass on a clean VM ([`docs/first-run.md`](docs/first-run.md)). The portal is still a placeholder.
+
+## Roadmap
+
+Done:
+
+- PR 1: install design (profiles, ingress matrix, stage model, first-run, backup minimum).
+- PR 2: `install.sh`, the core cloud on one box (proxy, Authentik, Gitea on the shared Postgres, shared Postgres and Redis), first-run automation, smoke tests.
+- PR 3: backup job (restic sidecar, lock, hard timeout, status file).
+- PR 4: the app loop: `harness-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
+- PR 5: the agent path (`AGENTS.md`, `docs/llm-bootstrap.md`, `docs/agent-setup-contract.md`) rewritten for the loop above and tested with a cold agent run.
+
+Next:
+
+- `agent` profile: an operator agent on the box, opt-in, that answers people and repairs apps inside the same contract.
+- The real portal: read-only inventory, deploy runs, health, backups, and `GET /api/platform/status` for agents.
+- `private` (tailnet) and `public` (tunnel) ingress, tested end to end.
 
 ## Safety Principles
 

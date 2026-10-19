@@ -1,35 +1,33 @@
 # Agent Instructions
 
-This repository is designed to be operated by terminal-connected coding agents.
+This repository installs a company cloud on one machine and puts internal apps on it. You are probably here for one of two requests:
 
-If a user asks you to set up this repository on a machine, follow this order:
+| The human asks | Read | Then run |
+|---|---|---|
+| "set up this machine as our company cloud" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 1 | `./install.sh --plan`, then `--non-interactive` after a yes |
+| "build an app for X and put it on the air" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 2 | `scripts/harness-app.sh new <slug>`, write the app, `git push origin main` |
 
-1. Read `README.md`.
-2. Read `docs/agent-setup-contract.md`.
-3. Read `docs/llm-bootstrap.md`.
-4. Inspect `docs/install-design.md`, `docker/compose.yml`, `bootstrap/config.example.yaml`, `install.sh` and `templates/app/`.
-5. Explain the proposed single-box cloud before changing the machine.
-6. Ask for the values `bootstrap/config.example.yaml` needs and write them to a local config file (ignored by Git).
-7. Run `./install.sh --plan --config <file>` and show the plan.
-8. Ask for explicit approval before `./install.sh --non-interactive --config <file>`, and before anything that creates public routes or DNS records.
-9. Keep generated config and secrets out of Git; never print the values in `.env`.
-10. Read `./install.sh status --json` and report what changed and what remains human (`docs/first-run.md`).
+First, always: find out whether the cloud is installed (`llm-bootstrap.md`, section 0):
 
-The target architecture is a single-box internal cloud:
-
-```text
-user -> tunnel -> reverse proxy -> auth gateway -> app
+```bash
+./install.sh status --install-dir /opt/open-company-harness --json
 ```
 
-Supported by:
+The loop, in four lines:
 
-- Git server and automation;
-- Docker Compose runtime;
-- app portal (read-only);
-- Portainer;
-- Glances;
-- shared services such as Postgres and Redis;
-- deploys by push to `main`, run on the box by Gitea Actions (`docs/gitops-flow.md`);
-- app manifests and health checks.
+```text
+install.sh                     the cloud: proxy, SSO (Authentik), Git + Actions (Gitea), shared Postgres and Redis, backup
+harness-app.sh new <slug>      a repository from templates/app in the Gitea organization
+git push origin main           the deploy: Gitea Actions on the box gives the app a database, Redis user, route and SSO, and starts it
+http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in
+```
 
-Default to safety. Do not delete existing repositories, volumes, databases, proxy routes, or auth config. If the host already contains services, inspect and preserve them by default.
+Hard rules (the full list is in the contract):
+
+- Commands run on the box, as the user that installed it. From elsewhere, through `ssh`.
+- Never ask for or print passwords, tokens or keys: the installer generates them into `<install-dir>/.env`.
+- Apps never bring their own Postgres, Redis or MinIO, never mount the Docker socket, never use host networking.
+- Never delete a database, bucket, route, repository, volume or the install directory.
+- Ask before applying an install plan, making an app public, or touching anything outside the box.
+
+Reference: [`docs/gitops-flow.md`](docs/gitops-flow.md) (what the deploy job does), [`docs/app-contract.md`](docs/app-contract.md) (`company-app.yaml` and the variables an app receives), [`docs/install-design.md`](docs/install-design.md) (installer stages and ingress modes).
