@@ -19,7 +19,7 @@ cd "$HARNESS"
 |---|---|---|
 | JSON with `"status": "completed"` | the cloud is installed | section 2 |
 | JSON with a stage `failed` | install stopped half way | section 1.5 |
-| error: no state file | nothing installed in `$DIR` | section 1 |
+| `no state.json in <dir>` | nothing installed in `$DIR` (or another install directory: ask) | section 1 |
 
 ## 1. Install
 
