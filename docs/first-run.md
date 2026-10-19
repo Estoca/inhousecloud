@@ -87,3 +87,39 @@ Asked for, or left to you, never guessed:
 - `scripts/first-run.sh --install-dir DIR` alone: safe at any time; it also repairs a route or binding deleted by hand.
 - `install.sh --apply --from first_run`: the same, recorded in `state.json`, followed by the smoke tests and the remaining stages.
 - A failure stops at the first unmet condition with the HTTP status or the CLI error, nothing is rolled back, and the next run continues from what exists.
+
+## Test record: the backup job
+
+On a clean Lima VM (Ubuntu 26.04, 2 CPU, 4 GiB, 30 GiB, Docker 29 rootless), with the backup destination on a separate 4 GiB ext4 file system mounted at `/mnt/backup` (`HARNESS_BACKUP_DESTINATION=/mnt/backup/harness`) and `bootstrap/config.example.yaml` otherwise unchanged:
+
+| Step | Time |
+|---|---|
+| VM created and started | 48 s |
+| `install.sh --non-interactive`, including the backup image build and the first backup | 194 s |
+| `harness-backup.sh run` (second run, deduplicated) | 9 s |
+| `harness-backup.sh verify --latest` | 8 s |
+| `smoke-tests.sh`: 15 passed, 0 skipped | 10 s |
+| `sso-login-check.sh`: PASS | 1 s |
+| From VM creation to everything green | 270 s |
+
+A run holds 10 items: 5 dumps of the shared Postgres (`gitea`, `harness`, `harness_platform`, `postgres`, globals), 3 of Authentik's (`authentik`, `postgres`, globals), the volumes and the install directory. About 3.4 MB of dumps on a fresh box; the repository was 3.8 MB after five runs.
+
+Failure cases, run by hand on the first VM:
+
+- **Hung run.** A transaction held `ACCESS EXCLUSIVE` on a Gitea table so `pg_dump` waited, with `BACKUP_MAX_RUN_MINUTES=1`. The run was killed at 60 s with its `pg_dump` and `restic`. The status file said `failed` with the timeout as the reason, the lock was released, and the next run succeeded.
+- **Concurrent run.** A second `run` during a live one refused to start and left the status file alone.
+- **Container restarted mid-run.** On start the scheduler found the dead lock and recorded the run as `failed` ("its process disappeared"). The next run succeeded.
+- **Schedule.** With `BACKUP_SCHEDULE="*/2 * * * *"`, crond started a run on the next even minute and it succeeded.
+- **Restore.** The `docs/backup.md` steps, run as written: the Gitea dump restored into a scratch database with its users and repositories, and the Gitea volume snapshot restored the bare repository.
+- **Disabled.** With `BACKUP_ENABLED=false`, smoke test 14 reports skipped and the other 14 pass.
+- **Re-run.** `install.sh --apply` on the installed box: every stage "already completed". `--from foundation`: the image is rebuilt, the backup stage sees an existing success and does not run another one, and the smoke tests pass, in 47 s.
+- **Preflight.** It warns when the destination cannot be created, warns when it is on the same disk as the installation, and refuses a relative path.
+
+What broke on the way:
+
+- `wait_tcp` in `scripts/lib/common.sh` closed its probe with `exec 3>&- 2>/dev/null`, which sent the installer's stderr to `/dev/null` for every stage after `gitea`. The install still completed, but its log stopped at "gitea healthy". It is fixed here.
+- `reports/` came out `0777` because `docker exec` runs with umask 0000. The script now sets umask 022 itself, so the portal can read the reports and nobody else can write them.
+- The restore commands in the docs need `RESTIC_REPOSITORY` in the container's environment, not only in the script's. It is now set in the image.
+- restic 0.18 keeps the oldest snapshot of an item while fewer than 7 days exist ("oldest daily snapshot"), so a fresh box shows two snapshots per item after a few runs on the same day. That is retention working, not a leak.
+
+Not tested: macOS as the host (Docker Desktop must share the destination directory), rootful Docker (the ownership rule in `give_back` covers it but was not exercised), the `storage` profile's MinIO volume, and a run long enough for live volume copies to matter.
