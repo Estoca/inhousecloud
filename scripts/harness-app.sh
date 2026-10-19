@@ -227,27 +227,13 @@ ensure_app_redis() {
   record "redis:prefix:$SLUG:"
 }
 
-# MinIO: a bucket app-SLUG, a user app-SLUG with a policy on that bucket only. Never the
-# root credential in the app's env file.
+# Object storage (Garage, storage profile): a bucket app-SLUG and an access key app-SLUG
+# with read and write on that bucket only (scripts/lib/garage.sh). Never Garage's RPC
+# secret or admin token in the app's env file.
 ensure_app_bucket() {
-  local bucket="app-$SLUG" user="app-$SLUG" sk cid mc
-  cid="$(svc_cid minio)"; [ -n "$cid" ] || die "the MinIO container is not running"
-  docker exec "$cid" sh -c 'command -v mc' >/dev/null 2>&1 || die "the MinIO image has no mc client; use an image that ships it (MINIO_IMAGE in .env)"
-  sk="$(envfile get "$APP_ENV" S3_SECRET_ACCESS_KEY)"
-  [ -n "$sk" ] || { sk="$(random_secret 40)"; printf '%s' "$sk" | envfile set "$APP_ENV" S3_SECRET_ACCESS_KEY; }
-  export MC_HOST_h="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@127.0.0.1:9000" APP_S3_SECRET="$sk"
-  mc() { docker exec -i -e MC_HOST_h -e APP_S3_SECRET "$cid" sh -c "$1"; }
-  mc "mc mb --ignore-existing h/$bucket >/dev/null" || die "create bucket $bucket failed"
-  printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::%s","arn:aws:s3:::%s/*"]}]}' "$bucket" "$bucket" \
-    | mc "cat > /tmp/$user.json && mc admin policy create h $user /tmp/$user.json >/dev/null; rm -f /tmp/$user.json" || die "policy $user failed"
-  mc "mc admin user add h $user \"\$APP_S3_SECRET\" >/dev/null" || die "user $user failed"
-  mc "mc admin policy attach h $user --user $user >/dev/null 2>&1 || mc admin policy entities h --user $user | grep -q $user" || die "attach policy $user failed"
-  unset MC_HOST_h APP_S3_SECRET
-  for kv in "S3_ENDPOINT=http://minio:9000" "S3_BUCKET=$bucket" "S3_ACCESS_KEY_ID=$user" "S3_REGION=us-east-1"; do
-    printf '%s' "${kv#*=}" | envfile set "$APP_ENV" "${kv%%=*}"
-  done
-  ok "bucket $bucket with its own user and policy; S3_* in the env file"
-  record "minio:bucket:$bucket"; record "minio:user:$user"
+  garage_app_bucket "$SLUG" "$APP_ENV" "${PORTAL_BASE_URL%%://*}://s3.$BASE_DOMAIN" || die "object storage for $SLUG failed: fix the lines above and push again"
+  ok "bucket app-$SLUG and access key app-$SLUG ($GARAGE_RESULT; read and write on this bucket only); S3_* in the env file"
+  record "garage:bucket:app-$SLUG"; record "garage:key:app-$SLUG"
 }
 
 # env_example_defaults FILE: keys of the app's .env.example that the env file lacks are
@@ -442,6 +428,8 @@ if not apps: print("no apps yet")' "$INVENTORY"
 
 # shellcheck source=lib/sso.sh
 . "$HARNESS_LIB/sso.sh"
+# shellcheck source=lib/garage.sh
+. "$HARNESS_LIB/garage.sh"
 case "$CMD" in
   new) cmd_new ;;
   provision) cmd_provision ;;

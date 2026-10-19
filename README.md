@@ -142,7 +142,7 @@ flowchart LR
 
   AppRepo -->|push to main = approval| Actions[Gitea Actions<br/>deploy runner on the box]
   Actions --> Provision[harness-app provision]
-  Provision --> Services[Shared Postgres, Redis, MinIO<br/>own database, role, prefix, bucket]
+  Provision --> Services[Shared Postgres, Redis, Garage S3<br/>own database, role, prefix, bucket]
   Provision --> Proxy[Proxy host + forward auth]
   Provision --> Auth[Authentik provider + application]
   Provision --> Inventory[inventory.json]
@@ -363,7 +363,7 @@ Same path for an agent or CI, with the answers in a file:
 
 ### Backup
 
-Part of the install, on by default. A small `backup` container runs `scripts/harness-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and MinIO volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
+Part of the install, on by default. A small `backup` container runs `scripts/harness-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and Garage (storage profile) volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
 
 ```bash
 export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # or answer the installer's question, or backup.destination in the config

@@ -9,6 +9,7 @@ The harness is designed around a conservative trust boundary.
 - Real deploys happen only on a push to `main`: that push is the approval.
 - The deploy runner serves the organization's repositories only. Its jobs have the Docker socket and the install directory, so a deploy job is root on the box: write access in the organization is box access ([`gitops-flow.md`](gitops-flow.md)).
 - Credentials live on the box: the install `.env` and each app's `apps/<slug>/.env`, mode 0600, never in Git, never printed.
+- **Object storage: the root credentials never reach an app.** Garage's RPC secret, admin token and metrics token are in the install `.env` only. Each app gets its own access key, allowed to read and write its bucket `app-<slug>` and nothing else: not owner (no bucket policy or deletion), no bucket creation, 403 on another app's bucket (smoke test 19). The admin API listens on `garage:3903` with a token and is not routed by the proxy; the RPC port answers only to the RPC secret. `s3.<BASE_DOMAIN>` is public to whoever reaches the proxy, like any S3 endpoint: every request must be signed by a key. Provision sends secrets to Garage on stdin, never on a command line.
 
 ## Ops tools: admin access to the machine
 
@@ -41,7 +42,7 @@ Checked by `harness-app provision` on every deploy:
 - App manifest is present and valid; compose file present, with the declared service.
 - Healthcheck is declared.
 - `deploy.port` is `auto`; host ports are dropped.
-- No local Postgres, Redis or MinIO; no host networking, privileged mode or Docker socket.
+- No local Postgres, Redis or S3 server; no host networking, privileged mode or Docker socket.
 
 Not checked yet: obvious secret values in tracked files.
 

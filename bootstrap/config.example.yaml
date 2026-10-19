@@ -10,7 +10,7 @@ install:
   non_interactive: true
   profile:
     core: true          # always on
-    storage: false      # MinIO
+    storage: false      # Garage: S3-compatible object storage for apps (a bucket and key per app)
     ops: false          # admin tools: Portainer, Glances, web terminal, file browser (the
                         # interactive installer recommends them; admins only, docs/security.md)
 
@@ -68,10 +68,11 @@ redis:
     enabled: true
 
 storage:
-  provider: none                 # none | minio
-  endpoint_public_url: ""
-  root_user_env: HARNESS_MINIO_ROOT_USER
-  root_password_env: HARNESS_MINIO_ROOT_PASSWORD
+  provider: none                 # none | garage (install.profile.storage: true also turns it on)
+  endpoint_public_url: ""        # informative: apps get S3_PUBLIC_ENDPOINT = <scheme>://s3.<base_domain>
+  capacity: 100G                 # the node's capacity in Garage's layout (set once, at the first start)
+  # Secrets are generated into .env: GARAGE_RPC_SECRET (or HARNESS_GARAGE_RPC_SECRET, 64 hex
+  # chars), GARAGE_ADMIN_TOKEN, GARAGE_METRICS_TOKEN. None of them ever reaches an app.
 
 portal:
   enabled: true

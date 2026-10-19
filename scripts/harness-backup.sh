@@ -295,12 +295,12 @@ EOF
   # 1. Databases: every database of the shared Postgres and of Authentik's, plus globals.
   dump_instance shared-postgres postgres "${POSTGRES_USER:?}" "${POSTGRES_PASSWORD:?}" || return 1
   dump_instance authentik-postgres authentik-postgres "${AUTHENTIK_PG_USER:?}" "${AUTHENTIK_PG_PASSWORD:?}" || return 1
-  # 2. Volumes: whatever is mounted under /volumes; MinIO only with the storage profile.
+  # 2. Volumes: whatever is mounted under /volumes; Garage's only with the storage profile.
   vols=""
   for v in "$VOLUMES"/*; do
     [ -d "$v" ] || continue
     case "$(basename "$v")" in
-      minio-data) case ",${COMPOSE_PROFILES:-}," in *,storage,*) ;; *) continue ;; esac ;;
+      garage-data) case ",${COMPOSE_PROFILES:-}," in *,storage,*) ;; *) continue ;; esac ;;
     esac
     vols="$vols $v"
   done

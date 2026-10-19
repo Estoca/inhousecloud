@@ -20,7 +20,7 @@ Companion files:
 | Profile | Services | When |
 |---|---|---|
 | `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the Gitea Actions runners (`gitea-runner` for CI, `gitea-deployer` for deploys by push to `main`, [`gitops-flow.md`](gitops-flow.md)), the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
-| `storage` | MinIO (S3-compatible object storage) | when an app declares object storage |
+| `storage` | Garage (S3-compatible object storage): one bucket and one key per app | when an app declares object storage |
 | `ops` | admin tools: Portainer, Glances, a web terminal on the host (Wetty), a file browser for app data (FileBrowser); all four behind the SSO for `harness-admins` only | recommended (the interactive installer defaults to yes), never blocking |
 
 - **The ops tools are admin access to the machine, not core.** They are what an operator reaches for first (who is eating the disk, what is in that app's data, a shell without an SSH client), so the questionnaire recommends them, but the cloud works without them and they never fail an install. Details in [The ops profile](#the-ops-profile) and [`security.md`](security.md).
@@ -28,9 +28,20 @@ Companion files:
 
 Rules that came from the first box:
 
-- **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and MinIO exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
-- **Apps built inside the cloud do not bring their own database, cache or storage.** `harness-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or MinIO service, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
+- **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and object storage exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
+- **Apps built inside the cloud do not bring their own database, cache or storage.** `harness-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or S3 server, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
 - **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed by push to `main` like any other. It has no place in the compose files.
+
+## The storage profile
+
+Object storage for apps is [Garage](https://garagehq.deuxfleurs.fr/) (`dxflrs/garage`, a versioned tag in `GARAGE_IMAGE`), one node:
+
+- `install.sh` renders `<install-dir>/garage/garage.toml` (no secrets in it: `GARAGE_RPC_SECRET`, `GARAGE_ADMIN_TOKEN` and `GARAGE_METRICS_TOKEN` come from `.env`), starts the service in stage `optional_profiles` and, the first time, gives the node a role in the layout (zone `dc1`, capacity `storage.capacity`, 100G by default) and applies it. A re-run sees the role and changes nothing.
+- The S3 API is `garage:3900` on the harness network and `s3.<BASE_DOMAIN>` through the proxy, without forward auth (requests are signed by the app's key). There is no console: Garage has none, and its admin API (`3903`) is not routed.
+- Per app, `harness-app provision` uses the admin API through `garage json-api` inside the container (payloads on stdin): bucket `app-<slug>`, key `app-<slug>` with read and write on that bucket only, `S3_*` in the app's env file ([`app-contract.md`](app-contract.md#what-the-app-receives)).
+- Data and metadata live in the volume `garage-data`, backed up with the other volumes; Garage writes a consistent metadata snapshot every 6 hours in `meta/snapshots/` ([`backup.md`](backup.md)).
+
+**Why Garage and not MinIO.** The first designs used MinIO. By October 2026 its images were no longer available: `quay.io/minio/minio` answers 401 for the pinned release and for `latest`, `minio/minio` is gone from Docker Hub, and the last community release on GitHub is from October 2025, so the community distribution ended. Pinning another tag was not an option. Garage is a single binary, maintained, with versioned images, and its admin API (`CreateBucket`, `ImportKey`, `AllowBucketKey`, layout calls) is scriptable without a client in the image. SeaweedFS was the fallback had Garage lacked per-bucket key permissions; it did not.
 
 ## The ops profile
 
@@ -131,11 +142,11 @@ Decided by a human, asked for by the installer, never guessed:
 
 `install.sh` creates platform resources only: networks, volumes, the portal's and Gitea's databases and roles, Authentik's database, the initial Gitea organization and admin, the runners. It creates nothing for future apps.
 
-Per app, the executor is **`scripts/harness-app.sh provision`**, run by the app's own deploy job on every push to `main` ([`gitops-flow.md`](gitops-flow.md)). After validating the manifest and the Compose file, and before the containers start, it ensures: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`); `DATABASE_URL` written only to the app's local secret store, `<install-dir>/apps/<slug>/.env` (0600); a Redis ACL user limited to the `<slug>:` prefix; a bucket per slug with its own credential and policy (never the root credential), only when the manifest asks and the `storage` profile is on; the Authentik provider and application and the proxy host with forward auth; and an inventory record with owner and date in `inventory.json`. It is idempotent (a re-run keeps every password) and never deletes a database, bucket, route or namespace. Declared migrations are the app's own job at start for now.
+Per app, the executor is **`scripts/harness-app.sh provision`**, run by the app's own deploy job on every push to `main` ([`gitops-flow.md`](gitops-flow.md)). After validating the manifest and the Compose file, and before the containers start, it ensures: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`); `DATABASE_URL` written only to the app's local secret store, `<install-dir>/apps/<slug>/.env` (0600); a Redis ACL user limited to the `<slug>:` prefix; a bucket `app-<slug>` with its own access key, allowed to read and write that bucket only (never Garage's RPC secret or admin token), only when the manifest asks and the `storage` profile is on; the Authentik provider and application and the proxy host with forward auth; and an inventory record with owner and date in `inventory.json`. It is idempotent (a re-run keeps every password) and never deletes a database, bucket, route or namespace. Declared migrations are the app's own job at start for now.
 
 This was designed as the portal's job. It is a script because the portal is read-only by design (below) and because a script in the deploy job runs with the push that approved it and logs where the team already looks. A later portal shows what the executor did; it does not have to do it.
 
-Sequence on a box that already has apps with local services: register and audit allocations; migrate one local Postgres as a canary; refuse local Postgres in new apps (the executor already does); migrate local Redis and MinIO; only then refuse every local resource.
+Sequence on a box that already has apps with local services: register and audit allocations; migrate one local Postgres as a canary; refuse local Postgres in new apps (the executor already does); migrate local Redis and object storage; only then refuse every local resource.
 
 ## The Portal
 
@@ -148,7 +159,7 @@ The first box learned this the hard way: a write API with per-user tokens let an
 Minimum, part of `core`:
 
 - Daily custom-format dump of every Postgres database plus a global dump of roles, written straight to the backup destination, never staged on the system disk.
-- Daily backup of the Gitea, proxy, Authentik and MinIO volumes and of the harness configuration.
+- Daily backup of the Gitea, proxy, Authentik and Garage volumes and of the harness configuration.
 - Deduplicated, encrypted repository (restic or equivalent); retention 7 daily, 4 weekly, 12 monthly. With deduplication, a year of retention of a mostly stable dataset costs a few times one snapshot, not twenty-three.
 - An encrypted off-site copy of the same repository.
 - Checksum and a status file per run; the portal reads the status file and alarms when the newest backup is older than the configured maximum.
@@ -160,7 +171,7 @@ What is built ([`backup.md`](backup.md)) and what is next:
 | Item | State |
 |---|---|
 | `pg_dump -Fc` of every database of both Postgres instances plus `pg_dumpall --globals-only`, streamed into the repository | built |
-| Gitea, proxy, Authentik and MinIO volumes, and the install directory | built |
+| Gitea, proxy, Authentik and Garage (`storage` profile) volumes, and the install directory | built |
 | restic repository encrypted with `BACKUP_ENCRYPTION_KEY`, retention 7/4/12 per item | built |
 | Lock, hard timeout `BACKUP_MAX_RUN_MINUTES`, hung or vanished runs recorded as failed | built |
 | Manifest with checksums per run and `reports/latest-status.json` for the portal | built |
@@ -172,7 +183,7 @@ What is built ([`backup.md`](backup.md)) and what is next:
 
 ## What the First Box Taught Us
 
-- The shared services existed and nothing used them; apps kept bringing their own Postgres, Redis and MinIO. The rule in the manifest and the executor in the portal are what make the "controlled machine" true, not the compose file.
+- The shared services existed and nothing used them; apps kept bringing their own Postgres, Redis and object storage. The rule in the manifest and the executor in the portal are what make the "controlled machine" true, not the compose file.
 - The system disk filled up because Docker build cache and superseded images accumulated with every deploy (dozens of GB). Pruning build cache is free; removing tagged images needs a list of what rebuilds from where before deleting.
 - On a Mac, Docker's virtual disk does not hand freed space back to the host file system; set a maximum disk image size rather than compacting a running image.
 - A bind mount that lives only in an out-of-repo override disappears on the next rebuild. Every mount the portal needs is declared in the compose file with a variable.

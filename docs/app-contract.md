@@ -42,7 +42,7 @@ dependencies:
     required: true                 # ACL user limited to the <slug>: key prefix
 
 object_storage:
-  required: false                  # bucket on the shared MinIO (storage profile)
+  required: false                  # bucket and key on the shared Garage (storage profile)
 
 checks:
   build_command: docker compose build
@@ -60,10 +60,10 @@ checks:
 | `DATA_DIR` | always | `/data`: the host directory `<install-dir>/app-data/<slug>`, mounted in the main service, backed up with the install directory and visible to admins in the ops file browser. Written as the container's root user (rootless Docker: the host user); an image that runs as another user must make `/data` writable for it |
 | `DATABASE_URL`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | `database.required` | database and role `app_<slug>` on `postgres:5432` |
 | `REDIS_URL`, `REDIS_PREFIX` | `dependencies.redis.required` | ACL user `app-<slug>` on `redis:6379`, prefix `<slug>:` (every key and channel must start with it) |
-| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` | `object_storage.required` | bucket and user `app-<slug>` on `minio:9000` |
+| `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_FORCE_PATH_STYLE` | `object_storage.required` (the `storage` profile must be on, or the deploy stops before changing anything) | bucket `app-<slug>` and access key `app-<slug>` on Garage: `S3_ENDPOINT` is `http://garage:3900` (inside the harness network), `S3_PUBLIC_ENDPOINT` is `<scheme>://s3.<BASE_DOMAIN>` (for presigned URLs a browser opens), `S3_REGION` is `garage`, `S3_FORCE_PATH_STYLE` is `true` (path-style requests: set `forcePathStyle` in the AWS SDK). The key reads and writes this bucket only: it cannot list, create or delete buckets, and gets 403 on another app's |
 | keys of `.env.example` | when absent | the example's value; `LOCAL_*` keys are for a laptop and never reach the box |
 
-Passwords are created once and kept: redeploys never change them. To set a value the example cannot hold (an API key of a third party), edit the env file on the box; provision keeps it.
+Passwords and keys are created once and kept: redeploys never change them. To set a value the example cannot hold (an API key of a third party), edit the env file on the box; provision keeps it.
 
 Behind the SSO the signed-in person arrives in the request headers `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups` and `X-authentik-uid`. Access is the users group (`AUTHENTIK_APP_GROUP`, `harness-users` by default); narrower access is a policy binding in Authentik, by hand for now.
 
@@ -80,7 +80,7 @@ Checked by `harness-app provision`, each failure with the fix in the message:
 - `runtime.healthcheck` is `http` with a path; the app answers it with `expected_status` within four minutes of starting.
 - `deploy.port` is `auto`. The app publishes no host port; the overlay drops any it declares.
 - `deploy.domain`, when present, is `<slug>.<BASE_DOMAIN>`.
-- **No local infrastructure**: no compose service runs Postgres, Redis or MinIO (by image or by name), and the manifest declares no local one. Use `database`, `dependencies.redis` and `object_storage` instead.
+- **No local infrastructure**: no compose service runs Postgres, Redis or an S3 server (by image or by name), and the manifest declares no local one. Use `database`, `dependencies.redis` and `object_storage` instead.
 - No host networking, no privileged mode, no mounted Docker socket.
 
 By convention, not checked: `.env.example` exists and holds no real secret.

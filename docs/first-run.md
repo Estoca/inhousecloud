@@ -34,7 +34,7 @@ Logs in with `PROXY_ADMIN_EMAIL` / `PROXY_ADMIN_PASSWORD` (the admin the proxy c
 - `auth.<BASE_DOMAIN>` to `authentik-server:9000`
 - `git.<BASE_DOMAIN>` to `gitea:3000`
 - `portal.<BASE_DOMAIN>` to `portal:8080` with the forward-auth snippet (below)
-- with the `storage` profile: `s3.<BASE_DOMAIN>` and `s3-console.<BASE_DOMAIN>` to MinIO
+- with the `storage` profile: `s3.<BASE_DOMAIN>` to Garage's S3 API (`garage:3900`), no forward auth: every request is signed with an app's key
 - with the `ops` profile: `portainer.<BASE_DOMAIN>`, `glances.<BASE_DOMAIN>`, `files.<BASE_DOMAIN>` and, when the installer found an sshd for it, `terminal.<BASE_DOMAIN>`, each with the forward-auth snippet and nothing public, its Authentik application bound to `harness-admins` only (an existing binding to another group is removed). Portainer keeps its own login behind the SSO. The same block creates `harness-smoke-user`, a member of `harness-users` only, with the password `AUTHENTIK_SMOKE_USER_PASSWORD` from `.env`, for smoke test 18
 
 The forward-auth snippet is the one Authentik documents for nginx, in the host's advanced configuration: `auth_request` against `/outpost.goauthentik.io/auth/nginx`, the `X-authentik-*` headers passed to the app, anonymous requests redirected to `/outpost.goauthentik.io/start`. `GET /health` is left public so the installer and monitors can probe the app.
@@ -122,7 +122,7 @@ What broke on the way:
 - The restore commands in the docs need `RESTIC_REPOSITORY` in the container's environment, not only in the script's. It is now set in the image.
 - restic 0.18 keeps the oldest snapshot of an item while fewer than 7 days exist ("oldest daily snapshot"), so a fresh box shows two snapshots per item after a few runs on the same day. That is retention working, not a leak.
 
-Not tested: macOS as the host (Docker Desktop must share the destination directory), rootful Docker (the ownership rule in `give_back` covers it but was not exercised), the `storage` profile's MinIO volume, and a run long enough for live volume copies to matter.
+Not tested: macOS as the host (Docker Desktop must share the destination directory), rootful Docker (the ownership rule in `give_back` covers it but was not exercised), the `storage` profile's volume (covered later, in the object storage record), and a run long enough for live volume copies to matter.
 
 ## Test record: the app loop (smoke test 16)
 
@@ -155,7 +155,7 @@ What broke on the way:
 - The template's placeholders were not replaced in `.gitea/workflows/deploy.yml`: the walk skipped every path containing `/.git`, which `/.gitea` does. `harness-app new` now refuses to finish while a placeholder is left.
 - Files written by deploy jobs came out `0666`: `docker exec` runs with umask 0000 (the backup job hit the same). `harness-app` sets umask 022 and sets the overlay's mode explicitly, since an existing file keeps its old mode.
 - `install.sh` reported success with a service that never started: stage functions run inside `if`, where `set -e` does not apply, so a failed `wait_healthy` did not fail the stage. Every `dc up` and `wait_healthy` in a stage now returns the failure.
-- **The `storage` profile cannot start**: `quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z` answers 401 and `minio/minio` no longer exists on Docker Hub. The bucket path of `harness-app provision` is written but untested for that reason. Choosing a maintained S3-compatible server (or a MinIO built from source) is a follow-up.
+- **The `storage` profile could not start**: its pinned S3 server image was no longer downloadable. The profile now runs Garage; see the object storage record below.
 
 Not tested: `harness-app new` from a laptop with `HARNESS_GITEA_*` (only on the box), rootful Docker and Docker Desktop (the socket path detection covers them), ingress other than `local/off`, fork pull requests against the deploy runner.
 
@@ -227,3 +227,44 @@ What broke on the way:
 - The path rule refused `backups/reports` when the backup destination sits inside the install directory (the default). The rule now allows `<destination>/reports` wherever the destination is.
 
 Not tested: rootful Docker and Docker Desktop (the `host.docker.internal` path), a host without sshd end to end (only the detector and the skip branch), ingress other than `local/off`, an app image that drops to a non-root user writing `/data`.
+
+## Test record: object storage (smoke test 19)
+
+The `storage` profile runs Garage `dxflrs/garage:v2.4.1` (multi-arch image, pulled on the VMs below; [`install-design.md`](install-design.md#the-storage-profile) says why it replaced the earlier S3 server). Two clean Lima VMs (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9.1 rootless), `bootstrap/config.example.yaml` changed only as said.
+
+**VM 1, `install.profile.storage: true`:**
+
+| Step | Time |
+|---|---|
+| VM created and started | 54 s |
+| `install.sh --non-interactive`, all 14 stages: Garage started, layout version 1 applied (zone `dc1`, 100G), smoke tests 17 passed and 2 skipped (17 and 18: ops off), test 19 passed on the first run | 277 s |
+| `harness-app new files-demo`, manifest with `object_storage.required: true` (database and Redis off), `server.js` with `@aws-sdk/client-s3` storing `PUT /files/<name>` and reading `GET /files/<name>`; push until `harness-app wait` saw `/health` 200 and `/` behind the SSO (first deploy, `npm install` of the SDK included) | 38 s |
+| Inside the app container: `PUT /files/hello.txt`, then `GET` | `stored`, `200 hello from files-demo` |
+| Redeploy with a code change, push until the run is green; the key id and the secret's fingerprint unchanged, the object still there | 29 s |
+| `install.sh --apply --from foundation` on the installed box: "Garage layout version 1 already assigns 1 node(s): unchanged", 17 passed, 2 skipped | 65 s |
+| `harness-backup.sh run` (11 items, `garage-data` among the volumes) / `verify --latest` | 16 s / 10 s |
+
+**VM 2, `install.profile.storage: true` and the ops profile as in the ops record (`ops: true`, Portainer, Glances, `install_key: true`):**
+
+| Step | Time |
+|---|---|
+| VM created and started | 60 s |
+| `install.sh --non-interactive`: smoke tests **19 passed, 0 skipped** (core-healthy counts 11 services, Garage included; test 16 push to green in 26 s) | 406 s |
+| `smoke-tests.sh` again on the installed box: 19 passed (test 19 reuses the two test apps, keys kept) | 40 s |
+| From VM creation to everything green | 507 s |
+
+Checked by hand on VM 1:
+
+- **Env file lost the secret.** With `S3_SECRET_ACCESS_KEY` deleted from `apps/files-demo/.env`, `harness-app provision` found the key `app-files-demo` in Garage and wrote back the same id and secret ("restored").
+- **Key deleted in Garage.** After `DeleteKey`, the next provision tried to import the env file's key again and Garage refused: it keeps a tombstone and never accepts a deleted key id ("KeyAlreadyExists ... Even if it is deleted"). Provision now issues a new key in that case, with a warning ("replaced"); after the redeploy the app read its object with the new key. On a wiped volume, where no tombstone exists, the env file's key is imported as it was.
+- **Storage profile off.** `harness-app provision` against a copy of the install `.env` with `COMPOSE_PROFILES=backup` stopped at the manifest step with "asks for object storage but the storage profile is off"; no `apps/` directory, env file or route was created.
+- **Restore.** The `garage-data` volume of the backup snapshot, restored with `restic restore` and mounted in a scratch Garage container with the same config and RPC secret: cluster healthy, bucket `app-files-demo` with 1 object of 21 bytes and the key `app-files-demo`, no block errors.
+- **Secrets.** `.env` 0600 with the three `GARAGE_*` secrets; `garage/garage.toml` (0644) has none; the app's env file (0600) has `S3_*` and nothing of Garage's own; the inventory records `garage:bucket:app-files-demo` and `garage:key:app-files-demo`.
+- **Rule against local storage.** A compose service running `dxflrs/garage` (or `minio`, `seaweedfs`) is refused like a local Postgres.
+
+What broke on the way:
+
+- The key-deleted-in-Garage case above: the first version of provision failed on the tombstone instead of issuing a new key.
+- Nothing else: the install, test 19 and the app deploy passed on the first VM run.
+
+Not tested: a real disk-full or capacity change after the first layout (`storage.capacity` is applied only once; changing it later is `garage layout assign` by hand), a restore from Garage's metadata snapshots (`meta/snapshots/` was still empty when the backup ran, an hour after start; the restore above used the live copy of the metadata on an idle box), presigned URLs through `s3.<BASE_DOMAIN>` from a browser, ingress other than `local/off`, rootful Docker.

@@ -26,7 +26,7 @@ Hard rules (the full list is in the contract):
 
 - Commands run on the box, as the user that installed it. From elsewhere, through `ssh`.
 - Never ask for or print passwords, tokens or keys: the installer generates them into `<install-dir>/.env`.
-- Apps never bring their own Postgres, Redis or MinIO, never mount the Docker socket, never use host networking.
+- Apps never bring their own Postgres, Redis or object storage, never mount the Docker socket, never use host networking.
 - Never delete a database, bucket, route, repository, volume or the install directory.
 - Ask before applying an install plan, making an app public, or touching anything outside the box.
 

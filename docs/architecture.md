@@ -110,7 +110,7 @@ The support plane keeps the single box understandable:
 
 ### Coding Agent Rules
 
-Coding agents should read the live rules before preparing a repo. They edit app code and push; the deploy job creates routes, databases and SSO. They should not create proxy routes by hand, assign fixed ports, or bring their own Postgres, Redis or MinIO.
+Coding agents should read the live rules before preparing a repo. They edit app code and push; the deploy job creates routes, databases and SSO. They should not create proxy routes by hand, assign fixed ports, or bring their own Postgres, Redis or object storage.
 
 ## App Deployment Flow
 
