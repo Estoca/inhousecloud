@@ -1,146 +1,113 @@
 # LLM Bootstrap Playbook
 
-This playbook is for a terminal-connected LLM that needs to recreate a single-box company cloud from scratch.
+This playbook is for a terminal-connected LLM that needs to turn a machine into a single-box company cloud from scratch.
 
-Read `docs/agent-setup-contract.md` first. That document defines the intended user experience. This playbook is the execution path for that contract.
-
-The goal is not to hide infrastructure behind a magic script. The goal is to give the agent a safe, inspectable path:
-
-1. ask the human for the few decisions that cannot be inferred;
-2. clone the platform repositories listed in a manifest;
-3. generate local configuration files that are not committed;
-4. prepare the core stack around Git, SSO, proxy, observability, and apps;
-5. produce an execution plan;
-6. apply only the steps the human explicitly approves.
+Read `docs/agent-setup-contract.md` first: it defines the intended user experience. This playbook is the execution path for that contract, and the path is short: **run `install.sh` and answer its questions**. The installer is the same program a technical human runs; the agent's only differences are that it writes the answers to a file instead of typing them, and that it asks the human before applying.
 
 ## Agent Rules
 
-- Read this file before running bootstrap commands.
-- Do not invent production domains, admin emails, or credentials.
-- Never commit generated secrets or local config.
-- Prefer `--plan` first.
-- Use `--apply` only after the human confirms the generated plan.
-- Use `--start` only when the human approves starting local services.
-- Do not delete existing repositories, databases, volumes, proxy routes, or auth config.
-- If a repository already exists locally, fetch status and continue instead of replacing it.
+- Read this file, `docs/install-design.md` and `docs/first-run.md` before running anything.
+- Do not invent domains, admin emails or credentials. Ask.
+- Never commit generated config or secrets. The installer writes them to the install directory, outside the repository; keep your copy of the config under `local/` (ignored by Git).
+- Never print the values in `.env`. Report the key names and where the file lives.
+- `--plan` first. `--apply` only after the human confirms the plan.
+- Do not delete existing containers, volumes, databases, proxy routes or auth configuration. The installer never does; neither do you.
+- If the machine already runs part of the stack, run `install.sh status` and read `state.json` before anything else.
 
 ## Prerequisites
 
-The target machine should have:
+The target machine needs:
 
-- Git;
-- Node.js 20 or newer;
-- Docker and Docker Compose, if the runtime stack will be started;
-- network access to the company's Git provider;
-- credentials configured through the local Git credential helper, SSH agent, or provider CLI.
+- Linux or macOS with bash 3.2 or newer, python3 and curl (all present on Ubuntu 24.04 and macOS);
+- Docker Engine with the Compose v2 plugin, usable by the current user without sudo;
+- 2 CPUs, 4 GiB of memory and 10 GiB of free disk for the `core` profile;
+- for `private` or `public` ingress, the tunnel credentials in the environment variables named in the config.
 
-## Inputs The Agent Must Collect
+If Docker is missing, stop and report it; do not improvise an installation. On a fresh Ubuntu box the human can run `curl -fsSL https://get.docker.com | sh` and add themselves to the `docker` group.
 
-The bootstrap script asks for:
+## Inputs
 
-- workspace directory for cloned repositories;
-- Git base URL;
-- Git organization or owner;
-- internal base domain;
-- portal domain;
-- auth provider type;
-- initial admin email;
-- initial admin password;
-- repository manifest path.
+Everything the installer accepts is in `bootstrap/config.example.yaml`, with defaults. Ask only for what you cannot infer:
 
-The admin password is written only to local generated files. It must not appear in chat, logs, manifests, or committed files.
+- install directory (default `/opt/open-company-harness`; it must be writable by the user, or created once with `sudo install -d -o $USER -g $USER <dir>`);
+- ingress mode (`local`, `private`, `public`) and base domain; the TLS mode and tunnel provider follow the matrix in `docs/install-design.md`;
+- admin email;
+- Gitea organization name;
+- which optional profiles to turn on (`storage`, `ci`, `ops`);
+- for tunnels, the name of the environment variable holding the token (never the token itself).
 
-The agent should also confirm which core services the human wants on the first box:
+Secrets are never inputs: the installer generates every password, key and token into `<install-dir>/.env` with mode 0600. If the human wants to provide one, they export it in the environment variable named in the config (`*_env` keys) before the run.
 
-- tunnel provider, such as Cloudflare Tunnel;
-- reverse proxy, such as Nginx Proxy Manager;
-- SSO provider, such as Authentik;
-- Git server, such as Gitea;
-- container manager, such as Portainer;
-- host monitor, such as Glances;
-- shared databases, caches, or object storage.
+## Flow
 
-## Repository Manifest
+1. Copy and fill the config:
 
-The manifest tells the agent which repositories to clone.
+   ```bash
+   mkdir -p local
+   cp bootstrap/config.example.yaml local/config.yaml
+   # edit local/config.yaml with the answers
+   ```
 
-Start from:
+2. Plan. Prints the preflight checklist, the services, URLs and files, and changes nothing on the machine beyond the install directory and its `state.json`:
 
-```text
-bootstrap/repos.example.json
-```
+   ```bash
+   ./install.sh --plan --config local/config.yaml
+   ```
 
-Then create a local copy:
+   Preflight refuses an invalid ingress combination, a missing Docker, a used port, too little disk or memory, with a line that says what to fix. Show the plan to the human.
 
-```bash
-cp bootstrap/repos.example.json local/repos.json
-```
+3. Apply, after approval. No prompts; progress goes to the terminal; `--json` sends the human lines to stderr and the final `state.json` to stdout:
 
-Edit `local/repos.json` with the real company repositories.
+   ```bash
+   ./install.sh --non-interactive --config local/config.yaml --json
+   ```
 
-## Bootstrap Flow
+   The run goes through the 13 stages of `bootstrap/state.example.json`: preflight, plan, secrets, foundation, authentik, shared_data, proxy_ingress, gitea, portal, first_run, smoke_tests, optional_profiles, handoff. Each waits for the healthchecks of what it started. `first_run` creates the Gitea admin and organization, the Authentik OIDC provider and groups, the portal's proxy provider and the proxy hosts with forward auth (`docs/first-run.md`). `smoke_tests` runs `docs/smoke-tests.md` and the installation is not marked completed while one fails.
 
-Generate a plan:
+4. On failure, the output ends with the stage name, the cause and the resume command:
+
+   ```bash
+   ./install.sh --apply --install-dir <dir> --from <stage>
+   ```
+
+   Fix the cause, resume. Completed stages are skipped; every action in a re-run probes before it creates.
+
+5. Report from the state, not from memory:
+
+   ```bash
+   ./install.sh status --install-dir <dir> --json
+   ```
+
+   Give the human: the URLs (`inventory.json` in the install directory), the path of `.env` and the names of the credentials in it, the smoke test results, and the human steps that remain (first login, MFA, bootstrap password, SMTP, DNS or tunnel).
+
+## Repository manifest (optional)
+
+`scripts/bootstrap.mjs` clones the company's platform repositories from a manifest (`bootstrap/repos.example.json` to `local/repos.json`) and writes `local/bootstrap-plan.md`. It does not start services; that is `install.sh`. Use it when the company keeps its portal, GitOps and template repositories elsewhere and you need them on the box.
 
 ```bash
 node scripts/bootstrap.mjs --plan --repos local/repos.json
-```
-
-Run a non-interactive smoke test with defaults:
-
-```bash
-node scripts/bootstrap.mjs --plan --defaults --repos bootstrap/repos.example.json
-```
-
-Apply safe filesystem and Git steps:
-
-```bash
 node scripts/bootstrap.mjs --apply --repos local/repos.json
 ```
 
-Start local services only after review:
+## What The Installer Writes
 
-```bash
-node scripts/bootstrap.mjs --apply --start --repos local/repos.json
-```
-
-## What The Script Generates
-
-The script writes local files under `local/`, which is ignored by Git:
+In the install directory, outside the repository:
 
 ```text
-local/bootstrap.env
-local/bootstrap-plan.md
-local/repos.json
+config.yaml           the answers (no secrets)
+.env                  generated secrets and derived values, mode 0600
+compose.yml           the rendered Compose file (a copy of docker/compose.yml)
+portal-placeholder/   the placeholder portal (examples/minimal-web-app)
+state.json            stage by stage state; the resume command of each stage
+inventory.json        URLs, profiles, status command
+backups/ local/       reserved for the backup job and local files
 ```
-
-`local/bootstrap.env` is a local machine file. It may contain secrets.
-
-`local/bootstrap-plan.md` is safe to inspect before applying, but treat it as local operational context.
-
-## Expected End State
-
-After a successful bootstrap, the machine should have:
-
-- all required repositories cloned under the chosen workspace directory;
-- local harness configuration generated;
-- a clear next-step plan for starting the single-box cloud services;
-- an ingress path design from tunnel to proxy to auth to app;
-- a Git server plan for harness, apps, and deploy requests;
-- an SSO plan for protecting internal apps;
-- an observability plan for host and containers;
-- a sample app template available;
-- a GitOps repository ready for deploy request files;
-- enough context for the agent to continue setup from repository READMEs.
 
 ## Human Checkpoints
 
-The agent should stop for human confirmation before:
+Stop for confirmation before:
 
-- starting Docker services;
-- creating public DNS records;
-- changing reverse proxy routes;
-- creating auth applications/providers;
-- creating service tokens;
-- publishing repositories;
-- rotating, deleting, or overwriting anything.
+- applying the plan (starting Docker services);
+- creating public DNS records or tunnel routes;
+- changing anything in Authentik, the proxy or Gitea by hand instead of through `first-run.sh`;
+- rotating, deleting or overwriting anything.

@@ -18,7 +18,7 @@ ingress:
   mode: local                    # local | private | public (see docs/install-design.md for the valid matrix)
   base_domain: harness.localhost
   public_base_url: http://portal.harness.localhost
-  tls_mode: off                  # off | internal | edge | acme
+  tls_mode: "off"                # off | internal | edge | acme (quoted: a bare off is YAML for false)
   tunnel_provider: none          # none | tailscale | cloudflared
   cloudflared:
     tunnel_token_env: HARNESS_CLOUDFLARED_TUNNEL_TOKEN
@@ -48,10 +48,14 @@ gitea:
 postgres:
   shared:                        # for apps built inside the cloud
     enabled: true
-  portal:                        # core tools may own their database
+  portal:                        # core tools own their database on the shared instance
     database: harness_platform
     role: harness_platform
     password_env: HARNESS_PLATFORM_DATABASE_PASSWORD
+  gitea:
+    database: gitea
+    role: gitea
+    password_env: HARNESS_GITEA_DATABASE_PASSWORD
   authentik:                     # identity never depends on app data
     database: authentik
     role: authentik

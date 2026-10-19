@@ -16,20 +16,33 @@ Decide:
 - default app port range;
 - whether new apps require auth by default.
 
-## 2. Start The Core Stack
+## 2. Install The Core Stack
 
-The reference core stack is:
+One command. It asks for the install directory, the ingress mode and domain, the admin email, the Gitea organization and which optional profiles to enable, shows the plan, and applies it after you confirm:
 
-- Cloudflare Tunnel or another tunnel;
-- reverse proxy;
-- Authentik or another SSO gateway;
-- Gitea or another Git server;
-- Portainer;
-- Glances;
-- app portal / orchestrator;
-- optional Postgres, Redis, and object storage.
+```bash
+./install.sh
+```
 
-Use `docker/compose.example.yml` as a starting point, not as a production-ready secret file.
+Or with the answers in a file, for an agent or a script:
+
+```bash
+cp bootstrap/config.example.yaml local/config.yaml   # edit, then:
+./install.sh --plan --config local/config.yaml
+./install.sh --non-interactive --config local/config.yaml
+```
+
+What comes up, as Compose profiles of `docker/compose.yml` (`docs/install-design.md`):
+
+- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea, the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
+- `storage`: MinIO;
+- `ci`: the Gitea Actions runner;
+- `ops`: Portainer and Glances;
+- `cloudflared` or `tailscale`, chosen by the ingress mode.
+
+The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route) and the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands.
+
+Then, by hand: sign in to Authentik as `akadmin` with the bootstrap password from `.env`, enrol MFA and change it; set DNS or the tunnel for `private` and `public` ingress; configure SMTP.
 
 ## 3. Create the Platform Repositories
 

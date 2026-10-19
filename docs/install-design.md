@@ -26,7 +26,7 @@ Companion files:
 
 Rules that came from the first box:
 
-- **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and MinIO exist for the apps built inside the cloud, and for nothing else.
+- **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and MinIO exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
 - **Apps built inside the cloud do not bring their own database, cache or storage.** The portal rejects a manifest whose Compose declares a `postgres`, `redis` or `minio` service, unless the manifest carries an explicit exception (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date). This is what makes the box's resource usage visible in one place.
 - **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed through the portal like any other. It has no place in the compose files.
 

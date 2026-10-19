@@ -1,0 +1,395 @@
+# Open Company App Harness: the single-box company cloud as Compose profiles.
+#
+# Every value comes from .env (see .env.example); install.sh generates that file.
+# Services with no `profiles:` key are the `core` profile and always run.
+# Optional profiles are enabled through COMPOSE_PROFILES in .env:
+#   storage      MinIO (S3-compatible object storage for apps)
+#   ci           Gitea Actions runner
+#   ops          Portainer and Glances
+#   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
+#   tailscale    Tailscale node (ingress private)
+#
+# Rules (docs/install-design.md):
+#   - Authentik keeps its own Postgres; identity never depends on app data.
+#   - The shared Postgres and Redis exist for apps built inside the cloud.
+#   - Only the proxy, the Gitea SSH port and loopback control ports are published.
+#   - Named volumes only. One internal network, joinable by apps.
+
+name: ${COMPOSE_PROJECT_NAME:-harness}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ------------------------------------------------------------------ core
+  proxy:
+    image: ${PROXY_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DISABLE_IPV6: "true"
+      INITIAL_ADMIN_EMAIL: ${PROXY_ADMIN_EMAIL}
+      INITIAL_ADMIN_PASSWORD: ${PROXY_ADMIN_PASSWORD}
+    ports:
+      - "${BIND_ADDRESS}:${PROXY_HTTP_PORT}:80"
+      - "${BIND_ADDRESS}:${PROXY_HTTPS_PORT}:443"
+      - "127.0.0.1:${PROXY_ADMIN_PORT}:81"
+    volumes:
+      - proxy-data:/data
+      - proxy-letsencrypt:/etc/letsencrypt
+    networks:
+      harness:
+        aliases:
+          # Containers resolve the public hostnames to the proxy, so Gitea can
+          # fetch Authentik's OIDC discovery document by its public URL.
+          - ${PORTAL_HOST}
+          - ${AUTHENTIK_HOST}
+          - ${GITEA_HOST}
+    healthcheck:
+      test: ["CMD", "/usr/bin/check-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  authentik-postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${AUTHENTIK_PG_DB}
+      POSTGRES_USER: ${AUTHENTIK_PG_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+    volumes:
+      - authentik-postgres-data:/var/lib/postgresql/data
+    networks: [harness]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  authentik-server:
+    image: ${AUTHENTIK_IMAGE}
+    command: server
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    ports:
+      # Loopback only: the installer's control-plane path. Users go through the proxy.
+      - "127.0.0.1:${AUTHENTIK_LOCAL_PORT}:9000"
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  authentik-worker:
+    image: ${AUTHENTIK_IMAGE}
+    command: worker
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-certs:/certs
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  postgres:
+    # Shared Postgres: for apps built inside the cloud, plus the portal's and Gitea's
+    # own databases, each with its own role. Authentik keeps a separate instance.
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [harness]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    # Shared Redis: for apps built inside the cloud.
+    image: ${REDIS_IMAGE}
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - redis-data:/data
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  gitea:
+    # Gitea's own database and role live on the shared Postgres instance
+    # (created by install.sh in the shared_data stage), as the first box runs it.
+    image: ${GITEA_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres:5432
+      GITEA__database__NAME: ${GITEA_DB_NAME}
+      GITEA__database__USER: ${GITEA_DB_USER}
+      GITEA__database__PASSWD: ${GITEA_DB_PASSWORD}
+      GITEA__database__SSL_MODE: disable
+      GITEA__server__ROOT_URL: ${GITEA_BASE_URL}/
+      GITEA__server__DOMAIN: ${GITEA_HOST}
+      GITEA__server__SSH_DOMAIN: ${GITEA_HOST}
+      GITEA__server__SSH_PORT: ${GITEA_SSH_PORT}
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__LFS_START_SERVER: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: ${GITEA_REQUIRE_SIGNIN_VIEW}
+      GITEA__service__ENABLE_NOTIFY_MAIL: "false"
+      GITEA__openid__ENABLE_OPENID_SIGNIN: "false"
+      GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      GITEA__oauth2_client__ACCOUNT_LINKING: auto
+      GITEA__oauth2_client__USERNAME: nickname
+      GITEA__oauth2_client__UPDATE_AVATAR: "false"
+      GITEA__actions__ENABLED: ${GITEA_ENABLE_ACTIONS}
+      GITEA__mailer__ENABLED: "false"
+      GITEA__log__LEVEL: Info
+    ports:
+      - "${BIND_ADDRESS}:${GITEA_SSH_PORT}:22"
+      # Loopback only: the installer's control-plane path. Users go through the proxy.
+      - "127.0.0.1:${GITEA_LOCAL_PORT}:3000"
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  portal:
+    # Placeholder for the app portal: the minimal example app, behind forward auth.
+    # The real portal is a separate project; it takes this service's place with the
+    # same name, port, network and healthcheck path.
+    build:
+      context: ${PORTAL_BUILD_CONTEXT}
+    image: ${COMPOSE_PROJECT_NAME:-harness}-portal:placeholder
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      PORTAL_BASE_URL: ${PORTAL_BASE_URL}
+      DATABASE_URL: postgres://${PORTAL_DB_ROLE}:${PORTAL_DB_PASSWORD}@postgres:5432/${PORTAL_DB_NAME}
+      REDIS_URL: redis://redis:6379/0
+      SUPER_ADMIN_EMAILS: ${PORTAL_SUPER_ADMIN_EMAILS}
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # --------------------------------------------------------------- storage
+  minio:
+    profiles: ["storage"]
+    image: ${MINIO_IMAGE}
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_CONSOLE_URL}
+    volumes:
+      - minio-data:/data
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+  # -------------------------------------------------------------------- ci
+  gitea-runner:
+    profiles: ["ci"]
+    image: ${GITEA_RUNNER_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_INSTANCE_URL: http://gitea:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN}
+      GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME}
+      GITEA_RUNNER_LABELS: ${GITEA_RUNNER_LABELS}
+      CONFIG_FILE: ""
+    volumes:
+      - gitea-runner-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [harness]
+    healthcheck:
+      # Liveness of the daemon; registration is recorded in /data/.runner.
+      test: ["CMD-SHELL", "pgrep act_runner >/dev/null && test -f /data/.runner"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ------------------------------------------------------------------- ops
+  portainer:
+    profiles: ["ops"]
+    image: ${PORTAINER_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/api/system/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  glances:
+    profiles: ["ops"]
+    image: ${GLANCES_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    pid: host
+    environment:
+      GLANCES_OPT: "-w"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/os-release:/etc/os-release:ro
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:61208/api/4/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------- ingress
+  cloudflared:
+    profiles: ["cloudflared"]
+    image: ${CLOUDFLARED_IMAGE}
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:2000", "run"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN}
+    networks: [harness]
+    healthcheck:
+      # The image has no shell; this checks the binary answers, not the tunnel state.
+      test: ["CMD", "cloudflared", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  tailscale:
+    profiles: ["tailscale"]
+    image: ${TAILSCALE_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    hostname: ${TAILSCALE_HOSTNAME}
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    networks: [harness]
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  harness:
+    name: ${HARNESS_NETWORK}
+
+volumes:
+  proxy-data:
+  proxy-letsencrypt:
+  authentik-postgres-data:
+  authentik-media:
+  authentik-templates:
+  authentik-certs:
+  postgres-data:
+  redis-data:
+  gitea-data:
+  minio-data:
+  gitea-runner-data:
+  portainer-data:
+  tailscale-state:

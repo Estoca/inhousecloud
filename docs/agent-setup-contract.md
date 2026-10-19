@@ -93,6 +93,8 @@ The agent must:
 
 ## Bootstrap Phases
 
+The installer (`install.sh`, built from `docs/install-design.md`) is the whole path: the agent runs it and answers its questions, through a config file. The phases below map to its modes.
+
 ### 1. Inspect
 
 Read the repository and inspect the host:
@@ -101,50 +103,51 @@ Read the repository and inspect the host:
 git status --short
 docker --version
 docker compose version
-node --version
+./install.sh status --install-dir /opt/open-company-harness   # fails cleanly on a fresh box
 ```
 
-If Docker or Node.js is missing, stop and report prerequisites instead of improvising an installation.
+If Docker or Compose v2 is missing, stop and report prerequisites instead of improvising an installation.
 
 ### 2. Plan
 
-Generate a local plan:
+Write the answers to a local, ignored config file and ask the installer for its plan:
 
 ```bash
-cp bootstrap/repos.example.json local/repos.json
-node scripts/bootstrap.mjs --plan --repos=local/repos.json
+mkdir -p local && cp bootstrap/config.example.yaml local/config.yaml
+./install.sh --plan --config local/config.yaml
 ```
 
-Review `local/bootstrap-plan.md` with the user.
+Preflight validates Docker, disk, memory, ports and the ingress matrix and refuses what it cannot install. Review the plan with the user.
 
 ### 3. Apply
 
-After approval, apply filesystem and Git setup:
+After approval, one command does everything: secrets, images, networks and volumes, every service in order with its healthcheck, the first access, the smoke tests, the handoff:
 
 ```bash
-node scripts/bootstrap.mjs --apply --repos=local/repos.json
+./install.sh --non-interactive --config local/config.yaml --json
 ```
 
-### 4. Start
+Starting services is part of this step; the separate approval the contract asks for is the approval of the plan. Public routes and DNS records are never created by the installer.
 
-After separate approval, start services:
+### 4. Resume
+
+A failed stage prints its cause and the resume command; nothing is rolled back and completed stages are skipped:
 
 ```bash
-node scripts/bootstrap.mjs --apply --start --repos=local/repos.json
+./install.sh --apply --install-dir <dir> --from <stage>
 ```
 
 ### 5. Verify
 
-The agent should verify:
+`./install.sh status --install-dir <dir> --json` is the source of the report. The smoke tests (`docs/smoke-tests.md`) have already checked:
 
-- expected containers are running;
-- persistent volumes exist;
-- the reverse proxy is reachable locally;
-- the auth service is reachable locally;
-- the Git service is reachable locally;
-- the app portal is reachable locally, when installed;
-- the example app can pass its health check;
-- the first deploy request workflow is documented and ready.
+- every core container is running and healthy;
+- the shared Postgres and Redis answer;
+- Authentik is live and ready and publishes OIDC discovery with the expected issuer;
+- Gitea answers its API, has the OIDC source, and an authenticated `ls-remote` works;
+- the proxy routes the local names, and the portal route redirects anonymous requests to the outpost;
+- the portal answers `/health`;
+- the portal's database role is not a superuser.
 
 ## Expected Final State
 
@@ -161,10 +164,10 @@ At the end, the user should have:
 
 The agent should finish with a short report:
 
-- installed services;
-- local URLs;
+- installed services and profiles;
+- local URLs (`inventory.json` in the install directory);
 - public URLs, if any;
-- generated files;
-- health status;
-- manual steps still required;
+- generated files, and the names of the credentials in `.env` (never their values);
+- smoke test results;
+- manual steps still required (`docs/first-run.md`: first login, MFA, bootstrap password, SMTP, DNS or tunnel);
 - how to create the first real app.

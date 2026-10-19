@@ -326,7 +326,11 @@ schemas/               JSON schemas for manifests and deploy requests
 templates/app/         Starter files for a deployable internal app
 templates/gitops-request/
 examples/minimal-web-app/
-docker/                Example compose for a local harness stack
+docker/                compose.yml (profiles core, storage, ci, ops) and .env.example
+install.sh             One-command installer: plan, apply, resume, status
+scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
+scripts/smoke-tests.sh The checks that decide "installed"
+bootstrap/             config.example.yaml and state.example.json for the installer
 packages/cli/          Placeholder for validation and workflow tooling
 ```
 
@@ -364,19 +368,20 @@ Then inspect:
 - `templates/app/`
 - `examples/minimal-web-app/`
 
-## Bootstrap With A Terminal-Connected LLM
+## Install
 
-The repository includes a bootstrap playbook for agents that can use a terminal:
-
-```bash
-cp bootstrap/repos.example.json local/repos.json
-node scripts/bootstrap.mjs --plan --repos=local/repos.json
-```
-
-The script asks for company-specific values, writes an inspectable plan to `local/bootstrap-plan.md`, and defaults to plan mode. It only clones repositories or writes local secret config when run with `--apply`, and it only starts services when `--start` is also provided.
-
-For non-interactive smoke tests:
+One command, a few questions, the core cloud up and verified:
 
 ```bash
-node scripts/bootstrap.mjs --plan --defaults --repos=bootstrap/repos.example.json
+./install.sh
 ```
+
+Same path for an agent or CI, with the answers in a file:
+
+```bash
+./install.sh --non-interactive --config bootstrap/config.example.yaml
+```
+
+`--plan` prints what would happen and changes nothing; `--apply --from <stage>` resumes; `status` reports the state file. Re-running on an installed box changes nothing. Every stage, the generated `.env` (0600) and the smoke tests are described in `docs/install-design.md`, `docs/first-run.md` and `docs/smoke-tests.md`; the agent path is in `docs/llm-bootstrap.md`.
+
+`scripts/bootstrap.mjs` remains for cloning the platform repositories of a manifest (`bootstrap/repos.example.json`); it no longer starts services.

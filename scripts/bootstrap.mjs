@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Clones the platform repositories of a manifest (bootstrap/repos.example.json) and
+// writes a local plan. Installing the stack itself is ./install.sh's job.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -13,7 +15,10 @@ const argValue = (name, fallback) => {
 };
 
 const mode = args.has("--apply") ? "apply" : "plan";
-const shouldStart = args.has("--start");
+if (args.has("--start")) {
+  console.error("--start was removed: the stack is installed by ./install.sh (docs/install-design.md).");
+  process.exit(2);
+}
 const useDefaults = args.has("--defaults");
 const reposPath = resolve(argValue("--repos", "bootstrap/repos.example.json"));
 
@@ -179,7 +184,6 @@ async function main() {
 
   const plan = [
     `Mode: ${mode}`,
-    `Start services: ${shouldStart ? "yes" : "no"}`,
     `Repository manifest: ${reposPath}`,
     `Workspace directory: ${config.workspaceDir}`,
     "",
@@ -208,18 +212,9 @@ async function main() {
   plan.push("- Write local/bootstrap-plan.md with this plan.");
   plan.push("- Keep generated config out of Git.");
 
-  if (shouldStart) {
-    plan.push("");
-    plan.push("## Start services");
-    plan.push("- Start the example harness compose stack with docker compose.");
-    if (mode === "apply") {
-      run("docker", ["compose", "-f", "docker/compose.example.yml", "up", "-d"]);
-    }
-  } else {
-    plan.push("");
-    plan.push("## Start services");
-    plan.push("- Skipped. Re-run with --apply --start after reviewing the plan.");
-  }
+  plan.push("");
+  plan.push("## Start services");
+  plan.push("- Not done here. Install the stack with ./install.sh (plan, then apply).");
 
   writeLocalConfig(config, adminPassword, plan);
 
