@@ -158,3 +158,39 @@ What broke on the way:
 - **The `storage` profile cannot start**: `quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z` answers 401 and `minio/minio` no longer exists on Docker Hub. The bucket path of `harness-app provision` is written but untested for that reason. Choosing a maintained S3-compatible server (or a MinIO built from source) is a follow-up.
 
 Not tested: `harness-app new` from a laptop with `HARNESS_GITEA_*` (only on the box), rootful Docker and Docker Desktop (the socket path detection covers them), ingress other than `local/off`, fork pull requests against the deploy runner.
+
+## Cold agent run
+
+The test of the agent path (`AGENTS.md`, [`llm-bootstrap.md`](llm-bootstrap.md), [`agent-setup-contract.md`](agent-setup-contract.md)): a coding agent that has never seen the harness gets a one-paragraph request in a layperson's words and nothing else, and has to put a working app on the air.
+
+**Setup.** A clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless) with the harness installed from `bootstrap/config.example.yaml` unchanged (`local` ingress, `harness.localhost`). The agent was the Claude Code CLI (`claude -p`, Claude Opus 5.5) on the host machine, in a fresh clone of this branch, with no project memory, no MCP servers and no user settings, and with its tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`: it could read the repository and reach the box only through `ssh`. The prompt, in Portuguese as a person would write it, said what the app should do, gave the `ssh` command for the server and said that the folder was a copy of the harness repository. Nothing about the harness, its commands or its docs.
+
+> Cria um app interno de registro de despesas na nossa company cloud e coloca no ar, por favor. A ideia é cada pessoa lançar suas despesas (data, descrição, valor, categoria) e ver a lista das suas. [ssh command, "esta pasta é uma cópia do repositório do harness"] Me avisa quando estiver no ar.
+
+**Result: on the air in the first round, without help.** No doc had to be fixed between rounds, so a second round used a different request (room booking with no overlapping reservations) to check it was not luck.
+
+| | Round 1: expense log | Round 2: room booking |
+|---|---|---|
+| Turns | 17 | 8 |
+| Tool calls | 16 (2 local shell commands refused by the tool limits; it fell back to `Read` and `Glob`) | 7, none refused |
+| Wall time, prompt to report | 113 s | 141 s |
+| Path taken | contract and playbook → section 0 (`install.sh status`, `harness-app list`) → `harness-app new despesas` → `server.js` with `pg`, tables created on start → `redis.required: false` (unused) → `docker compose build` on the box → commit, push with the playbook's credential helper → `harness-app wait` → run status, `/health`, `/` → requests with `X-authentik-email` inside the container | the same, slug `salas`; overlap refused by the database, five concurrent identical bookings with one accepted |
+| Deploy run of its commit | `success` | `success` |
+| Checked by hand afterwards | `/health` 200, `/` 302 to the outpost, table `expenses` in `app_despesas` owned by the app's role (not superuser), no infrastructure in the compose file | `/health` 200, `/` 302, compose file unchanged, both apps in `harness-app list` |
+
+Both reports to the person gave the URL, said it asks for the company sign-in, named the repository, said the owner defaulted to the install's admin email because none was given, and explained how to open a `local` URL from a laptop through an SSH tunnel.
+
+What the run exposed:
+
+- **A race in `harness-app wait`, fixed in this branch.** The embedded Authentik outpost loads a new app's provider a few seconds after `provision`; until then the forward-auth call answers 500, and `wait` checked `/` once, right after `/health`. It failed smoke test 16 of the install on this clean VM (`/ is not protected: got '500'`; the outpost logged the provider 2 s later) and would have failed the first deploy of every new app. `wait` now retries the check for up to 60 s. Round 1's first deploy needed it: `/` answered 302 three seconds after `/health`.
+- The install failing at smoke test 16 was diagnosed with the playbook's own commands (section 3.2 and 4): the run list and the job log through the Gitea API.
+- The agent set the commit author from its own environment (the person driving it) instead of the app owner. Harmless; the playbook asks for the owner's name and email in the commit.
+- The agent deleted the rows it created while testing. That stays inside its own app's database; the contract forbids dropping databases, not cleaning test data.
+
+| Step | Time |
+|---|---|
+| `install.sh --non-interactive` on the clean VM, until smoke test 16 failed on the race | 249 s |
+| After the fix: `install.sh --apply --from foundation` (deployer image rebuilt), 16 passed | 44 s |
+| Deploy job, start to green, first deploy of a new app (round 1 / round 2) | 15 s / 15 s |
+
+Not covered: the install half of the path through an agent (the install itself is the same command the agent would run, tested above and in earlier records, but no cold agent asked the questions of section 1.2 yet), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (the fallback `codex exec` was not needed).

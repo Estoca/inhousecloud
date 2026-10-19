@@ -92,7 +92,7 @@ Completed stages are skipped; every action probes before it creates. Never delet
 python3 scripts/lib/envfile.py keys "$DIR/.env"    # names of the credentials, never the values
 ```
 
-Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), "Left to a human": first sign-in to Authentik as `akadmin`, MFA, SMTP, DNS or tunnel for non-local ingress).
+Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), section "Human": first sign-in to Authentik as `akadmin` with the password in `AUTHENTIK_BOOTSTRAP_PASSWORD`, which they read from `.env` themselves; MFA; SMTP; DNS or tunnel for non-local ingress).
 
 ## 2. Create an app and put it on the air
 
