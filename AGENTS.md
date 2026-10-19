@@ -25,11 +25,11 @@ Supported by:
 
 - Git server and automation;
 - Docker Compose runtime;
-- app portal / orchestrator;
+- app portal (read-only);
 - Portainer;
 - Glances;
 - shared services such as Postgres and Redis;
-- GitOps deploy requests;
+- deploys by push to `main`, run on the box by Gitea Actions (`docs/gitops-flow.md`);
 - app manifests and health checks.
 
 Default to safety. Do not delete existing repositories, volumes, databases, proxy routes, or auth config. If the host already contains services, inspect and preserve them by default.

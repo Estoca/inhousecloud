@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 17 of the install sequence. Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 18 of the install sequence, after the optional profiles (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -69,8 +69,27 @@ scripts/harness-backup.sh --install-dir "$HARNESS_INSTALL_DIR" verify --latest -
 # 15. The final state is consistent
 harness-install status --json
 # PASS: status = completed; no stage failed or pending
+
+# 16. An app reaches the air (skipped only when the ci profile is off)
+scripts/harness-app.sh new smoke-app --install-dir "$HARNESS_INSTALL_DIR"   # or clone it when it exists
+git commit --allow-empty ... && git push origin main                        # a new commit every run
+curl -fsS -H "Authorization: token $GITEA_ADMIN_TOKEN" \
+  "$GITEA_BASE_URL/api/v1/repos/$GITEA_ORGANIZATION/smoke-app/actions/tasks"   # until the run ends
+curl -fsS "https://smoke-app.$BASE_DOMAIN/health"
+curl -fsSI "https://smoke-app.$BASE_DOMAIN/"
+docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc \
+  "SELECT r.rolsuper, r.rolcanlogin, has_database_privilege('public', d.datname, 'CONNECT')
+     FROM pg_roles r, pg_database d
+    WHERE r.rolname = 'app_smoke_app' AND d.datname = 'app_smoke_app' AND d.datdba = r.oid;"
+# PASS: the deploy run of the pushed commit ends `success` within 15 minutes; /health
+#       answers 200 with ok = true through the proxy; / answers 302 to the outpost; the
+#       query returns f|t|f (owned by its role, not superuser, can log in, no public
+#       connect); the role signs in with PGPASSWORD from apps/smoke-app/.env; and on a
+#       second run that password is the same as before the push
 ```
 
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
+
+Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `harness-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It leaves `smoke-app` running, listed in `inventory.json` and reachable by the users group; every run adds one commit to its repository. The harness never deletes it; remove it by hand if it bothers you. The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
 
 Test 6 is the one most often wrong on a real box: a Gitea configured to require sign-in answers 403 to an anonymous version call, and a probe without the token reports the service down while everything works.

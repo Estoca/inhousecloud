@@ -3,18 +3,28 @@
   "$id": "https://example.com/schemas/company-app.schema.json",
   "title": "Company App Manifest",
   "type": "object",
-  "required": ["schema_version", "app", "runtime", "deploy"],
+  "required": [
+    "schema_version",
+    "app",
+    "runtime",
+    "deploy"
+  ],
   "properties": {
     "schema_version": {
       "const": 1
     },
     "app": {
       "type": "object",
-      "required": ["slug", "name", "owner_email"],
+      "required": [
+        "slug",
+        "name",
+        "owner_email"
+      ],
       "properties": {
         "slug": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+          "pattern": "^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$",
+          "description": "Repository name, hostname <slug>.<BASE_DOMAIN> and base of every resource name. Names the platform uses, app-* and harness-* are refused by harness-app provision."
         },
         "name": {
           "type": "string",
@@ -32,10 +42,15 @@
     },
     "runtime": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
-          "enum": ["docker-compose", "documentation"]
+          "enum": [
+            "docker-compose",
+            "documentation"
+          ]
         },
         "compose_file": {
           "type": "string"
@@ -47,7 +62,9 @@
           "type": "object",
           "properties": {
             "type": {
-              "enum": ["http"]
+              "enum": [
+                "http"
+              ]
             },
             "path": {
               "type": "string"
@@ -59,13 +76,22 @@
             }
           },
           "additionalProperties": false
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8080,
+          "description": "Port the service listens on inside its container; the proxy forwards to it on the harness network."
         }
       },
       "additionalProperties": true
     },
     "deploy": {
       "type": "object",
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -75,9 +101,16 @@
         },
         "port": {
           "oneOf": [
-            { "const": "auto" },
-            { "type": "integer", "minimum": 1, "maximum": 65535 }
-          ]
+            {
+              "const": "auto"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          ],
+          "description": "auto: the app publishes no host port. Anything else is refused by harness-app provision."
         },
         "env_file": {
           "type": "string"
@@ -108,8 +141,65 @@
         }
       },
       "additionalProperties": true
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "engine": {
+          "const": "postgres"
+        },
+        "shared": {
+          "const": true,
+          "description": "Always the shared Postgres; false is refused."
+        },
+        "migrations_command": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "redis": {
+          "type": "object",
+          "properties": {
+            "required": {
+              "type": "boolean"
+            },
+            "shared": {
+              "const": true
+            },
+            "prefix": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "object_storage": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "shared": {
+          "const": true
+        },
+        "bucket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
 }
-

@@ -11,7 +11,7 @@ install:
   profile:
     core: true          # always on
     storage: false      # MinIO
-    ci: false           # Gitea Actions runner
+    ci: false           # Gitea Actions runners: CI, and deploys by push to main (docs/gitops-flow.md)
     ops: false          # Portainer, Glances
 
 ingress:

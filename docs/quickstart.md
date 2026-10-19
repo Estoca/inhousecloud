@@ -49,7 +49,6 @@ Then, by hand: copy `BACKUP_ENCRYPTION_KEY` from `.env` to a password manager; s
 Recommended repositories:
 
 - `open-company-app-harness`: shared harness, schemas, templates, docs, CLI;
-- `company-app-deploy-requests`: GitOps deploy request repository;
 - one repository per app.
 
 ## 4. Publish Agent-Facing App Rules
@@ -64,7 +63,7 @@ Use `docs/app-rules-example.md` as a starting point. Adapt it for:
 - auth provider;
 - shared database/cache/storage policy;
 - CI/deploy workflow;
-- first-deploy GitOps process;
+- deploy by push to `main` and who may push;
 - actions that require human approval.
 
 The app portal can serve the rules as Markdown and JSON:
@@ -76,51 +75,36 @@ GET /api/agent/rules.json
 
 Tell coding agents to read the live rules before copying patterns from existing app repositories.
 
-## 5. Prepare the First App
+## 5. Create the First App
 
-Copy `templates/app/` into a new app repository and edit:
-
-- `company-app.yaml`;
-- `.env.example`;
-- `README.md`;
-- application code.
-
-Validate locally:
+Turn on the `ci` profile (`install.profile.ci: true`; re-run `install.sh` if the box is already installed), then on the box:
 
 ```bash
-docker compose config
+scripts/harness-app.sh new example-app --owner owner@example.com --install-dir /opt/open-company-harness
 ```
 
-When the CLI is available:
+It copies `templates/app/` (a runnable app, `company-app.yaml`, `docker-compose.yml`, `.env.example`, `.gitea/workflows/deploy.yml`), fills in the slug and owner, commits on `main`, and creates the private repository `<org>/example-app` in Gitea. Edit the app code; keep the contract in `docs/app-contract.md`. Check locally with `docker compose config` and `docker compose up --build`.
+
+## 6. Push to Deploy
 
 ```bash
-company-deploy validate ./company-app.yaml
-company-deploy checks ./company-app.yaml
+cd example-app
+git push -u origin main
 ```
 
-## 6. Open a Deploy Request
+The push is the approval. The deploy workflow runs on the box and, through `harness-app provision`, creates or confirms:
 
-Copy `templates/gitops-request/request.yaml` to the GitOps repository:
+- the app's database and role on the shared Postgres;
+- its Redis user and key prefix, and a bucket when it asks for one;
+- its env file in `<install-dir>/apps/example-app/.env`;
+- the route `example-app.<BASE_DOMAIN>` with forward auth and its Authentik application;
+- its record in `inventory.json`, with owner and date.
 
-```text
-requests/example-app.yaml
-```
+Then it builds and starts the app and waits for `/health`. The run log in Gitea says what happened. Details in `docs/gitops-flow.md`.
 
-Open a pull request. The PR should validate schemas and policies, but it should not deploy production.
+## 7. Control Who Deploys
 
-## 7. Merge to Approve
-
-Merging the deploy request is the first deploy approval signal.
-
-The orchestrator should create or update:
-
-- runtime directory;
-- local `.env`;
-- app record;
-- port reservation;
-- reverse proxy route;
-- auth policy;
-- health checks.
+Whoever can push to `main` of a repository in the organization deploys it, with the deploy runner's access to the box. Set organization membership, team permissions and branch protection in Gitea accordingly.
 
 ## 8. Operate The Box
 
@@ -129,7 +113,7 @@ The portal should show:
 - current status;
 - last deploy;
 - latest health result;
-- deploy history;
+- deploy history (the Gitea Actions runs);
 - useful remediation messages when checks fail.
 
 Portainer should answer container and stack questions. Glances should answer host health questions. The Git server should answer what changed. Authentik should answer who can access what.

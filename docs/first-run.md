@@ -50,7 +50,7 @@ Containers resolve the public names to the proxy through network aliases, so Git
 | Admin user | `gitea admin user list --admin` | created with `GITEA_ADMIN_PASSWORD`, no forced password change |
 | Admin API token (`GITEA_ADMIN_TOKEN`) | the token answers `/api/v1/user` | generated with scope `all`, written to `.env` |
 | Organization (`GITEA_ORGANIZATION`) | `GET /api/v1/orgs/<org>` | visibility limited (members and signed-in users) |
-| Repository `<org>/deploy-requests` | `GET /api/v1/repos/...` | private, initialised with a README on `main`; the GitOps repository of [`gitops-flow.md`](gitops-flow.md) and the target of smoke test 12 (`GITEA_SMOKE_REPOSITORY`) |
+| Repository `<org>/harness-smoke` | `GET /api/v1/repos/...` | private, initialised with a README on `main`; the target of smoke test 12 (`GITEA_SMOKE_REPOSITORY`). Apps get their own repositories from `harness-app new` ([`gitops-flow.md`](gitops-flow.md)); older installs created `<org>/deploy-requests`, which is kept |
 | Read-only API token (`GITEA_READONLY_TOKEN`) | the token answers `/api/v1/user` | scopes `read:misc,read:repository,read:organization,read:user`, written to `.env`; smoke test 6 uses it because the instance requires sign-in to view |
 | OIDC source `authentik` | `gitea admin auth list` | `add-oauth` or `update-oauth` with the client id and secret from `.env`, discovery URL `<AUTHENTIK_BASE_URL>/application/o/gitea/.well-known/openid-configuration`, scopes openid/profile/email, local 2FA skipped |
 
@@ -123,3 +123,37 @@ What broke on the way:
 - restic 0.18 keeps the oldest snapshot of an item while fewer than 7 days exist ("oldest daily snapshot"), so a fresh box shows two snapshots per item after a few runs on the same day. That is retention working, not a leak.
 
 Not tested: macOS as the host (Docker Desktop must share the destination directory), rootful Docker (the ownership rule in `give_back` covers it but was not exercised), the `storage` profile's MinIO volume, and a run long enough for live volume copies to matter.
+
+## Test record: the app loop (smoke test 16)
+
+On a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless, socket `/run/user/<uid>/docker.sock`), with `bootstrap/config.example.yaml` changed only to `install.profile.ci: true` and `ci.gitea_runner.enabled: true`:
+
+| Step | Time |
+|---|---|
+| VM created and started | 45 s |
+| `install.sh --non-interactive`, all 14 stages, including the deployer image, both runners and the first deploy of `smoke-app` inside smoke test 16 | 238 s |
+| Smoke tests: 16 passed, 0 skipped (inside the install) | |
+| Smoke test 16 alone: push to main until the deploy run is green (first deploy of `smoke-app`) | 16 s |
+| `harness-app new expense-report --push` until `GET /health` answers 200 through the proxy | 13 s |
+| Redeploy with a code change (new image built): push until the run is green | 19 s |
+| `smoke-tests.sh` again on the installed box (16 passed; test 16 redeploys and finds the password unchanged) | 21 s |
+| `sso-login-check.sh` | PASS |
+
+The deploy times are short because the template's base image (`node:22-alpine`) is already on the box: the placeholder portal is built from it during the install. An app on another base image pays its pull on the first deploy.
+
+Checked by hand on the same kind of VM:
+
+- **Rule against local infrastructure.** An app whose compose file adds `image: postgres:16-alpine` fails at `provision` in 3 s with the alternative in the log; no database, env file or route was created.
+- **App that never gets healthy.** An app listening on 9090 instead of `runtime.port` 8080 fails `harness-app wait` after 240 s: `/health through the proxy answered '502' (wanted 200), container state 'running'`, the container log, and what to check.
+- **Object storage asked for with the `storage` profile off** fails before anything is created, with the profile to turn on.
+- **Redis ACL.** The app's user writes `smoke-app:*`, gets `NOPERM` on another app's keys, on `FLUSHALL` and on `KEYS`; after `docker restart` of Redis the user is still there (`/data/users.acl`).
+- **Idempotency.** `install.sh --apply --from foundation` on the box with three apps: every Authentik, proxy and Gitea object "exists" or "reconciled", the deployer image rebuilt, `inventory.json` kept its `apps`, smoke tests 16/16 with the app's password unchanged, 54 s.
+
+What broke on the way:
+
+- The template's placeholders were not replaced in `.gitea/workflows/deploy.yml`: the walk skipped every path containing `/.git`, which `/.gitea` does. `harness-app new` now refuses to finish while a placeholder is left.
+- Files written by deploy jobs came out `0666`: `docker exec` runs with umask 0000 (the backup job hit the same). `harness-app` sets umask 022 and sets the overlay's mode explicitly, since an existing file keeps its old mode.
+- `install.sh` reported success with a service that never started: stage functions run inside `if`, where `set -e` does not apply, so a failed `wait_healthy` did not fail the stage. Every `dc up` and `wait_healthy` in a stage now returns the failure.
+- **The `storage` profile cannot start**: `quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z` answers 401 and `minio/minio` no longer exists on Docker Hub. The bucket path of `harness-app provision` is written but untested for that reason. Choosing a maintained S3-compatible server (or a MinIO built from source) is a follow-up.
+
+Not tested: `harness-app new` from a laptop with `HARNESS_GITEA_*` (only on the box), rootful Docker and Docker Desktop (the socket path detection covers them), ingress other than `local/off`, fork pull requests against the deploy runner.

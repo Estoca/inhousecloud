@@ -4,7 +4,7 @@
 # Services with no `profiles:` key are the `core` profile and always run.
 # Optional profiles are enabled through COMPOSE_PROFILES in .env:
 #   storage      MinIO (S3-compatible object storage for apps)
-#   ci           Gitea Actions runner
+#   ci           Gitea Actions runners: gitea-runner for CI, gitea-deployer for deploys
 #   ops          Portainer and Glances
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node (ingress private)
@@ -161,9 +161,10 @@ services:
       start_period: 20s
 
   redis:
-    # Shared Redis: for apps built inside the cloud.
+    # Shared Redis: for apps built inside the cloud. Each app gets an ACL user limited to
+    # its key prefix (scripts/harness-app.sh); users persist in /data/users.acl.
     image: ${REDIS_IMAGE}
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    command: ["sh", "-c", "touch /data/users.acl && exec redis-server --save 60 1 --loglevel warning --aclfile /data/users.acl"]
     restart: unless-stopped
     logging: *default-logging
     volumes:
@@ -277,7 +278,11 @@ services:
       start_period: 20s
 
   # -------------------------------------------------------------------- ci
+  # Two runners on purpose (docs/gitops-flow.md). Both daemons need the Docker socket to
+  # start job containers; only the deployer hands it to its jobs.
   gitea-runner:
+    # CI for any repository: label ubuntu-latest. Jobs get no Docker socket, no harness
+    # network and no install directory (runner/ci.yaml).
     profiles: ["ci"]
     image: ${GITEA_RUNNER_IMAGE}
     restart: unless-stopped
@@ -290,13 +295,43 @@ services:
       GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN}
       GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME}
       GITEA_RUNNER_LABELS: ${GITEA_RUNNER_LABELS}
-      CONFIG_FILE: ""
+      CONFIG_FILE: /config/ci.yaml
     volumes:
       - gitea-runner-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runner:/config:ro
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     networks: [harness]
     healthcheck:
       # Liveness of the daemon; registration is recorded in /data/.runner.
+      test: ["CMD-SHELL", "pgrep act_runner >/dev/null && test -f /data/.runner"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  gitea-deployer:
+    # Deploys: label harness-deploy, registered for the organization only. Its jobs run in
+    # the <project>-deployer:local image with the Docker socket, the harness network and
+    # the install directory: a job here is root on the box (runner/deploy.yaml).
+    profiles: ["ci"]
+    image: ${GITEA_RUNNER_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_INSTANCE_URL: http://gitea:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_DEPLOY_RUNNER_TOKEN}
+      GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME}-deploy
+      GITEA_RUNNER_LABELS: harness-deploy
+      CONFIG_FILE: /config/deploy.yaml
+    volumes:
+      - gitea-deployer-data:/data
+      - ./runner:/config:ro
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks: [harness]
+    healthcheck:
       test: ["CMD-SHELL", "pgrep act_runner >/dev/null && test -f /data/.runner"]
       interval: 30s
       timeout: 5s
@@ -439,6 +474,7 @@ volumes:
   gitea-data:
   minio-data:
   gitea-runner-data:
+  gitea-deployer-data:
   portainer-data:
   tailscale-state:
   backup-cache:

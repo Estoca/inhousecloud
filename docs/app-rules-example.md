@@ -2,7 +2,7 @@
 
 This document is a generalized example of the kind of `rules.md` a company can publish for coding agents that build internal apps.
 
-The goal is to give agents one live source of truth before they create repositories, manifests, Docker Compose files, deploy workflows, or first-deploy requests.
+The goal is to give agents one live source of truth before they create repositories, manifests, Docker Compose files, or deploy workflows.
 
 In a real installation, serve this document from the app portal, for example:
 
@@ -24,10 +24,9 @@ Agents should read the live rules before looking at old app repositories. Existi
 7. Create or update `.env.example`.
 8. Never commit the real `.env`.
 9. Validate the manifest, Compose file, env example, and healthcheck before pushing.
-10. Fix every failed check before opening a deploy request.
-11. For the first deploy, open a GitOps pull request in the deploy-request repository.
-12. Treat the GitOps merge as the approval signal.
-13. After the app is online with its standard deploy workflow, deploy normal code changes by merging to the app repo's default branch.
+10. Fix every failed check before pushing to `main`.
+11. Treat a push to `main` as the deploy: it is the approval, for the first deploy and every later one.
+12. When a deploy fails, read the run log in the repository's Actions tab; it says which rule or step failed and what to change.
 
 ## Supported Repository Sources
 
@@ -115,9 +114,9 @@ Rules:
 
 - Single-service apps should usually use one main `app` service.
 - Production Compose files should be small.
-- Use shared company infrastructure instead of app-local Postgres, Redis, object storage, auth, reverse proxy, queues, workers, or caches unless the deploy request documents an approved exception.
+- Use shared company infrastructure instead of app-local Postgres, Redis, object storage, auth, reverse proxy, queues, workers, or caches unless an approved exception exists (the executor refuses them today).
 - CI should validate with the example env file, for example `COMPANY_ENV_FILE=.env.example`.
-- Production deploy should use the persistent env file from the deploy directory, not a temporary CI checkout file.
+- Production deploy uses the persistent env file the executor writes in the install directory (`apps/<slug>/.env`), not a temporary CI checkout file.
 
 ## Healthcheck Rules
 
@@ -153,54 +152,15 @@ auth:
 
 Apps can trust identity headers only from the reverse proxy/auth gateway path. Local development can use explicit local-only mock users, but mock auth must never be enabled in production.
 
-## First Deploy Request Flow
+## Deploy Flow
 
-First publication should happen through GitOps, not tokens pasted in chat.
+Publication happens by push to `main`, not tokens pasted in chat and not a separate request.
 
-1. Create a branch in the deploy-request repository, for example `deploy/<app-slug>`.
-2. Add `requests/<app-slug>.yaml`.
-3. Validate the request locally.
-4. Open a pull request to the default branch.
-5. Wait for required checks.
-6. Merge after checks pass and the branch is up to date.
-7. The merge workflow submits the approved request to the portal/orchestrator with a service credential.
-8. The portal records the deploy request and continues asynchronously.
-9. The orchestrator or an approved operational agent on the runtime host applies the deployment.
-
-Example request:
-
-```yaml
-schema_version: 1
-
-request:
-  type: deploy
-  reason: "First deploy through the company GitOps flow."
-
-app:
-  slug: example-app
-  repo: https://git.company.example/apps/example-app.git
-  branch: main
-  commit: abc1234
-  domain: example-app.company.example
-  owner_email: owner@company.example
-  healthcheck_path: /health
-
-auth:
-  required: true
-  provider: forward-auth
-
-checks:
-  manifest: true
-  compose: true
-  env_example: true
-  healthcheck: true
-  test_command: "npm test"
-  build_command: "docker compose build"
-
-deploy:
-  mode: docker-compose
-  port: auto
-```
+1. Push to `main` of the app's repository in the company organization.
+2. The deploy workflow (`.gitea/workflows/deploy.yml`, from the template) runs on the box.
+3. `harness-app provision <slug>` validates the manifest and Compose file and creates or confirms the database, cache user, bucket, env file, route, SSO application and inventory record.
+4. The workflow builds and starts the app and waits for its healthcheck through the proxy.
+5. A failed step fails the run with the reason; fix it and push again.
 
 ## MUST
 
@@ -215,7 +175,7 @@ deploy:
 - Prefer shared Postgres, Redis, object storage, auth, proxy, and queues.
 - Declare database migrations when the app owns database schema.
 - Isolate shared databases and caches by app.
-- Validate before opening a deploy request.
+- Validate before pushing to `main`.
 
 ## SHOULD
 
@@ -226,7 +186,7 @@ deploy:
 - Expose build or commit metadata.
 - Use consistent service names and environment variable names.
 - Keep production Compose files focused on production runtime only.
-- Document any exception in the deploy request.
+- Document any exception in the app's README and `company-app.yaml`.
 
 ## NICE TO HAVE
 
@@ -258,5 +218,5 @@ This makes the deploy path teachable:
 
 - agents can build apps that pass checks on the first try;
 - humans can review a standard shape instead of one-off infrastructure;
-- production credentials stay in runners or the orchestrator;
-- the operational agent on the runtime host has a clear contract to execute.
+- production credentials stay on the box, in the install directory;
+- the executor in the deploy job has a clear contract to enforce.

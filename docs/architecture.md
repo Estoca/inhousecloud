@@ -26,11 +26,11 @@ The support plane runs beside the app path:
 Git server + Actions
 Portainer
 Glances
-App portal / orchestrator
+App portal (read-only)
 Backups and local config
 ```
 
-Coding agents and developers prepare code, manifests, Docker Compose files, tests, and deploy requests. The harness validates those artifacts and only deploys after a controlled approval path.
+Coding agents and developers prepare code, manifests, Docker Compose files and tests. A push to `main` is the approval; the deploy job on the box validates those artifacts and deploys only when they keep the contract.
 
 ## Components
 
@@ -52,7 +52,7 @@ The reference implementation uses Authentik with forward-auth headers. Apps can 
 
 ### Git Server
 
-The Git server hosts the harness, app repositories, deploy request repositories, and automation workflows.
+The Git server hosts the harness, app repositories, and the workflows that deploy them.
 
 The reference implementation uses Gitea because it is small, self-hosted, and enough for internal app workflows.
 
@@ -66,47 +66,29 @@ Each app repository contains:
 - `README.md`: local development and deployment notes;
 - `/health`: HTTP health endpoint.
 
-### GitOps Repository
+### Deploy Runner and Executor
 
-The GitOps repository stores deploy requests, usually one file per app:
+The `ci` profile runs two Gitea Actions runners. `gitea-runner` serves CI for any repository, with no Docker socket in its jobs. `gitea-deployer` serves the organization's repositories only (label `harness-deploy`) and gives its jobs the Docker socket, the harness network and the install directory.
 
-```text
-requests/example-app.yaml
-```
+An app's deploy workflow runs there on every push to `main`. Its executor is `scripts/harness-app.sh provision`: it validates the manifest and the compose file, then ensures the app's database and role on the shared Postgres, its Redis ACL user, its optional bucket, its env file in the install directory, the proxy route with forward auth, the Authentik application and the inventory record. Then the job builds the app, starts it on the harness network and waits for its healthcheck through the proxy. The executor is idempotent and never deletes. Details: [`gitops-flow.md`](gitops-flow.md).
 
-A pull request validates schema and policy. Merging the request is the approval signal for first deploy.
+The first box ran this loop through a deploy-request repository and an operator agent on the box; both were retired once the operator's steps became the executor.
 
-### Portal Orchestrator
+### Portal
 
-The portal records:
+The portal shows:
 
-- app inventory;
-- deploy attempts;
-- check results;
+- app inventory (`inventory.json`, written by the executor);
+- deploy runs (Gitea Actions);
 - runtime state;
 - health status;
-- audit events.
+- backup status.
 
-The portal should compare Git intent with real infrastructure state instead of becoming the only source of truth.
+It is read-only: it compares Git intent with real infrastructure state instead of becoming the source of truth, and nothing writes to it.
 
-### Operational Agent
+### Coding Agents on the Box
 
-In the first practical version of the harness, a terminal-connected coding agent can act as the operational agent for the runtime host.
-
-The operational agent does not replace GitOps approval. It executes the approved change on the machine when the orchestrator is not yet fully automated. Typical responsibilities include:
-
-- reading live host state before making changes;
-- preparing ignored local config and runtime directories;
-- allocating or confirming ports;
-- applying Docker Compose changes;
-- creating or updating reverse proxy routes;
-- creating or updating auth gateway applications and providers;
-- checking container health, HTTP health endpoints, and auth behavior;
-- recording the result back in the portal or deploy request.
-
-This matches the early single-box model: the same machine hosts Git, SSO, proxy, runtime, observability, and the agent workspace, so the agent can compare intended state with real state and fix integration issues quickly.
-
-The boundary is important. The agent should only perform production mutations after an explicit approval signal, and it should never silently delete or overwrite repositories, databases, volumes, proxy routes, auth config, or secrets.
+A terminal-connected agent on the runtime host is still useful for what the executor does not do: diagnosing a failed deploy from its log and the live host, migrating an existing app off its local database, or removing an app by hand. It reads live state before changing anything and never deletes or overwrites repositories, databases, volumes, proxy routes, auth config, or secrets without an explicit request.
 
 ### Runtime Host
 
@@ -123,26 +105,23 @@ The support plane keeps the single box understandable:
 
 - Portainer shows containers, images, volumes, networks, and stacks.
 - Glances exposes host resource usage.
-- The portal records inventory, deploy events, health, ownership, and drift.
+- The portal shows inventory, deploy runs, health, ownership, and drift.
 - Backups and local generated config are explicit operational concerns.
 
 ### Coding Agent Rules
 
-Coding agents should read the live rules before preparing a repo. They may edit app code and open pull requests, but they should not directly create proxy routes, assign fixed ports, SSH into production, or run deployment commands unless explicitly approved.
+Coding agents should read the live rules before preparing a repo. They edit app code and push; the deploy job creates routes, databases and SSO. They should not create proxy routes by hand, assign fixed ports, or bring their own Postgres, Redis or MinIO.
 
 ## App Deployment Flow
 
 1. A user asks an agent or developer to create an internal app.
-2. The app repo is prepared from the template.
-3. `company-app.yaml` declares owner, runtime, domain, auth, health, and optional dependencies.
-4. Local checks validate the manifest, compose file, and health behavior.
-5. A deploy request PR is opened in the GitOps repository.
-6. CI validates the request without production secrets.
-7. Merge approves the first deploy.
-8. The workflow records the deploy request with the portal/orchestrator.
-9. The orchestrator, or an approved operational agent connected to the runtime host, creates or updates runtime state.
-10. Health and deploy status are recorded in the portal.
-11. Future code deploys can happen from the app repo's main branch after the app is onboarded.
+2. `harness-app new <slug>` creates the repository from the template in the Gitea organization.
+3. `company-app.yaml` declares owner, runtime, health, auth, and the shared services it needs.
+4. Local checks validate the app and its health behavior.
+5. A push to `main` approves the deploy.
+6. The deploy workflow runs on the box: checkout, `harness-app provision`, `docker compose up`, healthcheck through the proxy.
+7. The run log is the record; the portal reads it with health and inventory.
+8. Every later push to `main` redeploys the same way.
 
 ## Why Single Box First
 

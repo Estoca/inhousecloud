@@ -1,15 +1,18 @@
+# The app's operational contract (docs/app-contract.md, schemas/company-app.schema.json).
+# harness-app provision reads it on every push to main.
 schema_version: 1
 
 app:
-  slug: example-app
-  name: Example App
-  owner_email: owner@example.com
-  description: Example internal app.
+  slug: __APP_SLUG__
+  name: __APP_NAME__
+  owner_email: __OWNER_EMAIL__
+  description: Internal app built on the company cloud.
 
 runtime:
   type: docker-compose
   compose_file: docker-compose.yml
   service: app
+  port: 8080
   healthcheck:
     type: http
     path: /health
@@ -17,23 +20,25 @@ runtime:
 
 deploy:
   enabled: true
-  domain: example-app.internal.example.com
+  domain: __APP_DOMAIN__
   port: auto
-  env_file: .env
   env_example: .env.example
 
 auth:
   required: true
   provider: forward-auth
-  allowed_domains:
-    - example.com
 
 database:
-  required: false
+  required: true
   engine: postgres
-  migrations_command: npm run migrate
+
+dependencies:
+  redis:
+    required: true
+
+object_storage:
+  required: false
 
 checks:
   build_command: docker compose build
   test_command: npm test
-
