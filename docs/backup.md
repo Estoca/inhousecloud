@@ -13,7 +13,7 @@ The minimum backup of [`install-design.md`](install-design.md#backup), as built.
 7. Applies retention per item (`restic forget --group-by host,tags --prune`): `BACKUP_RETENTION_DAILY` / `WEEKLY` / `MONTHLY`, 7/4/12 by default. Each dump, the volumes and the config are their own group, so one item never pushes another out.
 8. Writes the manifest `reports/runs/<run_id>.json` (every item with its snapshot id; dumps with sha256 and size) and the status file. The last 100 manifests are kept.
 
-The destination is a host directory, `HARNESS_BACKUP_DESTINATION` at install time, `BACKUP_DESTINATION` in `.env`, default `<install-dir>/backups`. Point it at another disk or mount: preflight warns when it is on the same disk as the installation, and warns when it is not writable.
+The destination is a host directory: the interactive installer asks for it right after the Gitea organization; in a config file it is `backup.destination`; `HARNESS_BACKUP_DESTINATION` at install time wins over both; it is kept as `BACKUP_DESTINATION` in `.env`; default `<install-dir>/backups`. Point it at another disk or mount: preflight warns when it is on the same disk as the installation, and warns when it is not writable.
 
 ## The status file
 

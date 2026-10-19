@@ -5,14 +5,14 @@ The harness is designed around a conservative trust boundary.
 ## Trust Boundary
 
 - Coding agents may edit files and open pull requests.
-- Pull requests may run validation without secrets.
-- Real deploys happen only after merge or another explicit approval signal.
-- Deploy tokens live in runner or orchestrator secrets.
-- The orchestrator accepts deploy requests only from trusted automation.
+- Pull requests run validation on the CI runner, without secrets, the Docker socket or the harness network.
+- Real deploys happen only on a push to `main`: that push is the approval.
+- The deploy runner serves the organization's repositories only. Its jobs have the Docker socket and the install directory, so a deploy job is root on the box: write access in the organization is box access ([`gitops-flow.md`](gitops-flow.md)).
+- Credentials live on the box: the install `.env` and each app's `apps/<slug>/.env`, mode 0600, never in Git, never printed.
 
 ## Rules
 
-- Never store secrets in app manifests or deploy request files.
+- Never store secrets in app manifests, compose files or `.env.example`.
 - Never deploy production on pull request events.
 - Never run untrusted pull request code with deploy credentials.
 - Never delete databases, volumes, repositories, stacks, or proxy routes automatically.
@@ -23,12 +23,15 @@ The harness is designed around a conservative trust boundary.
 
 ## Required Validations
 
-- Authorized author or merger.
-- Repository URL belongs to an approved Git provider or organization.
-- Domain belongs to an approved internal base domain.
-- App manifest is present and valid.
-- Compose file and `.env.example` are present.
+Checked by `harness-app provision` on every deploy:
+
+- The repository belongs to the organization (the deploy runner serves nothing else) and its name is the app's slug.
+- The slug is not one the platform uses and is not registered to another repository.
+- The domain is `<slug>.<BASE_DOMAIN>`, and no other route already owns it.
+- App manifest is present and valid; compose file present, with the declared service.
 - Healthcheck is declared.
-- `deploy.port` is `auto`, unless an exception policy approves a fixed port.
-- No obvious secret values are present in tracked files.
+- `deploy.port` is `auto`; host ports are dropped.
+- No local Postgres, Redis or MinIO; no host networking, privileged mode or Docker socket.
+
+Not checked yet: obvious secret values in tracked files.
 

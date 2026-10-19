@@ -33,7 +33,8 @@ Everything the installer accepts is in `bootstrap/config.example.yaml`, with def
 - ingress mode (`local`, `private`, `public`) and base domain; the TLS mode and tunnel provider follow the matrix in `docs/install-design.md`;
 - admin email;
 - Gitea organization name;
-- which optional profiles to turn on (`storage`, `ci`, `ops`);
+- the backup destination (`backup.destination`, ideally another disk);
+- which optional profiles to turn on (`storage`, `ops`; the Actions runners are always installed);
 - for tunnels, the name of the environment variable holding the token (never the token itself).
 
 Secrets are never inputs: the installer generates every password, key and token into `<install-dir>/.env` with mode 0600. If the human wants to provide one, they export it in the environment variable named in the config (`*_env` keys) before the run.
@@ -62,7 +63,7 @@ Secrets are never inputs: the installer generates every password, key and token 
    ./install.sh --non-interactive --config local/config.yaml --json
    ```
 
-   The run goes through the 13 stages of `bootstrap/state.example.json`: preflight, plan, secrets, foundation, authentik, shared_data, proxy_ingress, gitea, portal, first_run, smoke_tests, optional_profiles, handoff. Each waits for the healthchecks of what it started. `first_run` creates the Gitea admin and organization, the Authentik OIDC provider and groups, the portal's proxy provider and the proxy hosts with forward auth (`docs/first-run.md`). `smoke_tests` runs `docs/smoke-tests.md` and the installation is not marked completed while one fails.
+   The run goes through the 14 stages of `bootstrap/state.example.json`: preflight, plan, secrets, foundation, authentik, shared_data, proxy_ingress, gitea, portal, first_run, backup, optional_profiles, smoke_tests, handoff. Each waits for the healthchecks of what it started. `first_run` creates the Gitea admin and organization, the Authentik OIDC provider and groups, the portal's proxy provider and the proxy hosts with forward auth (`docs/first-run.md`). `smoke_tests` runs `docs/smoke-tests.md` and the installation is not marked completed while one fails.
 
 4. On failure, the output ends with the stage name, the cause and the resume command:
 
@@ -82,7 +83,7 @@ Secrets are never inputs: the installer generates every password, key and token 
 
 ## Repository manifest (optional)
 
-`scripts/bootstrap.mjs` clones the company's platform repositories from a manifest (`bootstrap/repos.example.json` to `local/repos.json`) and writes `local/bootstrap-plan.md`. It does not start services; that is `install.sh`. Use it when the company keeps its portal, GitOps and template repositories elsewhere and you need them on the box.
+`scripts/bootstrap.mjs` clones the company's platform repositories from a manifest (`bootstrap/repos.example.json` to `local/repos.json`) and writes `local/bootstrap-plan.md`. It does not start services; that is `install.sh`. Use it when the company keeps its portal and template repositories elsewhere and you need them on the box.
 
 ```bash
 node scripts/bootstrap.mjs --plan --repos local/repos.json

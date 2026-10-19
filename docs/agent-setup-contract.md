@@ -49,8 +49,8 @@ The default single-box cloud includes:
 - Portainer for container and stack inspection;
 - Glances for host observability;
 - Postgres and Redis as common shared services;
-- an app portal / orchestrator for inventory, deploys, health, and drift;
-- one GitOps repository for first-deploy requests;
+- an app portal (read-only) for inventory, deploys, health, and drift;
+- deploys by push to `main`, run on the box by Gitea Actions (`docs/gitops-flow.md`);
 - one repository per internal app.
 
 The reference ingress path is:
@@ -159,7 +159,7 @@ At the end, the user should have:
 - SSO protecting internal routes;
 - container and host visibility;
 - a sample app template;
-- a deploy request repository;
+- the deploy runner, so apps deploy from the box by push to `main` (`harness-app`, `docs/gitops-flow.md`);
 - a documented path for creating the next app with an LLM.
 
 The agent should finish with a short report:

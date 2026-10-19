@@ -34,13 +34,12 @@ cp bootstrap/config.example.yaml local/config.yaml   # edit, then:
 
 What comes up, as Compose profiles of `docker/compose.yml` (`docs/install-design.md`):
 
-- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea, the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
+- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea with its two Actions runners (CI, and deploys by push to `main`), the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
 - `storage`: MinIO;
-- `ci`: the Gitea Actions runner;
 - `ops`: Portainer and Glances;
 - `cloudflared` or `tailscale`, chosen by the ingress mode.
 
-The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route), starts the backup job and runs the first backup (`docs/backup.md`; set `HARNESS_BACKUP_DESTINATION` to a directory on another disk first), then the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands.
+The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route), starts the backup job and runs the first backup (`docs/backup.md`; the installer asks for the backup destination, ideally a directory on another disk; in a config file it is `backup.destination`), then the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands.
 
 Then, by hand: copy `BACKUP_ENCRYPTION_KEY` from `.env` to a password manager; sign in to Authentik as `akadmin` with the bootstrap password from `.env`, enrol MFA and change it; set DNS or the tunnel for `private` and `public` ingress; configure SMTP.
 
@@ -49,7 +48,6 @@ Then, by hand: copy `BACKUP_ENCRYPTION_KEY` from `.env` to a password manager; s
 Recommended repositories:
 
 - `open-company-app-harness`: shared harness, schemas, templates, docs, CLI;
-- `company-app-deploy-requests`: GitOps deploy request repository;
 - one repository per app.
 
 ## 4. Publish Agent-Facing App Rules
@@ -64,7 +62,7 @@ Use `docs/app-rules-example.md` as a starting point. Adapt it for:
 - auth provider;
 - shared database/cache/storage policy;
 - CI/deploy workflow;
-- first-deploy GitOps process;
+- deploy by push to `main` and who may push;
 - actions that require human approval.
 
 The app portal can serve the rules as Markdown and JSON:
@@ -76,51 +74,36 @@ GET /api/agent/rules.json
 
 Tell coding agents to read the live rules before copying patterns from existing app repositories.
 
-## 5. Prepare the First App
+## 5. Create the First App
 
-Copy `templates/app/` into a new app repository and edit:
-
-- `company-app.yaml`;
-- `.env.example`;
-- `README.md`;
-- application code.
-
-Validate locally:
+On the box:
 
 ```bash
-docker compose config
+scripts/harness-app.sh new example-app --owner owner@example.com --install-dir /opt/open-company-harness
 ```
 
-When the CLI is available:
+It copies `templates/app/` (a runnable app, `company-app.yaml`, `docker-compose.yml`, `.env.example`, `.gitea/workflows/deploy.yml`), fills in the slug and owner, commits on `main`, and creates the private repository `<org>/example-app` in Gitea. Edit the app code; keep the contract in `docs/app-contract.md`. Check locally with `docker compose config` and `docker compose up --build`.
+
+## 6. Push to Deploy
 
 ```bash
-company-deploy validate ./company-app.yaml
-company-deploy checks ./company-app.yaml
+cd example-app
+git push -u origin main
 ```
 
-## 6. Open a Deploy Request
+The push is the approval. The deploy workflow runs on the box and, through `harness-app provision`, creates or confirms:
 
-Copy `templates/gitops-request/request.yaml` to the GitOps repository:
+- the app's database and role on the shared Postgres;
+- its Redis user and key prefix, and a bucket when it asks for one;
+- its env file in `<install-dir>/apps/example-app/.env`;
+- the route `example-app.<BASE_DOMAIN>` with forward auth and its Authentik application;
+- its record in `inventory.json`, with owner and date.
 
-```text
-requests/example-app.yaml
-```
+Then it builds and starts the app and waits for `/health`. The run log in Gitea says what happened. Details in `docs/gitops-flow.md`.
 
-Open a pull request. The PR should validate schemas and policies, but it should not deploy production.
+## 7. Control Who Deploys
 
-## 7. Merge to Approve
-
-Merging the deploy request is the first deploy approval signal.
-
-The orchestrator should create or update:
-
-- runtime directory;
-- local `.env`;
-- app record;
-- port reservation;
-- reverse proxy route;
-- auth policy;
-- health checks.
+Whoever can push to `main` of a repository in the organization deploys it, with the deploy runner's access to the box. Set organization membership, team permissions and branch protection in Gitea accordingly.
 
 ## 8. Operate The Box
 
@@ -129,7 +112,7 @@ The portal should show:
 - current status;
 - last deploy;
 - latest health result;
-- deploy history;
+- deploy history (the Gitea Actions runs);
 - useful remediation messages when checks fail.
 
 Portainer should answer container and stack questions. Glances should answer host health questions. The Git server should answer what changed. Authentik should answer who can access what.

@@ -20,7 +20,7 @@ Open Company App Harness is a reference architecture and starter kit for a self-
 - container and host observability;
 - an app portal for inventory, deploys, health, and drift;
 - an operational contract for each app with `company-app.yaml`;
-- GitOps approval for first-time app onboarding;
+- push-to-deploy: a push to `main` is the approval, and Gitea Actions on the box provisions and starts the app behind the SSO;
 - coding-agent instructions that let agents build and repair apps without broad production access.
 - a live app-building rules pattern that tells agents how this company wants apps created.
 
@@ -42,8 +42,8 @@ Open Company App Harness creates a small cloud control plane around one machine:
 - a manifest for intent;
 - a template for repeatability;
 - checks for confidence;
-- GitOps for approval;
-- an orchestrator for runtime state;
+- push to `main` for approval;
+- an executor in the deploy job for runtime state;
 - a portal for visibility;
 - rules that agents can follow without needing production access.
 
@@ -82,8 +82,8 @@ The LLM should explain what will be installed before changing the machine:
 - Docker Compose runtime;
 - shared Postgres, Redis, and storage options;
 - Portainer and Glances;
-- app portal / orchestrator;
-- templates, schemas, and GitOps deploy flow.
+- app portal;
+- templates, schemas, and the push-to-deploy flow.
 
 The LLM should ask for values such as admin email, admin username, admin password or permission to generate one, base domain, install directory, tunnel provider, and whether it may start Docker services or create public routes.
 
@@ -129,7 +129,7 @@ cloudflared -> reverse proxy -> auth gateway -> app
 
 The support plane keeps the environment operable:
 
-- Gitea stores repositories and runs GitOps workflows.
+- Gitea stores repositories and runs the deploy workflows on the box.
 - Portainer gives visibility into containers, images, volumes, and stacks.
 - Glances exposes host-level resource usage.
 - The app portal records app inventory, deploy history, health checks, and drift.
@@ -142,36 +142,25 @@ Every box can be swapped. The harness cares about the contracts between them: Gi
 ```mermaid
 flowchart LR
   Human[Human or team] --> Agent[Coding agent]
-  Agent --> AppRepo[App repository]
-  AppRepo --> Manifest[company-app.yaml]
-  AppRepo --> Compose[docker-compose.yml]
-  AppRepo --> EnvExample[.env.example]
+  Agent --> AppRepo[App repository<br/>company-app.yaml, compose, .env.example]
+  Rules[Live harness rules] --> Agent
 
-  Agent --> Rules[Live harness rules]
-  Rules --> Agent
+  AppRepo -->|push to main = approval| Actions[Gitea Actions<br/>deploy runner on the box]
+  Actions --> Provision[harness-app provision]
+  Provision --> Services[Shared Postgres, Redis, MinIO<br/>own database, role, prefix, bucket]
+  Provision --> Proxy[Proxy host + forward auth]
+  Provision --> Auth[Authentik provider + application]
+  Provision --> Inventory[inventory.json]
+  Actions --> Docker[docker compose up<br/>on the harness network]
+  Docker --> Health[healthcheck through the proxy]
+  Health --> Actions
 
-  AppRepo --> Checks[Validation checks]
-  Checks --> Request[Deploy request PR]
-  Request --> GitOps[GitOps repository]
-  GitOps --> Approval[Merge approval]
-
-  Approval --> Orchestrator[Portal orchestrator]
-  Orchestrator --> Runtime[Runtime host]
-  Runtime --> Docker[Docker Compose app]
-  Runtime --> Proxy[Reverse proxy]
-  Runtime --> Auth[Auth gateway]
-  Runtime --> Services[Shared services]
-
-  Docker --> Health[Health checks]
-  Proxy --> Health
-  Auth --> Health
-  Health --> Orchestrator
-  Orchestrator --> Status[Status, events, history]
-  Status --> Human
-  Status --> Agent
+  Actions --> Portal[Portal, read-only:<br/>runs, health, inventory]
+  Portal --> Human
+  Portal --> Agent
 ```
 
-The app repository says what should exist. The runtime host reveals what actually exists. The orchestrator compares both and records the difference.
+The app repository says what should exist; the deploy job makes it exist and logs what it did; the portal reads the result. See [`docs/gitops-flow.md`](docs/gitops-flow.md).
 
 ## Core Idea
 
@@ -208,44 +197,21 @@ auth:
     - example.com
 ```
 
-The harness validates that contract, checks the repository, and coordinates deployment through a controlled path.
+`harness-app provision` validates that contract on every push to `main` and refuses an app that breaks it, before anything changes.
 
 ## Operating Model
 
-Open Company App Harness uses a two-stage deployment model.
+One path, from the first deploy to the hundredth:
 
-### Operational agent on the box
+1. `scripts/harness-app.sh new <slug>` creates the app from `templates/app` and its private repository in the Gitea organization.
+2. A developer or a coding agent builds the app inside that contract (`docs/app-contract.md`).
+3. A push to `main` is the approval. Who may push to `main` is set in Gitea: organization membership, team permissions, branch protection.
+4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, runs `harness-app provision <slug>` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), builds and starts the app on the harness network, and waits for its healthcheck through the proxy.
+5. The run log in Gitea is the record; the portal reads it.
 
-The intended early operating model includes a terminal-connected agent running on, or connected to, the runtime machine.
+There is no deploy request and no operator agent in the loop. The first box had both and retired them: the steps an operator repeated by hand became the executor, and the approval moved to where review already happened, the app's own `main` (`docs/gitops-flow.md`, "Why there is no deploy request").
 
-That agent is useful because first versions of the harness usually still need hands-on operational work:
-
-- inspect the live host, ports, containers, proxy routes, auth providers, and logs;
-- create local `.env` files and runtime directories outside Git;
-- turn an approved deploy request into Docker Compose runtime state;
-- wire proxy and SSO configuration when the orchestrator cannot do it yet;
-- restart or reload only the specific services that the human approved;
-- verify `/health`, auth redirects, deploy records, and container state;
-- report exactly what changed.
-
-The deploy request and merge provide the auditable approval signal. The agent closes the loop on the actual machine until the portal/orchestrator can perform every step automatically.
-
-This is deliberately different from giving every app repository broad production credentials. The agent operates from the runtime environment, uses local service credentials, and follows the harness rules: inspect first, preserve existing state, avoid destructive actions, and ask before changing sensitive infrastructure.
-
-### First deploy
-
-1. A developer or coding agent creates an app from the template.
-2. The app repository declares its contract in `company-app.yaml`.
-3. Validation checks run without production secrets.
-4. A deploy request pull request is opened in the GitOps repository.
-5. Review and merge become the approval signal.
-6. The workflow records the deploy request with the portal/orchestrator.
-7. The orchestrator, or an approved operational agent connected to the box, creates runtime state, proxy route, auth policy, environment, and health checks.
-8. The agent or orchestrator verifies the deployed app and records the result.
-
-### Later deploys
-
-After the app is onboarded, normal code changes can deploy from the app repository's default branch, as long as the app still satisfies the contract and platform checks.
+The deploy runner has the Docker socket and the install directory: a job there is root on the box, which is why it serves the organization's repositories only, and why write access in the organization should go to people you would trust with a shell on the box.
 
 ## Suggested Stack
 
@@ -255,7 +221,7 @@ The reference stack assumes:
 - reverse proxy: Nginx Proxy Manager, Traefik, Caddy, or nginx;
 - auth: Authentik, Authelia, OAuth2 Proxy, or another forward-auth provider;
 - runtime: Docker Compose;
-- portal/orchestrator: an internal app that records apps, deploys, checks, health, and events.
+- portal: an internal, read-only app that shows apps, deploy runs, checks, health, and backups.
 
 These tools are intentionally replaceable. The contract matters more than the exact vendor.
 
@@ -267,7 +233,7 @@ This project is intentionally smaller than a full platform-as-a-service and stri
 - It lets companies run on simple infrastructure first.
 - It treats AI agents as contributors that need rules, feedback, and boundaries.
 - It separates validation from deployment.
-- It keeps production credentials in the runner or orchestrator, not in chat, manifests, or app repos.
+- It keeps production credentials on the box (the install `.env` and each app's env file), not in chat, manifests, or app repos.
 - It makes health and deploy state visible to humans and agents.
 
 ## Advantages
@@ -293,7 +259,7 @@ This project is intentionally smaller than a full platform-as-a-service and stri
 
 ### For security and operations
 
-- Pull requests run checks without deploy credentials.
+- Pull requests run checks on the CI runner, without the Docker socket or deploy credentials.
 - New apps require auth by default.
 - Port allocation can be centralized.
 - Secrets stay out of manifests and `.env.example`.
@@ -307,8 +273,8 @@ The key lessons:
 
 - A template is not enough. Teams need a contract, checks, and a deploy path.
 - A manifest beats scattered README instructions because it can be validated.
-- GitOps is useful for first deploys because it creates an auditable approval moment.
-- Agents should prepare and repair deployment artifacts, not silently mutate production.
+- The approval belongs where review already happens: the app's own `main`. A separate deploy-request repository was a second approval of the same change.
+- Agents should prepare and repair deployment artifacts; the deploy itself is a script anyone can read, not an agent improvising on the box.
 - Health checks need to be part of the contract, not an afterthought.
 - Auth should be the default for internal apps, with explicit exceptions.
 - Automatic port allocation prevents slow, hidden conflicts.
@@ -322,13 +288,13 @@ AGENTS.md              Agent instructions for terminal-connected LLMs
 docs/                  Architecture, quickstart, GitOps flow, security
 docs/agent-setup-contract.md
 docs/app-rules-example.md
-schemas/               JSON schemas for manifests and deploy requests
-templates/app/         Starter files for a deployable internal app
-templates/gitops-request/
-examples/minimal-web-app/
-docker/                compose.yml (profiles core, storage, ci, ops) and .env.example
+schemas/               JSON schema for company-app.yaml
+templates/app/         The app template harness-app new copies: runnable app, manifest, deploy workflow
+examples/minimal-web-app/  The placeholder portal
+docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup), .env.example, backup/ and deployer/ images
 install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
+scripts/harness-app.sh new, provision, checkout, wait: the app loop (docs/gitops-flow.md)
 scripts/smoke-tests.sh The checks that decide "installed"
 bootstrap/             config.example.yaml and state.example.json for the installer
 packages/cli/          Placeholder for validation and workflow tooling
@@ -336,13 +302,13 @@ packages/cli/          Placeholder for validation and workflow tooling
 
 ## Status
 
-Early extraction. The first goal is to make the pattern easy to understand, install, and audit. The second goal is to provide a working CLI and a runnable local demo.
+Early extraction. `install.sh` brings up the core cloud on one box and `harness-app` takes an app from `new` to the air by push to `main`; both pass on a clean VM ([`docs/first-run.md`](docs/first-run.md)). The portal is still a placeholder.
 
 ## Safety Principles
 
 - Git is the source of truth for app intent.
 - Pull requests validate without production secrets.
-- Real deployment happens only after an explicit approval signal.
+- Real deployment happens only on a push to `main`, the explicit approval signal.
 - App manifests never contain secret values.
 - New apps use automatic port allocation by default.
 - Internal apps should require authentication by default.
@@ -389,12 +355,24 @@ Same path for an agent or CI, with the answers in a file:
 Part of the install, on by default. A small `backup` container runs `scripts/harness-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and MinIO volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
 
 ```bash
-export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # optional; default <install-dir>/backups
+export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # or answer the installer's question, or backup.destination in the config
 scripts/harness-backup.sh --install-dir /opt/open-company-harness run
 scripts/harness-backup.sh --install-dir /opt/open-company-harness verify --latest
 scripts/harness-backup.sh --install-dir /opt/open-company-harness status
 ```
 
-Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The off-site copy and the monthly restore rehearsal are not built yet. Details and restore steps: `docs/backup.md`.
+Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The off-site copy and the monthly restore rehearsal are not built yet. Details and restore steps: `docs/backup.md`. App databases live on the shared Postgres, so they are in the nightly dump with everything else.
+
+## Deploy an app
+
+On the box (the Actions runners are part of every install):
+
+```bash
+scripts/harness-app.sh new expense-report --owner maria@example.com --install-dir /opt/open-company-harness
+cd expense-report
+git push -u origin main
+```
+
+The push runs `.gitea/workflows/deploy.yml` on the box: the app gets its own database and role on the shared Postgres, a Redis user limited to its key prefix, an env file at `<install-dir>/apps/expense-report/.env` (0600), the route `expense-report.<BASE_DOMAIN>` behind the SSO and a line in `inventory.json`; then it is built, started on the harness network and checked at `/health`. Every later push redeploys it, keeping its passwords. The flow, the runners and the trust they need: `docs/gitops-flow.md`. The contract the app keeps: `docs/app-contract.md`.
 
 `scripts/bootstrap.mjs` remains for cloning the platform repositories of a manifest (`bootstrap/repos.example.json`); it no longer starts services.

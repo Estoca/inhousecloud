@@ -19,16 +19,17 @@ Companion files:
 
 | Profile | Services | When |
 |---|---|---|
-| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
+| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the Gitea Actions runners (`gitea-runner` for CI, `gitea-deployer` for deploys by push to `main`, [`gitops-flow.md`](gitops-flow.md)), the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
 | `storage` | MinIO (S3-compatible object storage) | when an app declares object storage |
-| `ci` | Gitea Actions runner | when the first automated deploy lands |
 | `ops` | Portainer, Glances | useful, never blocking |
+
+- **The runners are core, not a profile.** The base experience is "push to `main`, the app is on the air"; a box without a runner cannot do it. Configs with the old `install.profile.ci` or `ci.gitea_runner.enabled` still load: the value is ignored with a warning.
 
 Rules that came from the first box:
 
 - **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and MinIO exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
-- **Apps built inside the cloud do not bring their own database, cache or storage.** The portal rejects a manifest whose Compose declares a `postgres`, `redis` or `minio` service, unless the manifest carries an explicit exception (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date). This is what makes the box's resource usage visible in one place.
-- **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed through the portal like any other. It has no place in the compose files.
+- **Apps built inside the cloud do not bring their own database, cache or storage.** `harness-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or MinIO service, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
+- **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed by push to `main` like any other. It has no place in the compose files.
 
 ## Ingress
 
@@ -85,8 +86,8 @@ Preflight → plan → apply → verify → handoff. Copied from how agent frame
 14. `first-run`: Gitea admin and organization; Authentik bootstrap; OIDC between Authentik and Gitea; minimum groups; portal access.
 15. Protected route for the portal on the proxy with forward auth.
 16. Backup job: start the backup container, run and verify the first backup ([`backup.md`](backup.md)).
-17. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)).
-18. Optional profiles: `storage`, `ops`, `ci`.
+17. The Gitea Actions runners (core, started once Gitea can issue their registration tokens) and the optional profiles: `storage`, `ops`.
+18. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)); test 16 deploys an app by push to `main`.
 19. Write the final inventory, URLs, completed state and the status command.
 
 ## First Access: Automated Versus Human
@@ -108,17 +109,19 @@ Decided by a human, asked for by the installer, never guessed:
 - SMTP, account recovery, invitation policy.
 - Any migration or import of an existing installation.
 
-## Provisioning: Installer Versus Portal
+## Provisioning: Installer Versus Executor
 
-`install.sh` creates platform resources only: networks, volumes, the portal's database and role, Authentik's database and Redis, the initial Gitea organization and admin. It creates nothing for future apps.
+`install.sh` creates platform resources only: networks, volumes, the portal's and Gitea's databases and roles, Authentik's database, the initial Gitea organization and admin, the runners. It creates nothing for future apps.
 
-The **portal** provisions per app, after validating the manifest and before the first deploy: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`), `DATABASE_URL` written only to the app's local secret store, declared migrations, a bucket per slug with its own credential and policy (never the root credential), a Redis ACL user or at least an exclusive key prefix, the Authentik and proxy entries, and an inventory record with owner and rollback. It never deletes a database, bucket or namespace on rollback.
+Per app, the executor is **`scripts/harness-app.sh provision`**, run by the app's own deploy job on every push to `main` ([`gitops-flow.md`](gitops-flow.md)). After validating the manifest and the Compose file, and before the containers start, it ensures: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`); `DATABASE_URL` written only to the app's local secret store, `<install-dir>/apps/<slug>/.env` (0600); a Redis ACL user limited to the `<slug>:` prefix; a bucket per slug with its own credential and policy (never the root credential), only when the manifest asks and the `storage` profile is on; the Authentik provider and application and the proxy host with forward auth; and an inventory record with owner and date in `inventory.json`. It is idempotent (a re-run keeps every password) and never deletes a database, bucket, route or namespace. Declared migrations are the app's own job at start for now.
 
-Sequence to get there on a box that already has apps with local services: ship the idempotent Postgres executor; register and audit allocations; migrate one local Postgres as a canary; refuse local Postgres in new apps; migrate local Redis and MinIO; only then refuse every local resource.
+This was designed as the portal's job. It is a script because the portal is read-only by design (below) and because a script in the deploy job runs with the push that approved it and logs where the team already looks. A later portal shows what the executor did; it does not have to do it.
+
+Sequence on a box that already has apps with local services: register and audit allocations; migrate one local Postgres as a canary; refuse local Postgres in new apps (the executor already does); migrate local Redis and MinIO; only then refuse every local resource.
 
 ## The Portal
 
-The portal is the brain the installer boots in step 13, and it is **read-only**. It reads state from where it lives (the git host's CI runs, Docker, the proxy, the identity provider, the shared services, the backup status file) instead of being written to by workflows, tokens or agents. Deploys are CI on push plus the operating agent; the portal shows them. It serves two views of the same data: a page for people and `GET /api/platform/status` as JSON for agents, with one entry per core service and the age of the newest backup.
+The portal is the brain the installer boots in step 13, and it is **read-only**. It reads state from where it lives (the git host's CI runs, Docker, the proxy, the identity provider, the shared services, the backup status file) instead of being written to by workflows, tokens or agents. Deploys are CI on push (`harness-app` in the deploy job); the portal shows them. It serves two views of the same data: a page for people and `GET /api/platform/status` as JSON for agents, with one entry per core service and the age of the newest backup.
 
 The first box learned this the hard way: a write API with per-user tokens let any employee repoint any domain through a forged deploy event. Removing the write surface removed the class of bug.
 
