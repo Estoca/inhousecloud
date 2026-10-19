@@ -113,7 +113,7 @@ wait_tcp() {
   local timeout="$1" host="$2" port="$3" start now
   start=$(date +%s)
   while :; do
-    if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then exec 3>&- 2>/dev/null; return 0; fi
+    if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then return 0; fi
     now=$(date +%s)
     [ $((now - start)) -ge "$timeout" ] && return 1
     sleep 2

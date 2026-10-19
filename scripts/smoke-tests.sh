@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Smoke tests (docs/smoke-tests.md), step 16 of the install sequence.
+# Smoke tests (docs/smoke-tests.md), step 17 of the install sequence.
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 13 and 15; test 14 (backup) is reported as skipped until the backup
-# job exists. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# Runs tests 1 to 15. Test 14 runs `harness-backup.sh verify --latest` and is skipped
+# only when BACKUP_ENABLED=false. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   HARNESS_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -126,19 +126,34 @@ for pair in "$PORTAL_DB_ROLE" "$GITEA_DB_USER"; do
 done
 [ -z "$bad" ] && result 13 db-roles-isolated pass "$PORTAL_DB_ROLE and $GITEA_DB_USER exist, rolsuper=false" || result 13 db-roles-isolated fail "unexpected:$bad"
 
-# 14. backup verification: not available until the backup job exists
-result 14 backup-verify skip "backup job not installed yet"
+# 14. backup verification: newest run succeeded, manifest checksum, every snapshot in
+#     the repository and every dump restoring to its recorded sha256, restic check
+if [ "${BACKUP_ENABLED:-true}" != true ]; then
+  result 14 backup-verify skip "BACKUP_ENABLED=false"
+else
+  vout="$("$HARNESS_ROOT/scripts/harness-backup.sh" --install-dir "$INSTALL_DIR" verify --latest --json 2>/dev/null | tail -n 1 || true)"
+  vok="$(printf '%s' "$vout" | jsonq get ok)"
+  if [ "$vok" = true ]; then
+    result 14 backup-verify pass "run $(printf '%s' "$vout" | jsonq get run_id): $(printf '%s' "$vout" | jsonq len checks) checks passed"
+  else
+    bad="$(printf '%s' "$vout" | $PY -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("no verify output"); sys.exit()
+print("; ".join("%s: %s"%(c["name"],c["detail"]) for c in d["checks"] if c["status"]!="pass")[:300])')"
+    result 14 backup-verify fail "${bad:-verify failed}"
+  fi
+fi
 
 # 15. the state is consistent: nothing failed, every stage before this one completed
 if [ "$HAVE_STATE" = true ]; then
   detail="$(state status --json 2>/dev/null | $PY -c '
 import json,sys
 d=json.load(sys.stdin); st=d["stages"]
-order=["preflight","plan","secrets","foundation","authentik","shared_data","proxy_ingress","gitea","portal","first_run"]
+order=["preflight","plan","secrets","foundation","authentik","shared_data","proxy_ingress","gitea","portal","first_run","backup"]
 failed=[s for s in st if st[s].get("status")=="failed"]
 missing=[s for s in order if st.get(s,{}).get("status")!="completed"]
 print("ok" if not failed and not missing else "failed=%s pending=%s"%(failed,missing))')"
-  [ "$detail" = ok ] && result 15 state-consistent pass "no failed stage; stages up to first_run completed" || result 15 state-consistent fail "$detail"
+  [ "$detail" = ok ] && result 15 state-consistent pass "no failed stage; stages up to backup completed" || result 15 state-consistent fail "$detail"
 else
   result 15 state-consistent skip "no state.json (run outside install.sh)"
 fi

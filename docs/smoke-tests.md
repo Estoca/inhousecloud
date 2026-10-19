@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 16 of the install sequence. Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 17 of the install sequence. Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -59,13 +59,18 @@ docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres \
   "SELECT rolname, rolsuper FROM pg_roles WHERE rolname IN ('harness_platform','gitea');"
 # PASS: both roles exist and rolsuper = false
 
-# 14. The backup runs in verification mode
-harness-backup --verify --latest
-# PASS: manifest, checksum and remote destination valid
+# 14. The newest backup verifies (skipped only when BACKUP_ENABLED=false)
+scripts/harness-backup.sh --install-dir "$HARNESS_INSTALL_DIR" verify --latest --json
+# PASS: ok = true: newest run succeeded and is younger than BACKUP_MAX_AGE_HOURS, its
+#       manifest matches the sha256 in the status file, the destination repository
+#       opens with the key, every snapshot of the manifest exists, every database dump
+#       restores to the sha256 recorded at backup time, and `restic check` is clean
 
 # 15. The final state is consistent
 harness-install status --json
 # PASS: status = completed; no stage failed or pending
 ```
+
+Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
 Test 6 is the one most often wrong on a real box: a Gitea configured to require sign-in answers 403 to an anonymous version call, and a probe without the token reports the service down while everything works.

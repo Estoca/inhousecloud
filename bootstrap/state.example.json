@@ -21,6 +21,7 @@
     "gitea": {},
     "portal": {},
     "first_run": {},
+    "backup": {},
     "optional_profiles": {},
     "smoke_tests": {},
     "handoff": {}
@@ -37,6 +38,7 @@
     "gitea": "API healthy, admin, organization, OIDC source",
     "portal": "migrations, health, admin group, protected route",
     "first_run": "Authentik to Gitea, first login pending or done, groups",
+    "backup": "backup job installed, schedule, destination, first run and its snapshot",
     "optional_profiles": "storage, ci and ops resources",
     "smoke_tests": "result per test; no headers, cookies or tokens",
     "handoff": "URLs, next steps, backup schedule, status command"

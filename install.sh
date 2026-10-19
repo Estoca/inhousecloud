@@ -143,14 +143,16 @@ ops:
 backup:
   enabled: true
   schedule: "0 2 * * *"
+  timezone: UTC
   max_run_minutes: 240
+  max_age_hours: 26
+  destination_env: HARNESS_BACKUP_DESTINATION
+  encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY
   local_retention_daily: 7
   local_retention_weekly: 4
   local_retention_monthly: 12
   remote:
     provider: none
-    destination_env: HARNESS_BACKUP_DESTINATION
-    encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY
   restore_test:
     enabled: true
     schedule: "0 4 1 * *"
@@ -222,7 +224,17 @@ derive() {
   [ "${CFG_install__profile__ci:-false}" = true ] || [ "${CFG_ci__gitea_runner__enabled:-false}" = true ] && PROFILES="$PROFILES,ci"
   [ "${CFG_install__profile__ops:-false}" = true ] || [ "${CFG_ops__portainer:-false}" = true ] || [ "${CFG_ops__glances:-false}" = true ] && PROFILES="$PROFILES,ops"
   case "$TUNNEL_PROVIDER" in cloudflared|tailscale) PROFILES="$PROFILES,$TUNNEL_PROVIDER" ;; esac
+  BACKUP_ENABLED="${CFG_backup__enabled:-true}"
+  [ "$BACKUP_ENABLED" = true ] && PROFILES="$PROFILES,backup"
   PROFILES="${PROFILES#,}"
+  BACKUP_DEST_ENV="${CFG_backup__destination_env:-${CFG_backup__remote__destination_env:-HARNESS_BACKUP_DESTINATION}}"
+  BACKUP_KEY_ENV="${CFG_backup__encryption_key_env:-${CFG_backup__remote__encryption_key_env:-HARNESS_BACKUP_ENCRYPTION_KEY}}"
+  # Destination: the environment variable named in the config, else what .env already
+  # has, else <install-dir>/backups.
+  eval "BACKUP_DEST=\${$BACKUP_DEST_ENV:-}"
+  [ -z "$BACKUP_DEST" ] && [ -f "$INSTALL_DIR/.env" ] && BACKUP_DEST="$($PY "$HARNESS_LIB/envfile.py" get "$INSTALL_DIR/.env" BACKUP_DESTINATION)"
+  [ -z "$BACKUP_DEST" ] && BACKUP_DEST="$INSTALL_DIR/backups"
+  BACKUP_DEST="${BACKUP_DEST%/}"
   ADMIN_EMAIL="${CFG_admin__email:-admin@example.com}"
   RESUME_PREFIX="$SELF --apply --install-dir $INSTALL_DIR"
 }
@@ -287,8 +299,24 @@ stage_preflight() {
     cloudflared) eval "t=\${${CFG_ingress__cloudflared__tunnel_token_env:-HARNESS_CLOUDFLARED_TUNNEL_TOKEN}:-}"; [ -n "$t" ] && ok "cloudflared tunnel token present in the environment" || { fail "set ${CFG_ingress__cloudflared__tunnel_token_env:-HARNESS_CLOUDFLARED_TUNNEL_TOKEN} in the environment"; errors=$((errors+1)); } ;;
     tailscale) [ -n "${HARNESS_TAILSCALE_AUTHKEY:-}" ] && ok "tailscale auth key present in the environment" || { fail "set HARNESS_TAILSCALE_AUTHKEY in the environment"; errors=$((errors+1)); } ;;
   esac
+  # Backup destination: warned about, not fatal (the backup stage fails on its own).
+  if [ "$BACKUP_ENABLED" = true ]; then
+    if case "$BACKUP_DEST" in /*) false ;; *) true ;; esac; then
+      fail "backup destination must be an absolute path: $BACKUP_DEST ($BACKUP_DEST_ENV)"; errors=$((errors+1))
+    elif [ -d "$BACKUP_DEST" ]; then
+      [ -w "$BACKUP_DEST" ] && ok "backup destination writable: $BACKUP_DEST" || warn "backup destination not writable by $(id -un): $BACKUP_DEST. Fix with: sudo chown $(id -un) $BACKUP_DEST (or set $BACKUP_DEST_ENV to another path); the backup stage will fail until then"
+    elif mkdir -p "$BACKUP_DEST" 2>/dev/null; then ok "backup destination created: $BACKUP_DEST"
+    else warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"; fi
+    if [ -d "$BACKUP_DEST" ] && [ "$(df -P "$BACKUP_DEST" 2>/dev/null | awk 'NR==2{print $1}')" = "$(df -P "$(dirname "$INSTALL_DIR")" 2>/dev/null | awk 'NR==2{print $1}')" ]; then
+      warn "backup destination is on the same disk as the installation: a dead disk takes both. Point $BACKUP_DEST_ENV at another disk or mount (docs/backup.md)"
+    fi
+    eval "k=\${$BACKUP_KEY_ENV:-}"
+    [ -n "$k" ] && ok "backup encryption key present in the environment ($BACKUP_KEY_ENV)" || log "backup encryption key: generated into .env unless $BACKUP_KEY_ENV is set; keep a copy off this box"
+  else
+    log "backup disabled (backup.enabled: false)"
+  fi
   [ "$TLS_MODE" = internal ] && warn "tls internal: the proxy hosts are created without a certificate; upload a development certificate in the proxy admin (docs/first-run.md)"
-  probe="$(jsonq build os="$os" docker="${docker_v:-}" compose="${compose_v:-}" memory_mb="${mem_mb:-}" disk_free_gib="$((${disk_kb:-0}/1048576))" ingress="$INGRESS/$TLS_MODE/$TUNNEL_PROVIDER" errors:="$errors")"
+  probe="$(jsonq build os="$os" docker="${docker_v:-}" compose="${compose_v:-}" memory_mb="${mem_mb:-}" disk_free_gib="$((${disk_kb:-0}/1048576))" ingress="$INGRESS/$TLS_MODE/$TUNNEL_PROVIDER" backup_destination="$BACKUP_DEST" errors:="$errors")"
   state stage preflight set probe "$probe"
   [ "$errors" -eq 0 ] || return 1
 }
@@ -300,6 +328,7 @@ stage_plan() {
   has_profile ops && services="$services portainer glances"
   has_profile cloudflared && services="$services cloudflared"
   has_profile tailscale && services="$services tailscale"
+  has_profile backup && services="$services backup"
   log "install directory : $INSTALL_DIR"
   log "profiles          : core${PROFILES:+,$PROFILES}"
   log "services          : $services"
@@ -309,6 +338,11 @@ stage_plan() {
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
   log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, $STATE_FILE, $CONFIG_FILE"
   log "volumes           : named volumes of project $(basename "$INSTALL_DIR" | tr -c 'a-z0-9\n' '-' ), network harness"
+  if [ "$BACKUP_ENABLED" = true ]; then
+    log "backup            : sidecar crond '${CFG_backup__schedule:-0 2 * * *}' ${CFG_backup__timezone:-UTC}, restic in $BACKUP_DEST/restic, status $BACKUP_DEST/reports/latest-status.json"
+  else
+    log "backup            : disabled"
+  fi
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
   log "human afterwards  : DNS/tunnel, MFA for the admin, replace bootstrap password, SMTP (docs/first-run.md)"
   state stage plan set probe "$(jsonq build services="$services" profiles="core${PROFILES:+,$PROFILES}" portal_url="$PORTAL_BASE_URL" authentik_url="$AUTHENTIK_BASE_URL" gitea_url="$GITEA_BASE_URL" install_dir="$INSTALL_DIR")"
@@ -395,12 +429,21 @@ stage_secrets() {
   eval "v=\${${CFG_ingress__cloudflared__tunnel_token_env:-HARNESS_CLOUDFLARED_TUNNEL_TOKEN}:-}"; env_default CLOUDFLARED_TUNNEL_TOKEN "$v"
   env_default TAILSCALE_AUTHKEY "${HARNESS_TAILSCALE_AUTHKEY:-}"
   env_default TAILSCALE_HOSTNAME "${CFG_ingress__tailscale__hostname:-harness}"
-  env_default BACKUP_ENABLED "${CFG_backup__enabled:-true}"
-  env_default BACKUP_SCHEDULE "${CFG_backup__schedule:-0 2 * * *}"
-  env_default BACKUP_MAX_RUN_MINUTES "${CFG_backup__max_run_minutes:-240}"
-  env_default BACKUP_RETENTION_DAILY "${CFG_backup__local_retention_daily:-7}"
-  env_default BACKUP_RETENTION_WEEKLY "${CFG_backup__local_retention_weekly:-4}"
-  env_default BACKUP_RETENTION_MONTHLY "${CFG_backup__local_retention_monthly:-12}"
+  # Backup settings follow the config on every run (they are not secrets); the key is
+  # generated once and never replaced: a new key cannot open the existing repository.
+  env_set BACKUP_ENABLED "$BACKUP_ENABLED"
+  env_set BACKUP_SCHEDULE "${CFG_backup__schedule:-0 2 * * *}"
+  env_set BACKUP_TZ "${CFG_backup__timezone:-UTC}"
+  env_set BACKUP_MAX_RUN_MINUTES "${CFG_backup__max_run_minutes:-240}"
+  env_set BACKUP_MAX_AGE_HOURS "${CFG_backup__max_age_hours:-26}"
+  env_set BACKUP_RETENTION_DAILY "${CFG_backup__local_retention_daily:-7}"
+  env_set BACKUP_RETENTION_WEEKLY "${CFG_backup__local_retention_weekly:-4}"
+  env_set BACKUP_RETENTION_MONTHLY "${CFG_backup__local_retention_monthly:-12}"
+  env_set BACKUP_DESTINATION "$BACKUP_DEST"
+  env_secret BACKUP_ENCRYPTION_KEY "$BACKUP_KEY_ENV" 48
+  v="$(env_get POSTGRES_IMAGE)"; v="${v##*:}"; v="${v%%[.-]*}"
+  env_default BACKUP_PG_CLIENT_PACKAGE "postgresql${v}-client"
+  env_default BACKUP_BUILD_CONTEXT ./backup-job
   chmod 600 "$ENV_FILE"
   ok "secrets present: $(printf '%s' "$SECRET_FPS" | tr ',' '\n' | grep -c ':' ) keys (fingerprints in state.json, values only in .env)"
   state stage secrets set probe "{\"env_file\":\"$ENV_FILE\",\"mode\":\"0600\",\"fingerprints\":{${SECRET_FPS#,}}}"
@@ -410,11 +453,15 @@ stage_foundation() {
   cp "$HARNESS_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   rm -rf "$INSTALL_DIR/portal-placeholder"
   cp -R "$HARNESS_ROOT/examples/minimal-web-app" "$INSTALL_DIR/portal-placeholder"
-  ok "rendered compose.yml and portal-placeholder/ into $INSTALL_DIR"
+  rm -rf "$INSTALL_DIR/backup-job"; mkdir -p "$INSTALL_DIR/backup-job"
+  cp "$HARNESS_ROOT/docker/backup/Dockerfile" "$HARNESS_ROOT/docker/backup/scheduler.sh" "$INSTALL_DIR/backup-job/"
+  cp "$HARNESS_ROOT/scripts/harness-backup.sh" "$INSTALL_DIR/backup-job/harness-backup.sh"
+  ok "rendered compose.yml, portal-placeholder/ and backup-job/ into $INSTALL_DIR"
   dc config --quiet || die "compose file does not validate"
   ok "compose file validates"
   step "pulling images and creating containers, network and volumes (first run takes a few minutes)"
   dc build --quiet portal >&2
+  has_profile backup && dc build --quiet backup >&2
   dc up --no-start --quiet-pull >&2
   state stage foundation set resources "$(docker volume ls --filter "label=com.docker.compose.project=$(env_get COMPOSE_PROJECT_NAME)" --format '{{.Name}}' | $PY -c 'import json,sys;print(json.dumps(["volume:"+l.strip() for l in sys.stdin if l.strip()]))')"
   state stage foundation set resources "[\"network:$(env_get HARNESS_NETWORK)\"]"
@@ -491,6 +538,36 @@ stage_first_run() {
   "$HARNESS_ROOT/scripts/first-run.sh" $args
 }
 
+# The backup job: a sidecar container (docker/backup) whose crond runs harness-backup on
+# BACKUP_SCHEDULE. This stage starts it, runs the first backup and verifies it, so the
+# portal has a status file from day one and smoke test 14 has something to verify.
+stage_backup() {
+  local dest out snap
+  if [ "$(env_get BACKUP_ENABLED)" != true ]; then
+    log "backup disabled: no job installed"
+    dc rm -sf backup >/dev/null 2>&1 || true
+    state stage backup set probe '{"enabled":false,"job":"none"}'
+    return 0
+  fi
+  dest="$(env_get BACKUP_DESTINATION)"
+  mkdir -p "$dest" 2>/dev/null || true
+  [ -d "$dest" ] && [ -w "$dest" ] || { fail "backup destination $dest is missing or not writable by $(id -un)"; return 1; }
+  chmod 700 "$dest" 2>/dev/null || true
+  dc up -d backup
+  wait_healthy 60 backup || return 1
+  ok "backup job running: crond '$(env_get BACKUP_SCHEDULE)' ($(env_get BACKUP_TZ))"
+  if [ -f "$dest/reports/latest-success.json" ]; then
+    log "a successful backup already exists: not running a new one now"
+  else
+    step "first backup run"
+    "$HARNESS_ROOT/scripts/harness-backup.sh" --install-dir "$INSTALL_DIR" run || { fail "first backup run failed: see the output above and $dest/reports/latest-status.json"; return 1; }
+  fi
+  "$HARNESS_ROOT/scripts/harness-backup.sh" --install-dir "$INSTALL_DIR" verify --latest >/dev/null || { fail "backup verification failed"; return 1; }
+  snap="$($PY -c 'import json,sys;print(json.load(open(sys.argv[1])).get("snapshot_id",""))' "$dest/reports/latest-success.json")"
+  state stage backup set resources '["container:backup","volume:backup-cache"]'
+  state stage backup set probe "$(jsonq build enabled:=true job="sidecar crond" schedule="$(env_get BACKUP_SCHEDULE)" timezone="$(env_get BACKUP_TZ)" destination="$dest" repository="$dest/restic" status_file="$dest/reports/latest-status.json" first_snapshot="$snap")"
+}
+
 stage_smoke_tests() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
@@ -526,7 +603,11 @@ stage_handoff() {
     echo "  \"ssh\": \"ssh://git@$GITEA_HOST:$(env_get GITEA_SSH_PORT)\","
     echo "  \"credentials_file\": \"$ENV_FILE\","
     echo "  \"status_command\": \"$SELF status --install-dir $INSTALL_DIR\","
-    echo "  \"backup\": {\"enabled\": $(env_get BACKUP_ENABLED), \"schedule\": \"$(env_get BACKUP_SCHEDULE)\", \"job\": \"not installed yet\"}"
+    if [ "$(env_get BACKUP_ENABLED)" = true ]; then
+      echo "  \"backup\": {\"enabled\": true, \"job\": \"sidecar container 'backup' (crond)\", \"schedule\": \"$(env_get BACKUP_SCHEDULE)\", \"timezone\": \"$(env_get BACKUP_TZ)\", \"repository\": \"$(env_get BACKUP_DESTINATION)/restic\", \"status_file\": \"$(env_get BACKUP_DESTINATION)/reports/latest-status.json\", \"commands\": \"$HARNESS_ROOT/scripts/harness-backup.sh --install-dir $INSTALL_DIR run|verify --latest|status\"}"
+    else
+      echo "  \"backup\": {\"enabled\": false, \"job\": \"none\"}"
+    fi
     echo '}'
   } > "$inv"
   state stage handoff set probe "$(jsonq build inventory="$inv" status_command="$SELF status --install-dir $INSTALL_DIR")"
@@ -540,6 +621,10 @@ stage_handoff() {
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
   [ "$INGRESS" = local ] && _out "  on a machine without *.localhost resolution, add these names to /etc/hosts pointing at 127.0.0.1"
   _out "Generated credentials live in $ENV_FILE (mode 0600): AUTHENTIK_BOOTSTRAP_PASSWORD, GITEA_ADMIN_PASSWORD, PROXY_ADMIN_PASSWORD."
+  if [ "$(env_get BACKUP_ENABLED)" = true ]; then
+    _out "Backup: '$(env_get BACKUP_SCHEDULE)' ($(env_get BACKUP_TZ)) into $(env_get BACKUP_DESTINATION)/restic; status file $(env_get BACKUP_DESTINATION)/reports/latest-status.json."
+    _out "  Copy BACKUP_ENCRYPTION_KEY from $ENV_FILE to a password manager now: without it the repository cannot be read."
+  fi
   _out "Human next steps (docs/first-run.md): sign in to Authentik, enrol MFA, replace the bootstrap password, set SMTP;"
   _out "  for private/public ingress: DNS and tunnel. Status: $SELF status --install-dir $INSTALL_DIR"
 }
@@ -607,7 +692,7 @@ if [ -z "$MODE" ] && [ "$ASSUME_YES" != true ]; then
   [ "$(ask_yn "Apply this plan now?" n)" = true ] || { log "not applied. Re-run with --apply when ready."; exit 0; }
 fi
 
-for s in secrets foundation authentik shared_data proxy_ingress gitea portal first_run smoke_tests optional_profiles handoff; do
+for s in secrets foundation authentik shared_data proxy_ingress gitea portal first_run backup smoke_tests optional_profiles handoff; do
   run_stage "$s"
 done
 

@@ -8,6 +8,7 @@
 #   ops          Portainer and Glances
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node (ingress private)
+#   backup       the backup job (on when BACKUP_ENABLED=true; docs/backup.md)
 #
 # Rules (docs/install-design.md):
 #   - Authentik keeps its own Postgres; identity never depends on app data.
@@ -375,6 +376,53 @@ services:
       retries: 5
       start_period: 30s
 
+  # ---------------------------------------------------------------- backup
+  backup:
+    # The minimal backup job (docs/backup.md): busybox crond runs harness-backup on
+    # BACKUP_SCHEDULE. Dumps stream from pg_dump into a restic repository encrypted with
+    # BACKUP_ENCRYPTION_KEY under BACKUP_DESTINATION; volumes and the install directory
+    # are mounted read-only. install.sh assembles the build context in ./backup-job.
+    profiles: ["backup"]
+    build:
+      context: ${BACKUP_BUILD_CONTEXT:-./backup-job}
+      args:
+        PG_CLIENT: ${BACKUP_PG_CLIENT_PACKAGE:-postgresql16-client}
+    image: ${COMPOSE_PROJECT_NAME:-harness}-backup:local
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE}
+      BACKUP_MAX_RUN_MINUTES: ${BACKUP_MAX_RUN_MINUTES}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+      BACKUP_RETENTION_DAILY: ${BACKUP_RETENTION_DAILY}
+      BACKUP_RETENTION_WEEKLY: ${BACKUP_RETENTION_WEEKLY}
+      BACKUP_RETENTION_MONTHLY: ${BACKUP_RETENTION_MONTHLY}
+      RESTIC_PASSWORD: ${BACKUP_ENCRYPTION_KEY}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_PG_USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_PG_PASSWORD: ${AUTHENTIK_PG_PASSWORD}
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      TZ: ${BACKUP_TZ:-UTC}
+    volumes:
+      - ${BACKUP_DESTINATION}:/backups
+      - .:/harness:ro
+      - backup-cache:/var/cache/restic
+      - gitea-data:/volumes/gitea-data:ro
+      - proxy-data:/volumes/proxy-data:ro
+      - proxy-letsencrypt:/volumes/proxy-letsencrypt:ro
+      - authentik-media:/volumes/authentik-media:ro
+      - authentik-templates:/volumes/authentik-templates:ro
+      - authentik-certs:/volumes/authentik-certs:ro
+      - minio-data:/volumes/minio-data:ro
+    networks: [harness]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep crond >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   harness:
     name: ${HARNESS_NETWORK}
@@ -393,3 +441,4 @@ volumes:
   gitea-runner-data:
   portainer-data:
   tailscale-state:
+  backup-cache:

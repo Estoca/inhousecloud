@@ -384,4 +384,17 @@ Same path for an agent or CI, with the answers in a file:
 
 `--plan` prints what would happen and changes nothing; `--apply --from <stage>` resumes; `status` reports the state file. Re-running on an installed box changes nothing. Every stage, the generated `.env` (0600) and the smoke tests are described in `docs/install-design.md`, `docs/first-run.md` and `docs/smoke-tests.md`; the agent path is in `docs/llm-bootstrap.md`.
 
+### Backup
+
+Part of the install, on by default. A small `backup` container runs `scripts/harness-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and MinIO volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
+
+```bash
+export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # optional; default <install-dir>/backups
+scripts/harness-backup.sh --install-dir /opt/open-company-harness run
+scripts/harness-backup.sh --install-dir /opt/open-company-harness verify --latest
+scripts/harness-backup.sh --install-dir /opt/open-company-harness status
+```
+
+Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The off-site copy and the monthly restore rehearsal are not built yet. Details and restore steps: `docs/backup.md`.
+
 `scripts/bootstrap.mjs` remains for cloning the platform repositories of a manifest (`bootstrap/repos.example.json`); it no longer starts services.
