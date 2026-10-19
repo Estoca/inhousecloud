@@ -193,7 +193,44 @@ What the run exposed:
 | After the fix: `install.sh --apply --from foundation` (deployer image rebuilt), 16 passed | 44 s |
 | Deploy job, start to green, first deploy of a new app (round 1 / round 2) | 15 s / 15 s |
 
-Not covered: the install half of the path through an agent (the install itself is the same command the agent would run, tested above and in earlier records, but no cold agent asked the questions of section 1.2 yet), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (the fallback `codex exec` was not needed).
+Not covered: the install half of the path through an agent (since covered: "Cold install run" below), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (the fallback `codex exec` was not needed).
+
+## Cold install run
+
+Day one through an agent: a clean box with nothing of the harness on it, a person who cannot answer technical questions, and a coding agent that has to install the whole platform from the repository alone.
+
+**Setup.** For each round a new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template with no host mounts and no port forwards), which is exactly the prerequisite list in the README's "Getting Started": Docker 29.9.1 rootless and Compose v5.6 usable without `sudo`, `git` 2.53, `curl` 8.18, `python3` 3.14, `sshd` on 22, passwordless `sudo` for the login user, and an empty `/opt` (only Docker's `containerd`). No checkout of the harness, no `local/`, nothing listening but `sshd` and the resolver. The agent was `claude -p` (Claude Opus 5.5) on the host machine, in a fresh clone of the branch, with no project memory, no MCP servers, no user or project settings, slash commands off, and tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`. The prompt, in Portuguese:
+
+> Quero montar a company cloud da nossa empresa nesse servidor para a gente conseguir criar apps internos com o Claude. Instala para mim. Acesso ao servidor: [ssh command] (esta pasta é uma cópia do repositório do harness). Não sei responder pergunta técnica; pergunta o que precisar em linguagem simples.
+
+`claude -p` answers once and exits, so the person was simulated: each question got a layperson's answer in a new call with `--resume` on the same session. The answers were always the same: a fictitious bakery, a fictitious email, "only this machine for now", admin tools yes, file storage no, "I have no separate disk for backups, use what you can", "you can generate the password".
+
+**Result: installed in both rounds, 18 of 18 smoke tests.** Round 1 needed no help to install, but its report sent the person to URLs their laptop cannot open. The docs and the handoff were fixed, and round 2 on a new VM installed again and gave the person a way in that works.
+
+| | Round 1 (main as of PR 6) | Round 2 (this branch) |
+|---|---|---|
+| Calls to the agent (person's messages) | 3: request, answers, "pode instalar" | 4: request, answers, a correction (the person mixed up the order of two answers), "sim, pode instalar" |
+| Turns / tool calls / refused by the tool limits | 21 / 18 / 5 | 20 / 16 / 3 |
+| Agent time, all calls | 451 s | 481 s |
+| Install, `state.json` created to completed | 362 s | 432 s |
+| Questions asked of the person | 6, in one message, each with a recommended default: admin email, company name, who reaches the apps (only this machine, or the team through a network or the internet), admin tools, file storage, backup on the same disk | the same 6; then, before applying, a yes to the web terminal's key |
+| How the repository got onto the box | `scp -r` of the host clone, the agent's own idea after `git archive` was refused | `git clone` from GitHub on the box (section 0), then the branch checked out to match the host copy |
+| Install directory under `/opt` | `sudo install -d` run by the agent, unannounced | the same command, announced with the plan (section 1.2 now says when it may) |
+| `install.sh status` / smoke tests | `completed` / 18 passed, 0 skipped | `completed` / 18 passed, 0 skipped |
+| Password in the conversation | none: the agent gave the person the `envfile.py get` command to run on their own screen | none, same command |
+| How to open the URLs | "use Chrome and type the address": **wrong**, they answer only on the box | `sudo ssh … -N -L 80:127.0.0.1:80 …`, kept open, then Chrome, Edge or Firefox |
+
+Checked by hand on each VM afterwards: `install.sh status` `completed`, the smoke test lines in the install log, all 16 containers healthy (round 2), and no value of any `PASSWORD`, `TOKEN`, `SECRET` or `KEY` variable of `.env` in the agent transcripts (round 2: 18 values, 0 found). Neither agent ran `envfile.py get` or read `.env` itself.
+
+What the runs exposed, and what changed:
+
+- **The repository has to be on the box, and nothing said so.** The playbook began with `cd "$HARNESS"` on the box. Round 1 improvised a copy. Section 0 of [`llm-bootstrap.md`](llm-bootstrap.md), `AGENTS.md` and the contract now say to clone it there (or `scp -r` without GitHub access) and to keep it.
+- **`sudo` for the install directory.** The playbook said the person creates `/opt/open-company-harness`. The agent had passwordless `sudo` and ran it without saying. Section 1.2 now allows that one command when `sudo -n true` works, announced with the plan, and otherwise sends it to the person.
+- **`local` URLs from another computer.** The handoff said "add these names to /etc/hosts pointing at 127.0.0.1", which is right on the box and wrong on a laptop, and the agent repeated it as "open it in Chrome". Section 3.3 suggested `ssh -L 8080:127.0.0.1:80` and `:8080` URLs. That reaches `/health` but not a page behind the sign-in: the outpost redirects to `http://<host>/outpost.goauthentik.io/start?rd=…:8080/`, without the port, so the browser lands on port 80 of the laptop. Checked from the host with a tunnel on 18080 and curl. With every request sent through the tunnel but the URLs kept on port 80 (`curl --connect-to ::127.0.0.1:18080`, which is what a port-80 tunnel does), `portal.` and `terminal.` end on the Authentik sign-in page and `git.` on Gitea. The handoff of `install.sh` now prints the port-80 tunnel for `local` ingress (a message that misled the agent, so a code change), and sections 1.6 and 3.3 and "Human" above say the same. Round 2's report used it.
+- **The prerequisites, declared.** The README's "Getting Started" now lists what the box must have before an agent starts, which is what these VMs had.
+- Not a harness issue: the CLI hands the agent the signed-in account's email and the repository's commit history, and in both rounds the agent offered those as defaults for the admin email and company name. The answers replaced them. A cold run on another machine or account would offer others.
+
+Not covered: the `sudo ssh -L 80` tunnel itself in a browser (port 80 of the test host was held by another VM, so the flow was checked with `--connect-to` as above), a box without passwordless `sudo`, Docker through the `docker` group instead of rootless, ingress other than `local`, and the full day one in a single session: install, then the first app (that half is the "Cold agent run" above).
 
 ## Test record: the ops tools (smoke tests 17 and 18)
 
