@@ -58,7 +58,7 @@ That machine runs the control plane, the support plane, and the apps:
 - public ingress enters through a tunnel and reverse proxy;
 - internal apps run as Docker Compose projects;
 - shared databases and queues run locally when the app does not need managed services;
-- Portainer and Glances make the machine inspectable;
+- Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
 - an app portal records what should exist, what is running, and what changed;
 - coding agents connect to the same machine and use the same contracts as humans.
 

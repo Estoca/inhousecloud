@@ -138,6 +138,14 @@ ci:
 ops:
   portainer: $A_OPS
   glances: $A_OPS
+  wetty:
+    enabled: $A_OPS
+    install_key: $A_WETTY_KEY
+  filebrowser:
+    enabled: $A_OPS
+    paths:
+      app_data: \${install_dir}/app-data
+      backup_reports: \${backup_destination}/reports
 backup:
   enabled: true
   schedule: "0 2 * * *"
@@ -187,7 +195,11 @@ interactive_config() {
   case "$A_BACKUP" in /*) ;; *) die "the backup destination must be an absolute path" ;; esac
   same_disk "$A_BACKUP" "$(dirname "$A_DIR")" && warn "that is the same disk as the installation: a dead disk takes both. Fine for a try; for real use point it at another disk (docs/backup.md)"
   A_STORAGE=$(ask_yn "Enable object storage (MinIO)?" n)
-  A_OPS=$(ask_yn "Enable Portainer and Glances?" n)
+  A_OPS=$(ask_yn "Enable the ops tools (Portainer, Glances, web terminal, file browser)? Admins only, through the SSO" y)
+  A_WETTY_KEY=false
+  if [ "$A_OPS" = true ]; then
+    A_WETTY_KEY=$(ask_yn "Let the web terminal sign in as $(id -un): add its dedicated key to ~/.ssh/authorized_keys?" y)
+  fi
   A_SCHEME=https; [ "$A_TLS" = off ] && A_SCHEME=http
   INSTALL_DIR="$A_DIR"
 }
@@ -251,10 +263,70 @@ derive() {
   [ -z "$BACKUP_DEST" ] && BACKUP_DEST="$INSTALL_DIR/backups"
   BACKUP_DEST="${BACKUP_DEST%/}"
   ADMIN_EMAIL="${CFG_admin__email:-admin@example.com}"
+  derive_ops
   RESUME_PREFIX="$SELF --apply --install-dir $INSTALL_DIR"
 }
 
 has_profile() { case ",$PROFILES," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+# ------------------------------------------------------------------- ops tools
+# The ops profile: Portainer, Glances, Wetty (web terminal on the host, over ssh) and
+# FileBrowser (app data and backup reports). All four are admin access to the machine,
+# behind forward auth bound to harness-admins (docs/security.md).
+
+# detect_sshd [PORT...]: the first port on 127.0.0.1 that answers with an SSH banner,
+# trying PORT, then the Port lines of sshd_config, then 22.
+detect_sshd() {
+  $PY -c '
+import glob, re, socket, sys
+ports = [p for p in sys.argv[1:] if p]
+for f in ["/etc/ssh/sshd_config"] + sorted(glob.glob("/etc/ssh/sshd_config.d/*.conf")):
+    try:
+        for line in open(f):
+            m = re.match(r"\s*Port\s+(\d+)", line, re.I)
+            if m: ports.append(m.group(1))
+    except OSError:
+        pass
+ports.append("22")
+seen = set()
+for p in ports:
+    if p in seen: continue
+    seen.add(p)
+    try:
+        s = socket.create_connection(("127.0.0.1", int(p)), timeout=3)
+        s.settimeout(3)
+        banner = s.recv(64)
+        s.close()
+        if banner.startswith(b"SSH-"):
+            print(p); break
+    except (OSError, ValueError):
+        pass
+' "$@"
+}
+
+# expand_ops_path VALUE: ${install_dir} and ${backup_destination} in an ops.filebrowser path.
+expand_ops_path() {
+  $PY -c 'import sys
+v = sys.argv[1].replace("${install_dir}", sys.argv[2]).replace("${backup_destination}", sys.argv[3])
+print(v.rstrip("/") or "/")' "$1" "$INSTALL_DIR" "$BACKUP_DEST"
+}
+
+derive_ops() {
+  OPS_ON=false
+  if has_profile ops; then OPS_ON=true; fi
+  WETTY_KEY_DIR="$INSTALL_DIR/local/wetty"
+  WETTY_INSTALL_KEY="${CFG_ops__wetty__install_key:-false}"
+  WETTY_ENABLED="${CFG_ops__wetty__enabled:-true}"
+  local d_app='${install_dir}/app-data' d_rep='${backup_destination}/reports'
+  FB_APP_DATA="$(expand_ops_path "${CFG_ops__filebrowser__paths__app_data:-$d_app}")"
+  FB_REPORTS="$(expand_ops_path "${CFG_ops__filebrowser__paths__backup_reports:-$d_rep}")"
+  SSHD_PORT=""
+  if [ "$OPS_ON" = true ] && [ "$WETTY_ENABLED" = true ]; then
+    SSHD_PORT="$(detect_sshd "${CFG_ops__wetty__ssh_port:-}" 2>/dev/null || true)"
+  fi
+  WETTY_ON=false
+  if [ -n "$SSHD_PORT" ]; then WETTY_ON=true; fi
+}
 # `ci` is kept as an alias: the runners are core, so it is always on.
 has_profile_ci() { return 0; }
 
@@ -333,6 +405,16 @@ stage_preflight() {
   else
     log "backup disabled (backup.enabled: false)"
   fi
+  if [ "$OPS_ON" = true ]; then
+    if [ "$WETTY_ENABLED" != true ]; then log "ops: web terminal disabled (ops.wetty.enabled: false)"
+    elif [ -n "$SSHD_PORT" ]; then ok "ops: sshd answers on port $SSHD_PORT: the web terminal signs in as $(id -un)"
+    else warn "ops: no sshd answers on this host (tried ${CFG_ops__wetty__ssh_port:+$CFG_ops__wetty__ssh_port, }the sshd_config Port lines and 22): the ops tools come up without the web terminal. Install and start openssh-server, then re-run install.sh"; fi
+    if $PY "$HARNESS_LIB/opspaths.py" check "$INSTALL_DIR" "$BACKUP_DEST" "$FB_APP_DATA" "$FB_REPORTS"; then
+      ok "ops: file browser paths $FB_APP_DATA and $FB_REPORTS (read only)"
+    else
+      fail "ops: refused ops.filebrowser.paths (see above)"; errors=$((errors+1))
+    fi
+  fi
   [ "$TLS_MODE" = internal ] && warn "tls internal: the proxy hosts are created without a certificate; upload a development certificate in the proxy admin (docs/first-run.md)"
   probe="$(jsonq build os="$os" docker="${docker_v:-}" compose="${compose_v:-}" memory_mb="${mem_mb:-}" disk_free_gib="$((${disk_kb:-0}/1048576))" ingress="$INGRESS/$TLS_MODE/$TUNNEL_PROVIDER" backup_destination="$BACKUP_DEST" errors:="$errors")"
   state stage preflight set probe "$probe"
@@ -343,7 +425,8 @@ stage_plan() {
   local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal"
   has_profile storage && services="$services minio"
   services="$services gitea-runner gitea-deployer"
-  has_profile ops && services="$services portainer glances"
+  has_profile ops && services="$services portainer glances filebrowser"
+  [ "$WETTY_ON" = true ] && services="$services wetty"
   has_profile cloudflared && services="$services cloudflared"
   has_profile tailscale && services="$services tailscale"
   has_profile backup && services="$services backup"
@@ -360,6 +443,14 @@ stage_plan() {
     log "backup            : sidecar crond '${CFG_backup__schedule:-0 2 * * *}' ${CFG_backup__timezone:-UTC}, restic in $BACKUP_DEST/restic, status $BACKUP_DEST/reports/latest-status.json"
   else
     log "backup            : disabled"
+  fi
+  if [ "$OPS_ON" = true ]; then
+    if [ "$WETTY_ON" = true ]; then
+      log "ops tools         : terminal, files, portainer, glances .$BASE_DOMAIN (harness-admins only); the terminal signs in as $(id -un) to sshd port $SSHD_PORT"
+    else
+      log "ops tools         : files, portainer, glances .$BASE_DOMAIN (harness-admins only); no web terminal ($( [ "$WETTY_ENABLED" = true ] && echo "no sshd found" || echo "ops.wetty.enabled: false"))"
+    fi
+    log "file browser      : $FB_APP_DATA (rw), $FB_REPORTS (ro)"
   fi
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
   log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label harness-deploy, image $INSTALL_DIR/deployer)"
@@ -394,6 +485,7 @@ stage_secrets() {
   env_default COMPOSE_PROJECT_NAME harness
   env_set COMPOSE_PROFILES "$PROFILES"
   env_default HARNESS_NETWORK harness
+  env_default HARNESS_OPS_NETWORK harness-ops
   env_set INGRESS "$INGRESS"; env_set BASE_DOMAIN "$BASE_DOMAIN"; env_set PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
   env_set TLS_MODE "$TLS_MODE"; env_set TUNNEL_PROVIDER "$TUNNEL_PROVIDER"; env_set BIND_ADDRESS "$BIND_ADDRESS"
   env_default PROXY_HTTP_PORT 80; env_default PROXY_HTTPS_PORT 443; env_default PROXY_ADMIN_PORT 81
@@ -402,7 +494,7 @@ stage_secrets() {
   env_set PORTAL_BASE_URL "$PORTAL_BASE_URL"; env_set AUTHENTIK_BASE_URL "$AUTHENTIK_BASE_URL"; env_set GITEA_BASE_URL "$GITEA_BASE_URL"
   # Images: defaults from docker/.env.example, kept once written so upgrades are explicit.
   local k v
-  for k in PROXY_IMAGE AUTHENTIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE MINIO_IMAGE PORTAINER_IMAGE GLANCES_IMAGE CLOUDFLARED_IMAGE TAILSCALE_IMAGE; do
+  for k in PROXY_IMAGE AUTHENTIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE MINIO_IMAGE PORTAINER_IMAGE GLANCES_IMAGE WETTY_IMAGE FILEBROWSER_IMAGE CLOUDFLARED_IMAGE TAILSCALE_IMAGE; do
     v="$(envfile get "$HARNESS_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
   done
   env_default PROXY_ADMIN_EMAIL "$ADMIN_EMAIL"
@@ -465,6 +557,22 @@ stage_secrets() {
   v="$(env_get POSTGRES_IMAGE)"; v="${v##*:}"; v="${v%%[.-]*}"
   env_default BACKUP_PG_CLIENT_PACKAGE "postgresql${v}-client"
   env_default BACKUP_BUILD_CONTEXT ./backup-job
+  # Ops tools: paths and the terminal's target follow the config on every run.
+  env_set OPS_TERMINAL "$WETTY_ON"
+  env_set WETTY_KEY_DIR "$WETTY_KEY_DIR"
+  env_set WETTY_SSH_PORT "${SSHD_PORT:-22}"
+  env_set WETTY_SSH_USER "$(id -un)"
+  env_set WETTY_ORIGIN "$SCHEME://terminal.$BASE_DOMAIN"
+  env_default WETTY_SSH_HOST host.docker.internal
+  env_set FILEBROWSER_APP_DATA_DIR "$FB_APP_DATA"
+  env_set FILEBROWSER_REPORTS_DIR "$FB_REPORTS"
+  env_default AUTHENTIK_SMOKE_USER harness-smoke-user
+  env_secret AUTHENTIK_SMOKE_USER_PASSWORD HARNESS_AUTHENTIK_SMOKE_USER_PASSWORD 32
+  mkdir -p "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"; chmod 700 "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"
+  [ -e "$WETTY_KEY_DIR/known_hosts" ] || (umask 077; : > "$WETTY_KEY_DIR/known_hosts")
+  if [ "$OPS_ON" = true ]; then
+    mkdir -p "$FB_APP_DATA" "$FB_REPORTS" 2>/dev/null || warn "cannot create $FB_APP_DATA or $FB_REPORTS: the file browser will not start until they exist"
+  fi
   chmod 600 "$ENV_FILE"
   ok "secrets present: $(printf '%s' "$SECRET_FPS" | tr ',' '\n' | grep -c ':' ) keys (fingerprints in state.json, values only in .env)"
   state stage secrets set probe "{\"env_file\":\"$ENV_FILE\",\"mode\":\"0600\",\"fingerprints\":{${SECRET_FPS#,}}}"
@@ -693,11 +801,116 @@ stage_optional_profiles() {
     svcs="$svcs gitea-runner gitea-deployer"
   fi
   has_profile storage && svcs="$svcs minio"
-  has_profile ops && svcs="$svcs portainer glances"
+  has_profile ops && svcs="$svcs portainer glances filebrowser"
   if [ -z "$svcs" ]; then log "no optional profile selected"; state stage optional_profiles set probe '{"profiles":"none"}'; return 0; fi
   dc up -d $svcs || return 1
   wait_healthy 240 $svcs || return 1
-  state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }")"
+  OPS_PROBE='{"enabled":false}'
+  if has_profile ops; then ops_terminal; else dc rm -sf wetty filebrowser portainer glances >/dev/null 2>&1 || true; fi
+  state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }" ops:="$OPS_PROBE")"
+}
+
+# ensure_wetty_key: the dedicated ed25519 key of the web terminal, in local/wetty/ (0600).
+ensure_wetty_key() {
+  local k="$WETTY_KEY_DIR/id_ed25519" out
+  [ -s "$k" ] && [ -s "$k.pub" ] && return 0
+  rm -f "$k" "$k.pub"
+  if have ssh-keygen; then
+    ssh-keygen -q -t ed25519 -N "" -C "harness-wetty@$(hostname -s 2>/dev/null || echo host)" -f "$k" </dev/null >/dev/null || return 1
+  else
+    # No ssh-keygen on the host: generate inside the Wetty image, which ships openssh.
+    out="$(docker run --rm --entrypoint sh "$(env_get WETTY_IMAGE)" -c 'ssh-keygen -q -t ed25519 -N "" -C "harness-wetty@$1" -f /tmp/k && cat /tmp/k && echo ===PUB=== && cat /tmp/k.pub' sh "$(hostname -s 2>/dev/null || echo host)")" || return 1
+    (umask 077; printf '%s\n' "${out%%===PUB===*}" | sed '/^$/d' > "$k")
+    printf '%s\n' "${out##*===PUB===}" | sed '/^$/d' > "$k.pub"
+  fi
+  chmod 600 "$k"; chmod 644 "$k.pub"
+  ok "web terminal key generated: $k (ed25519, used only by Wetty)"
+}
+
+# wetty_key_authorized: the public key is in this user's authorized_keys.
+wetty_key_authorized() {
+  local pub; pub="$(awk '{print $2}' "$WETTY_KEY_DIR/id_ed25519.pub")"
+  [ -n "$pub" ] && [ -f "$HOME/.ssh/authorized_keys" ] && grep -qF "$pub" "$HOME/.ssh/authorized_keys"
+}
+
+# wetty_ssh_check HOST: from inside the Wetty container, an ssh with the key and the
+# pinned host key reaches the host and runs `true`. Nothing interactive.
+wetty_ssh_check() {
+  dc exec -T wetty ssh -i /keys/id_ed25519 -p "$(env_get WETTY_SSH_PORT)" -o BatchMode=yes -o ConnectTimeout=8 \
+    -o UserKnownHostsFile=/keys/known_hosts -o StrictHostKeyChecking=yes -o PreferredAuthentications=publickey \
+    -- "$(env_get WETTY_SSH_USER)@$1" true >/dev/null 2>&1
+}
+
+# wetty_pin_host_key HOST: scan the host key through the same path Wetty uses and keep it
+# in known_hosts (Wetty runs with StrictHostKeyChecking=yes).
+wetty_pin_host_key() {
+  local keys port; port="$(env_get WETTY_SSH_PORT)"
+  keys="$(dc exec -T wetty ssh-keyscan -T 5 -p "$port" "$1" 2>/dev/null | grep -v '^#' || true)"
+  [ -n "$keys" ] || return 1
+  (umask 077; printf '%s\n' "$keys" > "$WETTY_KEY_DIR/known_hosts")
+}
+
+# host_address: this machine's primary address, for when host-gateway does not reach sshd
+# (rootless Docker keeps the host loopback away from containers).
+host_address() {
+  local a=""
+  have ip && a="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)"
+  [ -z "$a" ] && have hostname && a="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf '%s' "$a"
+}
+
+# ops_terminal: Wetty, the web terminal on the host. Never fails the install: without
+# sshd, or when the container cannot reach it, the ops tools stay up without it.
+ops_terminal() {
+  local why="" host="" keyed=false tried="" h addr out
+  if [ "$WETTY_ENABLED" != true ]; then why="disabled by ops.wetty.enabled: false"
+  elif [ "$WETTY_ON" != true ]; then why="no sshd on this host"; fi
+  if [ -n "$why" ]; then
+    dc rm -sf wetty >/dev/null 2>&1 || true
+    warn "web terminal not installed: $why; the other ops tools are up"
+    OPS_PROBE="$(jsonq build enabled:=true wetty="not installed" reason="$why" filebrowser=up portainer=up glances=up)"
+    return 0
+  fi
+  if ! ensure_wetty_key; then
+    dc rm -sf wetty >/dev/null 2>&1 || true
+    warn "could not generate the web terminal key: web terminal not installed"
+    OPS_PROBE="$(jsonq build enabled:=true wetty="not installed" reason="key generation failed" filebrowser=up portainer=up glances=up)"
+    return 0
+  fi
+  if wetty_key_authorized; then keyed=true
+  elif [ "$WETTY_INSTALL_KEY" = true ]; then
+    (umask 077; mkdir -p "$HOME/.ssh"; touch "$HOME/.ssh/authorized_keys")
+    cat "$WETTY_KEY_DIR/id_ed25519.pub" >> "$HOME/.ssh/authorized_keys"
+    chmod 600 "$HOME/.ssh/authorized_keys"
+    ok "web terminal key added to $HOME/.ssh/authorized_keys (comment $(awk '{print $3}' "$WETTY_KEY_DIR/id_ed25519.pub"))"
+    keyed=true
+  else
+    warn "web terminal key not in $HOME/.ssh/authorized_keys (ops.wetty.install_key: false): the handoff says how to add it"
+  fi
+  # Reach the host: what .env has, then host-gateway, then the host's own address.
+  addr="$(host_address)"
+  for h in "$(env_get WETTY_SSH_HOST)" host.docker.internal $addr; do
+    case " $tried " in *" $h "*) continue ;; esac
+    tried="$tried $h"
+    [ "$(env_get WETTY_SSH_HOST)" = "$h" ] || env_set WETTY_SSH_HOST "$h"
+    if ! out="$(dc up -d wetty 2>&1)"; then log "web terminal: the container did not start: $(printf '%s' "$out" | tail -n 1)"; continue; fi
+    wait_healthy 90 wetty >/dev/null 2>&1 || { log "web terminal: the container is not healthy"; continue; }
+    wetty_pin_host_key "$h" || { log "web terminal: sshd at $h:$(env_get WETTY_SSH_PORT) does not answer from the container"; continue; }
+    host="$h"
+    [ "$keyed" = true ] || break
+    if wetty_ssh_check "$h"; then ok "web terminal: ssh $(env_get WETTY_SSH_USER)@$h:$(env_get WETTY_SSH_PORT) with the dedicated key works from the container"; break; fi
+    log "web terminal: $h answers but the key sign-in failed"; host=""
+  done
+  if [ -z "$host" ]; then
+    dc rm -sf wetty >/dev/null 2>&1 || true
+    warn "web terminal not installed: the Wetty container cannot sign in to this host's sshd (tried:$tried). The other ops tools are up; see docs/security.md"
+    OPS_PROBE="$(jsonq build enabled:=true wetty="not installed" reason="sshd unreachable from the container" tried="${tried# }" filebrowser=up portainer=up glances=up)"
+    return 0
+  fi
+  OPS_PROBE="$(jsonq build enabled:=true wetty="$( [ "$keyed" = true ] && echo up || echo "up, key not authorized")" ssh_host="$host" ssh_port="$(env_get WETTY_SSH_PORT)" ssh_user="$(env_get WETTY_SSH_USER)" key="$WETTY_KEY_DIR/id_ed25519" key_authorized:="$keyed" filebrowser=up portainer=up glances=up filebrowser_paths="$(env_get FILEBROWSER_APP_DATA_DIR) (rw), $(env_get FILEBROWSER_REPORTS_DIR) (ro)")"
+  state stage optional_profiles set resources "[\"file:$WETTY_KEY_DIR/id_ed25519\"]"
+  [ "$keyed" = true ] && state stage optional_profiles set resources "[\"authorized_keys:$HOME/.ssh/authorized_keys\"]"
+  return 0
 }
 
 stage_handoff() {
@@ -711,6 +924,14 @@ stage_handoff() {
     echo "  \"ssh\": \"ssh://git@$GITEA_HOST:$(env_get GITEA_SSH_PORT)\","
     echo "  \"credentials_file\": \"$ENV_FILE\","
     echo "  \"status_command\": \"$SELF status --install-dir $INSTALL_DIR\","
+    if has_profile ops; then
+      echo "  \"ops\": $(state stage optional_profiles get probe 2>/dev/null | $PY -c 'import json,sys
+try: o=json.load(sys.stdin).get("ops") or {}
+except Exception: o={}
+o["urls"]={k: "%s://%s.%s" % (sys.argv[1], k, sys.argv[2]) for k in ("terminal","files","portainer","glances") if k!="terminal" or str(o.get("wetty","")).startswith("up")}
+o["access"]=sys.argv[3]
+print(json.dumps(o))' "$SCHEME" "$BASE_DOMAIN" "$(env_get AUTHENTIK_PORTAL_GROUP) only (forward auth)"),"
+    fi
     if [ "$(env_get BACKUP_ENABLED)" = true ]; then
       echo "  \"backup\": {\"enabled\": true, \"job\": \"sidecar container 'backup' (crond)\", \"schedule\": \"$(env_get BACKUP_SCHEDULE)\", \"timezone\": \"$(env_get BACKUP_TZ)\", \"repository\": \"$(env_get BACKUP_DESTINATION)/restic\", \"status_file\": \"$(env_get BACKUP_DESTINATION)/reports/latest-status.json\", \"commands\": \"$HARNESS_ROOT/scripts/harness-backup.sh --install-dir $INSTALL_DIR run|verify --latest|status\"}"
     else
@@ -734,6 +955,18 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   _out "  authentik  $AUTHENTIK_BASE_URL   (user akadmin)"
   _out "  gitea      $GITEA_BASE_URL   (user $(env_get GITEA_ADMIN_USERNAME); SSH port $(env_get GITEA_SSH_PORT); sign in with Authentik)"
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
+  if has_profile ops; then
+    _out "  ops (admins only: $(env_get AUTHENTIK_PORTAL_GROUP))  $SCHEME://files.$BASE_DOMAIN  $SCHEME://portainer.$BASE_DOMAIN  $SCHEME://glances.$BASE_DOMAIN"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$(dc ps -q wetty 2>/dev/null | head -n 1)" 2>/dev/null)" = true ]; then
+      _out "  terminal   $SCHEME://terminal.$BASE_DOMAIN   (a shell on this host as $(env_get WETTY_SSH_USER))"
+      if ! wetty_key_authorized; then
+        _out "  The web terminal's key is not authorized yet. To allow it, run as $(env_get WETTY_SSH_USER):"
+        _out "    cat $WETTY_KEY_DIR/id_ed25519.pub >> ~/.ssh/authorized_keys"
+      fi
+    else
+      _out "  terminal   not installed: the reason is in $STATE_FILE (stages.optional_profiles.probe.ops); docs/security.md"
+    fi
+  fi
   [ "$INGRESS" = local ] && _out "  on a machine without *.localhost resolution, add these names to /etc/hosts pointing at 127.0.0.1"
   _out "Generated credentials live in $ENV_FILE (mode 0600): AUTHENTIK_BOOTSTRAP_PASSWORD, GITEA_ADMIN_PASSWORD, PROXY_ADMIN_PASSWORD."
   if [ "$(env_get BACKUP_ENABLED)" = true ]; then

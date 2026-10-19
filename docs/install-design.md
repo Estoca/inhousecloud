@@ -21,8 +21,9 @@ Companion files:
 |---|---|---|
 | `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the Gitea Actions runners (`gitea-runner` for CI, `gitea-deployer` for deploys by push to `main`, [`gitops-flow.md`](gitops-flow.md)), the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
 | `storage` | MinIO (S3-compatible object storage) | when an app declares object storage |
-| `ops` | Portainer, Glances | useful, never blocking |
+| `ops` | admin tools: Portainer, Glances, a web terminal on the host (Wetty), a file browser for app data (FileBrowser); all four behind the SSO for `harness-admins` only | recommended (the interactive installer defaults to yes), never blocking |
 
+- **The ops tools are admin access to the machine, not core.** They are what an operator reaches for first (who is eating the disk, what is in that app's data, a shell without an SSH client), so the questionnaire recommends them, but the cloud works without them and they never fail an install. Details in [The ops profile](#the-ops-profile) and [`security.md`](security.md).
 - **The runners are core, not a profile.** The base experience is "push to `main`, the app is on the air"; a box without a runner cannot do it. Configs with the old `install.profile.ci` or `ci.gitea_runner.enabled` still load: the value is ignored with a warning.
 
 Rules that came from the first box:
@@ -30,6 +31,23 @@ Rules that came from the first box:
 - **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and MinIO exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
 - **Apps built inside the cloud do not bring their own database, cache or storage.** `harness-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or MinIO service, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
 - **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed by push to `main` like any other. It has no place in the compose files.
+
+## The ops profile
+
+Four admin tools, each on its own name, each behind forward auth whose application is bound to `harness-admins` only (members of `harness-users` sign in and are refused):
+
+| Name | Service | What it is |
+|---|---|---|
+| `terminal.<BASE_DOMAIN>` | `wetty` | a shell **on the host** (not in a container) as the user that ran `install.sh` |
+| `files.<BASE_DOMAIN>` | `filebrowser` | the apps' data directories (read and write) and the backup reports (read only) |
+| `portainer.<BASE_DOMAIN>` | `portainer` | containers, images, volumes, stacks; its own login behind the SSO |
+| `glances.<BASE_DOMAIN>` | `glances` | host resource usage |
+
+- **Their own network.** The four services sit on `harness-ops`, a network only the proxy joins. Apps join `harness`, so an app container cannot reach `wetty:3000` or `filebrowser:80` around the proxy; smoke test 18 proves it. Nothing publishes a host port.
+- **Nothing public.** Their proxy hosts use the forward-auth snippet with no public path (no `/health` exception); the installer checks them through their Docker healthchecks.
+- **Web terminal.** Wetty v4 runs `ssh` to the host's sshd with a dedicated ed25519 key, `<install-dir>/local/wetty/id_ed25519` (0600, generated once), the host key pinned in `local/wetty/known_hosts` (`StrictHostKeyChecking=yes`), public key only (no password prompt), and one allowed browser origin (`<scheme>://terminal.<BASE_DOMAIN>`). The preflight looks for sshd on 127.0.0.1 (`ops.wetty.ssh_port`, then the `Port` lines of `sshd_config`, then 22) by its banner. The installer then installs the public key in `~/.ssh/authorized_keys` of the user running it: interactively it asks (default yes); with `--non-interactive` only when `ops.wetty.install_key: true`, otherwise the handoff prints the one command that does it. It reaches the host through `host.docker.internal` (`host-gateway`) and, when that does not answer (rootless Docker keeps the host loopback away from containers), through the host's own address, and proves it with a non-interactive `ssh … true` from inside the container. **No sshd, or no way to reach it: the other three tools come up, the terminal does not, the installer says so, and nothing fails.** `state.json` records the outcome under `stages.optional_profiles.probe.ops`, and `inventory.json` under `ops`.
+- **File browser.** FileBrowser sees two host paths and nothing else: `ops.filebrowser.paths.app_data` (default `<install-dir>/app-data`, one directory per app, which `harness-app provision` creates and mounts at `/data` in the app) and `ops.filebrowser.paths.backup_reports` (default `<BACKUP_DESTINATION>/reports`, read only). The preflight refuses any other path that reaches the install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), the restic repository, a home directory or a system directory (`scripts/lib/opspaths.py`; `scripts/tests/ops-mounts.sh` proves the rule against the rendered compose file). Its own login is off: `auth.method=proxy` takes the user from `X-authentik-username`, which only the proxy sets; each admin gets a non-admin FileBrowser user on first visit; no admin account or default password exists.
+- **Portainer and Glances** moved from the `harness` network to `harness-ops`, and both now have a provider bound to `harness-admins` (Portainer had no SSO before, only its own login; Glances had the forward-auth snippet but no provider). Portainer keeps its own login behind the SSO.
 
 ## Ingress
 
@@ -86,7 +104,7 @@ Preflight → plan → apply → verify → handoff. Copied from how agent frame
 14. `first-run`: Gitea admin and organization; Authentik bootstrap; OIDC between Authentik and Gitea; minimum groups; portal access.
 15. Protected route for the portal on the proxy with forward auth.
 16. Backup job: start the backup container, run and verify the first backup ([`backup.md`](backup.md)).
-17. The Gitea Actions runners (core, started once Gitea can issue their registration tokens) and the optional profiles: `storage`, `ops`.
+17. The Gitea Actions runners (core, started once Gitea can issue their registration tokens) and the optional profiles: `storage`, `ops` (the web terminal last, and only when it can sign in to the host's sshd).
 18. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)); test 16 deploys an app by push to `main`.
 19. Write the final inventory, URLs, completed state and the status command.
 

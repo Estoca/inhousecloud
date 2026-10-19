@@ -8,7 +8,11 @@
 #   1. Authentik: groups, OIDC provider + application for Gitea, proxy provider +
 #      application for the portal, embedded outpost, group policy bindings.
 #   2. Proxy: hosts for auth, git and portal (portal with forward auth), plus the
-#      optional profiles' hosts.
+#      optional profiles' hosts. The ops tools (Portainer, Glances, the web terminal,
+#      the file browser) each get a proxy provider and application bound to the admin
+#      group only, and a proxy host with forward auth and no public path. With the ops
+#      profile, the user AUTHENTIK_SMOKE_USER (harness-users only, password in .env)
+#      exists so smoke test 18 can prove a non-admin is denied.
 #   3. Gitea: admin, API tokens, organization, harness-smoke repository, OIDC source.
 # Talks to the services on their loopback control ports; tokens travel in curl config
 # files and on stdin, never on a command line, and nothing secret is printed.
@@ -107,6 +111,35 @@ record "authentik:outpost:$OUTPOST_PK"
 ensure_binding "$PORTAL_APP_PK" "$PORTAL_GROUP_PK" "portal <- $AUTHENTIK_PORTAL_GROUP"
 ensure_binding "$GITEA_APP_PK" "$APP_GROUP_PK" "gitea <- $AUTHENTIK_APP_GROUP"
 
+# Ops tools: admins only (docs/security.md). Created with the ops profile; the terminal's
+# only when the installer found an sshd for it.
+OPS=false; case ",$COMPOSE_PROFILES," in *,ops,*) OPS=true ;; esac
+OPS_TOOLS=""
+if [ "$OPS" = true ]; then
+  OPS_TOOLS="ops-portainer:Portainer:portainer:portainer:9000 ops-glances:Glances:glances:glances:61208 ops-files:Files:files:filebrowser:80"
+  [ "${OPS_TERMINAL:-false}" = true ] && OPS_TOOLS="$OPS_TOOLS ops-terminal:Terminal:terminal:wetty:3000"
+  for t in $OPS_TOOLS; do
+    IFS=: read -r slug name sub _ _ <<TOOL
+$t
+TOOL
+    ensure_admin_tool "$slug" "$name" "$sub.$BASE_DOMAIN" "$PORTAL_GROUP_PK"
+  done
+  # The smoke user: harness-users only. Its password exists only in .env (0600).
+  SMOKE_PK="$(ak_list_find "core/users/?username=$(urlenc "$AUTHENTIK_SMOKE_USER")" username "$AUTHENTIK_SMOKE_USER" pk)"
+  if [ -z "$SMOKE_PK" ]; then
+    api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Harness smoke test (not an admin)" is_active:=true path=harness/smoke)"
+    api_ok || die "create user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
+    SMOKE_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "user $AUTHENTIK_SMOKE_USER created"
+  else ok "user $AUTHENTIK_SMOKE_USER exists"; fi
+  api POST "$AK/core/users/$SMOKE_PK/set_password/" "$(jsonq build password="$AUTHENTIK_SMOKE_USER_PASSWORD")"
+  api_ok || die "set the password of $AUTHENTIK_SMOKE_USER: HTTP $API_CODE"
+  api POST "$AK/core/groups/$APP_GROUP_PK/add_user/" "$(jsonq build pk:="$SMOKE_PK")"
+  api_ok || die "add $AUTHENTIK_SMOKE_USER to $AUTHENTIK_APP_GROUP: HTTP $API_CODE"
+  api POST "$AK/core/groups/$PORTAL_GROUP_PK/remove_user/" "$(jsonq build pk:="$SMOKE_PK")"
+  ok "$AUTHENTIK_SMOKE_USER in $AUTHENTIK_APP_GROUP only (password from .env)"
+  record "authentik:user:$AUTHENTIK_SMOKE_USER"
+fi
+
 # The bootstrap admin joins both groups so the first login works out of the box.
 ADMIN_PK="$(ak_list_find "core/users/?username=akadmin" username akadmin pk)"
 [ -n "$ADMIN_PK" ] || die "akadmin user not found"
@@ -131,9 +164,13 @@ ensure_proxy_host "$PORTAL_HOST" portal 8080 "$FORWARD_AUTH_CONF"
 case ",$COMPOSE_PROFILES," in
   *,storage,*) ensure_proxy_host "s3.$BASE_DOMAIN" minio 9000 ""; ensure_proxy_host "s3-console.$BASE_DOMAIN" minio 9001 "" ;;
 esac
-case ",$COMPOSE_PROFILES," in
-  *,ops,*) ensure_proxy_host "portainer.$BASE_DOMAIN" portainer 9000 ""; ensure_proxy_host "glances.$BASE_DOMAIN" glances 61208 "$FORWARD_AUTH_CONF" ;;
-esac
+# Ops tools: forward auth with nothing public; Portainer keeps its own login behind it.
+for t in $OPS_TOOLS; do
+  IFS=: read -r _ _ sub fhost fport <<TOOL
+$t
+TOOL
+  ensure_proxy_host "$sub.$BASE_DOMAIN" "$fhost" "$fport" "$(forward_auth_conf "")"
+done
 
 # Give nginx a moment to reload, then check the routes from the box itself.
 t0=$(date +%s)

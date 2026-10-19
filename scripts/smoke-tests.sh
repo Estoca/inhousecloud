@@ -3,9 +3,10 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 16. Test 14 runs `harness-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 18. Test 14 runs `harness-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
-# main (never skipped: the runners are core); the app stays on the box. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# main (never skipped: the runners are core); the app stays on the box. Tests 17 and 18
+# cover the ops tools and are skipped only when the ops profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   HARNESS_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -47,6 +48,7 @@ result() { # NUMBER NAME STATUS DETAIL
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
 CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer"
 INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
+SCHEME_URL=https; [ "$TLS_MODE" = off ] && SCHEME_URL=http
 
 # 1. compose file valid
 if dc config --quiet 2>/dev/null; then result 1 compose-valid pass "compose.yml validates"; else result 1 compose-valid fail "docker compose config failed"; fi
@@ -223,6 +225,51 @@ print(m[0].get("status","") if m else "")' "$sha")"
   result 16 app-deploy pass "push to green run in ${run}s; /health 200, / to the SSO, $db owned by its role$( [ -n "$fp_before" ] && echo ', password kept on redeploy')"
 }
 t16
+
+# 17. the ops tools are behind the SSO: an anonymous request to the root of
+#     terminal.<BASE_DOMAIN> (when the web terminal is installed), files.<BASE_DOMAIN>,
+#     portainer.<BASE_DOMAIN> and glances.<BASE_DOMAIN> is sent to Authentik.
+OPS=false; case ",$COMPOSE_PROFILES," in *,ops,*) OPS=true ;; esac
+wetty_running() { [ "$(docker inspect -f '{{.State.Running}}' "$(dc ps -q wetty 2>/dev/null | head -n 1)" 2>/dev/null)" = true ]; }
+OPS_HOSTS="files portainer glances"; wetty_running && OPS_HOSTS="terminal $OPS_HOSTS"
+if [ "$OPS" != true ]; then
+  result 17 ops-routes-protected skip "ops profile off"
+else
+  bad=""; good=""
+  for sub in $OPS_HOSTS; do
+    loc="$(curl -sS $INSECURE -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $sub.$BASE_DOMAIN" "$PROXY/" 2>/dev/null || echo 000)"
+    case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) good="$good $sub" ;; *) bad="$bad $sub=${loc%% *}" ;; esac
+  done
+  wetty_running || good="$good (terminal not installed: see stages.optional_profiles.probe.ops)"
+  [ -z "$bad" ] && result 17 ops-routes-protected pass "anonymous / to Authentik:$good" || result 17 ops-routes-protected fail "not protected:$bad"
+fi
+
+# 18. the ops tools are for admins only: their containers are healthy; the smoke user
+#     (AUTHENTIK_SMOKE_USER, harness-users only) signs in and is denied the terminal and
+#     the file browser; an app container on the harness network cannot reach them; the
+#     file browser mounts only app data and the backup reports (read only), never the
+#     install directory or an env file.
+if [ "$OPS" != true ]; then
+  result 18 ops-admins-only skip "ops profile off"
+else
+  bad=""
+  svcs="portainer glances filebrowser"; wetty_running && svcs="$svcs wetty"
+  for s in $svcs; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
+  for sub in $OPS_HOSTS; do
+    case "$sub" in terminal|files) ;; *) continue ;; esac
+    out="$("$HARNESS_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --target "$SCHEME_URL://$sub.$BASE_DOMAIN" --expect denied 2>/dev/null | tail -n 1 || true)"
+    case "$out" in *PASS*) ;; *) bad="$bad $sub:smoke-user-not-denied(${out:-no output})" ;; esac
+  done
+  PORTAL_CID="$(dc ps -q portal | head -n 1)"
+  if docker exec "$PORTAL_CID" sh -c 'wget -q -T 3 -O /dev/null http://filebrowser/health || wget -q -T 3 -O /dev/null http://wetty:3000/' >/dev/null 2>&1; then
+    bad="$bad reachable-from-an-app-container"
+  fi
+  dc config --format json 2>/dev/null | $PY "$HARNESS_LIB/opspaths.py" compose "$INSTALL_DIR" "$BACKUP_DESTINATION" "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}" 2>"${TMPDIR:-/tmp}/harness-opspaths.$$" \
+    || bad="$bad mounts:$(head -n 2 "${TMPDIR:-/tmp}/harness-opspaths.$$" | tr '\n' ' ')"
+  rm -f "${TMPDIR:-/tmp}/harness-opspaths.$$"
+  [ -z "$bad" ] && result 18 ops-admins-only pass "$(echo $svcs | wc -w | tr -d ' ') containers healthy; $AUTHENTIK_SMOKE_USER denied$(wetty_running && echo ' terminal and') files; unreachable from apps; mounts: app data + reports (ro)" \
+    || result 18 ops-admins-only fail "${bad# }"
+fi
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

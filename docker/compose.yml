@@ -4,7 +4,7 @@
 # Services with no `profiles:` key are the `core` profile and always run.
 # Optional profiles are enabled through COMPOSE_PROFILES in .env:
 #   storage      MinIO (S3-compatible object storage for apps)
-#   ops          Portainer and Glances
+#   ops          admin tools: Portainer, Glances, Wetty (web terminal), FileBrowser
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node (ingress private)
 #   backup       the backup job (on when BACKUP_ENABLED=true; docs/backup.md)
@@ -15,7 +15,10 @@
 #   - Authentik keeps its own Postgres; identity never depends on app data.
 #   - The shared Postgres and Redis exist for apps built inside the cloud.
 #   - Only the proxy, the Gitea SSH port and loopback control ports are published.
-#   - Named volumes only. One internal network, joinable by apps.
+#   - Named volumes only, except the ops tools' explicit host paths (docs/security.md).
+#   - One internal network (harness), joinable by apps. The ops tools live on a second
+#     network (harness-ops) that only the proxy joins: an app container cannot reach them
+#     without going through the proxy and the SSO.
 
 name: ${COMPOSE_PROJECT_NAME:-harness}
 
@@ -50,6 +53,7 @@ services:
           - ${PORTAL_HOST}
           - ${AUTHENTIK_HOST}
           - ${GITEA_HOST}
+      ops: {}
     healthcheck:
       test: ["CMD", "/usr/bin/check-health"]
       interval: 10s
@@ -338,6 +342,10 @@ services:
       start_period: 30s
 
   # ------------------------------------------------------------------- ops
+  # Admin tools, reachable only through the proxy with forward auth bound to the
+  # harness-admins group (scripts/first-run.sh). They sit on the ops network, which apps
+  # never join, so the SSO in front of them cannot be bypassed from an app container.
+  # Each one is admin access to the machine: docs/security.md.
   portainer:
     profiles: ["ops"]
     image: ${PORTAINER_IMAGE}
@@ -346,7 +354,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer-data:/data
-    networks: [harness]
+    networks: [ops]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/api/system/status"]
       interval: 30s
@@ -365,13 +373,90 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /etc/os-release:/etc/os-release:ro
-    networks: [harness]
+    networks: [ops]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:61208/api/4/status"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  wetty:
+    # Web terminal at terminal.<BASE_DOMAIN>: a shell on the HOST, not in a container.
+    # Wetty runs ssh to the host's sshd (host.docker.internal, or the host's address when
+    # that does not answer) as WETTY_SSH_USER, with the dedicated key install.sh writes to
+    # <install-dir>/local/wetty/ (key only, no password prompt; host key pinned in
+    # known_hosts). Installed only when the host runs sshd; never fails the install.
+    profiles: ["ops"]
+    image: ${WETTY_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --base=/
+      - --port=3000
+      - --ssh-host=${WETTY_SSH_HOST:-host.docker.internal}
+      - --ssh-port=${WETTY_SSH_PORT:-22}
+      - --ssh-user=${WETTY_SSH_USER:-}
+      - --ssh-auth=publickey
+      - --ssh-key=/keys/id_ed25519
+      - --known-hosts=/keys/known_hosts
+      - --force-ssh
+      - --allowed-origin=${WETTY_ORIGIN:-http://localhost}
+      - --title=${COMPOSE_PROJECT_NAME:-harness}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${WETTY_KEY_DIR:-./local/wetty}:/keys:ro
+    networks: [ops]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  filebrowser:
+    # File manager at files.<BASE_DOMAIN>. It sees exactly two host paths and nothing
+    # else (docs/security.md; tested by scripts/tests/ops-mounts.sh):
+    #   /srv/apps            <install-dir>/app-data: one directory per app, mounted at
+    #                        /data in the app (scripts/harness-app.sh)
+    #   /srv/backup-reports  <BACKUP_DESTINATION>/reports, read only
+    # Never the install directory itself, its .env, local/ or the apps' env files.
+    # Its own login is off: auth.method=proxy trusts X-authentik-username, which only the
+    # proxy (the one other member of the ops network) sets after forward auth. No admin
+    # account or password exists; each SSO user gets a non-admin FileBrowser user.
+    profiles: ["ops"]
+    image: ${FILEBROWSER_IMAGE}
+    restart: unless-stopped
+    logging: *default-logging
+    # Root in the container (with only the file capabilities) so it can read the app
+    # directories, which are owned by the host user (rootless Docker: container root is
+    # that user) or by the apps' container user.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        db=/database/filebrowser.db
+        [ -f "$$db" ] || filebrowser config init -d "$$db" >/dev/null
+        filebrowser config set -d "$$db" --root /srv --address 0.0.0.0 --port 80 \
+          --auth.method=proxy --auth.header=X-authentik-username >/dev/null
+        exec filebrowser -d "$$db"
+    volumes:
+      - filebrowser-db:/database
+      - ${FILEBROWSER_APP_DATA_DIR:-./app-data}:/srv/apps
+      - ${FILEBROWSER_REPORTS_DIR:-./backups/reports}:/srv/backup-reports:ro
+    networks: [ops]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ---------------------------------------------------------------- ingress
   cloudflared:
@@ -460,6 +545,9 @@ services:
 networks:
   harness:
     name: ${HARNESS_NETWORK}
+  ops:
+    # Ops tools and the proxy only. Not internal: Wetty needs the route to the host's sshd.
+    name: ${HARNESS_OPS_NETWORK:-harness-ops}
 
 volumes:
   proxy-data:
@@ -475,5 +563,6 @@ volumes:
   gitea-runner-data:
   gitea-deployer-data:
   portainer-data:
+  filebrowser-db:
   tailscale-state:
   backup-cache:

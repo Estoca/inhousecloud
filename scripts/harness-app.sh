@@ -9,7 +9,8 @@
 #       The executor, run on the box by the deploy job: validates the manifest and the
 #       compose file, then ensures the app's database and role on the shared Postgres,
 #       its Redis ACL user and key prefix, its bucket (only when asked for and the storage
-#       profile is on), <install-dir>/apps/SLUG/.env (0600), the compose overlay, the
+#       profile is on), <install-dir>/apps/SLUG/.env (0600), the data directory
+#       <install-dir>/app-data/SLUG (mounted at /data), the compose overlay, the
 #       Authentik provider and application, the proxy host SLUG.<BASE_DOMAIN> with
 #       forward auth, and the app's record in inventory.json.
 #   harness-app checkout                   inside a deploy job: fetch the pushed commit
@@ -325,8 +326,13 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   step "app environment"
   APP_DIR="$INSTALL_DIR/apps/$SLUG"; APP_ENV="$APP_DIR/.env"; APP_URL="$(app_url "$SLUG")"
   (umask 077; mkdir -p "$APP_DIR"); chmod 700 "$INSTALL_DIR/apps" "$APP_DIR" 2>/dev/null || true
+  # The app's files: <install-dir>/app-data/SLUG, mounted at /data. Kept apart from
+  # apps/SLUG (which holds the env file) so the ops file browser can show data, never
+  # secrets. Backed up with the install directory.
+  APP_DATA="$INSTALL_DIR/app-data/$SLUG"
+  (umask 077; mkdir -p "$APP_DATA"); chmod 700 "$INSTALL_DIR/app-data" 2>/dev/null || true
   [ -f "$APP_ENV" ] || (umask 077; : > "$APP_ENV")
-  for kv in "APP_SLUG=$SLUG" "APP_BASE_URL=$APP_URL" "PORT=$M_PORT"; do
+  for kv in "APP_SLUG=$SLUG" "APP_BASE_URL=$APP_URL" "PORT=$M_PORT" "DATA_DIR=/data"; do
     printf '%s' "${kv#*=}" | envfile set "$APP_ENV" "${kv%%=*}"
   done
   [ "$M_DATABASE" = true ] && ensure_app_database "$(db_ident "$SLUG")" "$(db_ident "$SLUG")"
@@ -334,10 +340,10 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   [ "$M_BUCKET" = true ] && ensure_app_bucket
   env_example_defaults "$mdir/$M_ENV_EXAMPLE"
   chmod 600 "$APP_ENV"
-  printf '%s' "$json" | $PY "$HARNESS_LIB/appmanifest.py" overlay "$SLUG" "$M_SERVICE" "$APP_ENV" "$HARNESS_NETWORK" > "$APP_DIR/compose.harness.yml"
+  printf '%s' "$json" | $PY "$HARNESS_LIB/appmanifest.py" overlay "$SLUG" "$M_SERVICE" "$APP_ENV" "$HARNESS_NETWORK" "$APP_DATA" > "$APP_DIR/compose.harness.yml"
   chmod 644 "$APP_DIR/compose.harness.yml"
   ok "env file $APP_ENV (0600: $(envfile keys "$APP_ENV" | tr '\n' ' '))"
-  ok "compose overlay $APP_DIR/compose.harness.yml (network $HARNESS_NETWORK, alias $SLUG, no host ports)"
+  ok "compose overlay $APP_DIR/compose.harness.yml (network $HARNESS_NETWORK, alias $SLUG, no host ports, $APP_DATA at /data)"
 
   step "route and SSO for $APP_URL"
   npm_login

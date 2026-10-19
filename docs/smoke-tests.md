@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 18 of the install sequence, 18 tests,, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -86,7 +86,26 @@ docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_US
 #       query returns f|t|f (owned by its role, not superuser, can log in, no public
 #       connect); the role signs in with PGPASSWORD from apps/smoke-app/.env; and on a
 #       second run that password is the same as before the push
+
+# 17. The ops tools are behind the SSO (skipped only when the ops profile is off)
+for h in terminal files portainer glances; do curl -sSI "https://$h.$BASE_DOMAIN/"; done
+# PASS: every root answers 302 to /outpost.goauthentik.io/ or to the Authentik login
+#       (terminal only when the web terminal is installed; the detail says when it is not)
+
+# 18. The ops tools are for admins only (skipped only when the ops profile is off)
+docker compose -f "$HARNESS_COMPOSE_FILE" ps --format json          # portainer glances filebrowser [wetty]
+scripts/sso-login-check.sh --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD \
+  --target "https://files.$BASE_DOMAIN" --expect denied             # and terminal
+docker exec <portal container> wget -T 3 http://filebrowser/health   # an app container
+docker compose -f "$HARNESS_COMPOSE_FILE" config --format json | scripts/lib/opspaths.py compose "$HARNESS_INSTALL_DIR" "$BACKUP_DESTINATION"
+# PASS: the containers are healthy; harness-smoke-user (harness-users only) signs in to
+#       Authentik and is refused both the terminal and the file browser; the wget from
+#       the portal container fails (the ops tools are not on the apps' network); and the
+#       file browser mounts only app data and the backup reports (read only), Wetty only
+#       its key directory (read only)
 ```
+
+Test 18 signs in for real, with the smoke user's password from `.env`: it proves the binding to `harness-admins`, not just that a route exists. The positive side (an admin reaches a shell and the file list) needs the admin's password, which a human replaces after the first sign-in, so it is not a smoke test; `scripts/sso-login-check.sh --target https://terminal.<BASE_DOMAIN>` checks it by hand with `--expect allowed`. Without the box, `scripts/tests/ops-mounts.sh` checks the mounts of the compose file in the repository, including that a file browser mounting the install directory, `apps/` or `local/` is refused.
 
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
