@@ -85,7 +85,7 @@ The LLM should explain what will be installed before changing the machine:
 
 The LLM should ask for values such as admin email, admin username, admin password or permission to generate one, base domain, install directory, tunnel provider, and whether it may start Docker services or create public routes.
 
-See `docs/agent-setup-contract.md` for the full agent-readable contract.
+See `docs/agent-setup-contract.md` for the full agent-readable contract, and `docs/install-design.md` for the design of the one-command installer that contract drives (profiles, ingress matrix, stage model, first-run automation, backup minimum, and what the first production box taught us).
 
 The harness should also expose live app-building rules for day-to-day app creation. See `docs/app-rules-example.md` for a generalized example based on a real internal app platform rules file.
 
