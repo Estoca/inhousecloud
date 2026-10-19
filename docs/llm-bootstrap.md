@@ -100,7 +100,9 @@ compose.yml           the rendered Compose file (a copy of docker/compose.yml)
 portal-placeholder/   the placeholder portal (examples/minimal-web-app)
 state.json            stage by stage state; the resume command of each stage
 inventory.json        URLs, profiles, status command
-backups/ local/       reserved for the backup job and local files
+backup-job/           build context of the backup container (docs/backup.md)
+backups/              default backup destination: restic/ repository, reports/ status files
+local/                local files, never backed up
 ```
 
 ## Human Checkpoints

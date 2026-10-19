@@ -19,7 +19,7 @@ Companion files:
 
 | Profile | Services | When |
 |---|---|---|
-| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup | first boot |
+| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
 | `storage` | MinIO (S3-compatible object storage) | when an app declares object storage |
 | `ci` | Gitea Actions runner | when the first automated deploy lands |
 | `ops` | Portainer, Glances | useful, never blocking |
@@ -84,9 +84,10 @@ Preflight → plan → apply → verify → handoff. Copied from how agent frame
 13. Start the portal, apply its migrations, wait for `/health`.
 14. `first-run`: Gitea admin and organization; Authentik bootstrap; OIDC between Authentik and Gitea; minimum groups; portal access.
 15. Protected route for the portal on the proxy with forward auth.
-16. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)).
-17. Optional profiles: `storage`, `ops`, `ci`.
-18. Write the final inventory, URLs, completed state and the status command.
+16. Backup job: start the backup container, run and verify the first backup ([`backup.md`](backup.md)).
+17. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)).
+18. Optional profiles: `storage`, `ops`, `ci`.
+19. Write the final inventory, URLs, completed state and the status command.
 
 ## First Access: Automated Versus Human
 
@@ -132,6 +133,21 @@ Minimum, part of `core`:
 - Checksum and a status file per run; the portal reads the status file and alarms when the newest backup is older than the configured maximum.
 - A monthly restore rehearsal into an isolated target, one database per month, everything once a year.
 - **A lock and a hard timeout on the job.** On the first box a run hung for two days and silently blocked the next two nightly runs; the only thing that noticed was the portal's backup card. A hung run must be killed, recorded as failed and alarmed, never left to block tomorrow.
+
+What is built ([`backup.md`](backup.md)) and what is next:
+
+| Item | State |
+|---|---|
+| `pg_dump -Fc` of every database of both Postgres instances plus `pg_dumpall --globals-only`, streamed into the repository | built |
+| Gitea, proxy, Authentik and MinIO volumes, and the install directory | built |
+| restic repository encrypted with `BACKUP_ENCRYPTION_KEY`, retention 7/4/12 per item | built |
+| Lock, hard timeout `BACKUP_MAX_RUN_MINUTES`, hung or vanished runs recorded as failed | built |
+| Manifest with checksums per run and `reports/latest-status.json` for the portal | built |
+| `verify --latest` as smoke test 14 | built |
+| Scheduling: a sidecar container with crond (`backup` profile) | built |
+| Encrypted off-site copy of the repository | next |
+| Monthly restore rehearsal into an isolated target | next |
+| The portal's backup card and alarm on age | next (portal project; the status file is ready) |
 
 ## What the First Box Taught Us
 

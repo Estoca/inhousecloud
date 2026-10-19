@@ -22,7 +22,7 @@ Never store secrets here: names, fingerprints and ids only.
 import json, os, sys, uuid, datetime, tempfile
 
 STAGES = ["preflight", "plan", "secrets", "foundation", "authentik", "shared_data",
-          "proxy_ingress", "gitea", "portal", "first_run", "smoke_tests",
+          "proxy_ingress", "gitea", "portal", "first_run", "backup", "smoke_tests",
           "optional_profiles", "handoff"]
 FIELDS = ["status", "attempts", "started_at", "finished_at", "config_sha256",
           "probe", "resources", "error_code", "resume_command"]
@@ -38,6 +38,7 @@ CONTRACT = {
     "gitea": "API healthy, admin, organization, OIDC source",
     "portal": "migrations, health, admin group, protected route",
     "first_run": "Authentik to Gitea, first login pending or done, groups",
+    "backup": "backup job installed, schedule, destination, first run and its snapshot",
     "optional_profiles": "storage, ci and ops resources",
     "smoke_tests": "result per test; no headers, cookies or tokens",
     "handoff": "URLs, next steps, backup schedule, status command",

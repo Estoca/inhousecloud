@@ -88,17 +88,20 @@ ops:
   portainer: false
   glances: false
 
-backup:
-  enabled: true
-  schedule: "0 2 * * *"
-  max_run_minutes: 240           # a run past this is killed and recorded as failed
+backup:                          # docs/backup.md
+  enabled: true                  # false: no backup container, smoke test 14 skipped
+  schedule: "0 2 * * *"          # cron, run by crond inside the backup container
+  timezone: UTC                  # of the schedule
+  max_run_minutes: 240           # hard timeout: a run past this is killed and recorded as failed
+  max_age_hours: 26              # verify/status call the newest success stale past this
+  destination_env: HARNESS_BACKUP_DESTINATION      # names the variable holding the destination:
+                                 # an absolute host directory, ideally another disk; default <install-dir>/backups
+  encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY # restic password; generated into .env when unset
   local_retention_daily: 7
   local_retention_weekly: 4
   local_retention_monthly: 12
-  remote:
-    provider: none               # none | s3 | rclone | restic
-    destination_env: HARNESS_BACKUP_DESTINATION
-    encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY
-  restore_test:
-    enabled: true
+  remote:                        # off-site copy: not implemented yet (docs/backup.md, "Next")
+    provider: none
+  restore_test:                  # monthly restore rehearsal: not implemented yet
+    enabled: false
     schedule: "0 4 1 * *"
