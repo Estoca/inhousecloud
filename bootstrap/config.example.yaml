@@ -11,7 +11,8 @@ install:
   profile:
     core: true          # always on
     storage: false      # MinIO
-    ops: false          # Portainer, Glances
+    ops: false          # admin tools: Portainer, Glances, web terminal, file browser (the
+                        # interactive installer recommends them; admins only, docs/security.md)
 
 ingress:
   mode: local                    # local | private | public (see docs/install-design.md for the valid matrix)
@@ -82,9 +83,22 @@ ci:                              # the Gitea Actions runners are core: always in
   gitea_runner:
     registration_token_env: HARNESS_GITEA_RUNNER_TOKEN
 
-ops:
+ops:                             # the ops profile: harness-admins only, through the SSO
   portainer: false
   glances: false
+  wetty:                         # web terminal at terminal.<base_domain>: a shell on the HOST
+    enabled: true                # installed only when the host runs sshd; never fails the install
+    install_key: false           # true: add the dedicated key (<install-dir>/local/wetty/id_ed25519.pub)
+                                 # to ~/.ssh/authorized_keys of the user running install.sh.
+                                 # false: the handoff prints the one command that does it
+    ssh_port:                    # empty: the preflight finds sshd (sshd_config Port, then 22)
+  filebrowser:                   # file manager at files.<base_domain>
+    paths:                       # the only host paths it sees; ${install_dir} and
+                                 # ${backup_destination} are expanded. Refused: the install
+                                 # directory itself, apps/ (env files), local/ (keys), .env,
+                                 # the restic repository, home directories, system directories
+      app_data: ${install_dir}/app-data                 # one directory per app, its /data (rw)
+      backup_reports: ${backup_destination}/reports     # backup status and reports (read only)
 
 backup:                          # docs/backup.md
   enabled: true                  # false: no backup container, smoke test 14 skipped

@@ -5,10 +5,15 @@
 # except status lines and the Gitea login that resulted.
 #
 #   scripts/sso-login-check.sh --install-dir DIR [--user akadmin] [--password-env VAR]
+#       [--target URL [--expect allowed|denied]]
 #
 # Default user is akadmin with AUTHENTIK_BOOTSTRAP_PASSWORD from .env. Run it on the box
-# (it pins the public names to the proxy on 127.0.0.1). Not part of the smoke tests:
-# it needs a password, and the bootstrap password is meant to be replaced by a human.
+# (it pins the public names to the proxy on 127.0.0.1). Not part of the smoke tests with
+# akadmin: the bootstrap password is meant to be replaced by a human.
+# --target URL walks a forward-auth route instead of Gitea (an app, the portal, an ops
+# tool): allowed means the user ends on URL with HTTP 200 behind the SSO; denied means
+# Authentik refuses the user after a successful sign-in. Smoke test 18 runs it with the
+# smoke user (AUTHENTIK_SMOKE_USER) and --expect denied on the ops tools.
 set -eu
 HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
@@ -17,16 +22,20 @@ HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_DIR="${HARNESS_INSTALL_DIR:-/opt/open-company-harness}"
 USER_NAME=akadmin
 PASSWORD_ENV=AUTHENTIK_BOOTSTRAP_PASSWORD
+TARGET=""; EXPECT=allowed
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
     --user) USER_NAME="$2"; shift ;;
     --password-env) PASSWORD_ENV="$2"; shift ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --target) TARGET="${2%/}"; shift ;;
+    --expect) EXPECT="$2"; shift ;;
+    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
   shift
 done
+case "$EXPECT" in allowed|denied) ;; *) die "--expect is allowed or denied" ;; esac
 ENV_FILE="$INSTALL_DIR/.env"; STATE_FILE="$INSTALL_DIR/state.json"
 load_env
 eval "PASSWORD=\${$PASSWORD_ENV:-}"
@@ -37,6 +46,7 @@ JAR="$TMP/jar"; : > "$JAR"
 INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
 # shellcheck disable=SC2046
 R="$(curl_resolve "$AUTHENTIK_BASE_URL" | tr '\n' ' ') $(curl_resolve "$GITEA_BASE_URL" | tr '\n' ' ') $(curl_resolve "$PORTAL_BASE_URL" | tr '\n' ' ') $INSECURE"
+[ -n "$TARGET" ] && R="$R $(curl_resolve "$TARGET" | tr '\n' ' ')"
 
 # get URL -> sets CODE, LOCATION, BODY (no redirects followed)
 get() {
@@ -72,12 +82,56 @@ run_flow() {
         resp="$(post_json "$url" "$(jsonq build component=ak-stage-consent token="$(printf '%s' "$resp" | jsonq get token)")")" ;;
       xak-flow-redirect)
         printf '%s' "$resp" | jsonq get to; return 0 ;;
-      ak-stage-access-denied) die "flow $slug: access denied: $(printf '%s' "$resp" | jsonq get error_message)" ;;
+      ak-stage-access-denied)
+        [ "$EXPECT" = denied ] && { log "flow $slug: access denied"; printf '%s' "__DENIED__"; return 0; }
+        die "flow $slug: access denied: $(printf '%s' "$resp" | jsonq get error_message)" ;;
       "") die "flow $slug: empty or invalid response: $(printf '%.300s' "$resp")" ;;
       *) die "flow $slug: unhandled stage $component (errors: $(printf '%s' "$resp" | jsonq get response_errors))" ;;
     esac
   done
 }
+
+# denied_page: Authentik answered a page that refuses the signed-in user.
+denied_page() { printf '%s' "$BODY" | grep -qiE 'access-denied|permission denied|access denied|not allowed'; }
+
+if [ -n "$TARGET" ]; then
+  # A forward-auth route: target -> outpost -> Authentik sign-in -> authorize -> target.
+  step "SSO login: $TARGET -> Authentik ($USER_NAME) -> $TARGET, expecting $EXPECT"
+  url="$TARGET/"; hops=0; outcome=""
+  while :; do
+    hops=$((hops+1)); [ $hops -le 20 ] || die "too many redirects"
+    case "$url" in
+      "$AUTHENTIK_BASE_URL"/if/flow/*)
+        slug="${url#"$AUTHENTIK_BASE_URL"/if/flow/}"; slug="${slug%%/*}"
+        query="${url#*\?}"; [ "$query" = "$url" ] && query=""
+        to="$(run_flow "$slug" "$query")"
+        [ "$to" = __DENIED__ ] && { outcome=denied; break; }
+        url="$(abs "$to" "$AUTHENTIK_BASE_URL")"
+        continue ;;
+    esac
+    get "$url"
+    log "GET ${url%%\?*} -> $CODE"
+    case "$CODE" in
+      30[1237]|308) url="$(abs "$LOCATION" "$(origin "$url")")" ;;
+      200|403)
+        case "$url" in
+          "$AUTHENTIK_BASE_URL"/*) denied_page && outcome=denied || die "stopped on an Authentik page (HTTP $CODE) at ${url%%\?*}" ;;
+          "$TARGET"/*) [ "$CODE" = 200 ] && outcome=allowed || outcome=denied ;;
+          *) die "ended on an unexpected page (HTTP $CODE) at ${url%%\?*}" ;;
+        esac
+        break ;;
+      *) die "unexpected HTTP $CODE at ${url%%\?*}" ;;
+    esac
+  done
+  if [ "$outcome" = "$EXPECT" ]; then
+    ok "$USER_NAME: $outcome at $TARGET, as expected"
+    echo "sso-login-check: PASS user=$USER_NAME target=$TARGET outcome=$outcome"
+    exit 0
+  fi
+  fail "$USER_NAME: $outcome at $TARGET (expected $EXPECT)"
+  echo "sso-login-check: FAIL user=$USER_NAME target=$TARGET outcome=$outcome"
+  exit 1
+fi
 
 # Follow the browser's path, running every Authentik flow page through the executor API.
 step "SSO login: $GITEA_BASE_URL -> Authentik ($USER_NAME) -> Gitea"

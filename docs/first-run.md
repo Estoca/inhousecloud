@@ -35,7 +35,7 @@ Logs in with `PROXY_ADMIN_EMAIL` / `PROXY_ADMIN_PASSWORD` (the admin the proxy c
 - `git.<BASE_DOMAIN>` to `gitea:3000`
 - `portal.<BASE_DOMAIN>` to `portal:8080` with the forward-auth snippet (below)
 - with the `storage` profile: `s3.<BASE_DOMAIN>` and `s3-console.<BASE_DOMAIN>` to MinIO
-- with the `ops` profile: `portainer.<BASE_DOMAIN>` (its own login) and `glances.<BASE_DOMAIN>` (forward auth)
+- with the `ops` profile: `portainer.<BASE_DOMAIN>`, `glances.<BASE_DOMAIN>`, `files.<BASE_DOMAIN>` and, when the installer found an sshd for it, `terminal.<BASE_DOMAIN>`, each with the forward-auth snippet and nothing public, its Authentik application bound to `harness-admins` only (an existing binding to another group is removed). Portainer keeps its own login behind the SSO. The same block creates `harness-smoke-user`, a member of `harness-users` only, with the password `AUTHENTIK_SMOKE_USER_PASSWORD` from `.env`, for smoke test 18
 
 The forward-auth snippet is the one Authentik documents for nginx, in the host's advanced configuration: `auth_request` against `/outpost.goauthentik.io/auth/nginx`, the `X-authentik-*` headers passed to the app, anonymous requests redirected to `/outpost.goauthentik.io/start`. `GET /health` is left public so the installer and monitors can probe the app.
 
@@ -194,3 +194,36 @@ What the run exposed:
 | Deploy job, start to green, first deploy of a new app (round 1 / round 2) | 15 s / 15 s |
 
 Not covered: the install half of the path through an agent (the install itself is the same command the agent would run, tested above and in earlier records, but no cold agent asked the questions of section 1.2 yet), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (the fallback `codex exec` was not needed).
+
+## Test record: the ops tools (smoke tests 17 and 18)
+
+On a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9.1 rootless, sshd on 22), with `bootstrap/config.example.yaml` changed only in `install.profile.ops: true`, `ops.portainer`/`ops.glances: true` and `ops.wetty.install_key: true`:
+
+| Step | Time |
+|---|---|
+| VM created and started | 52 s |
+| `install.sh --non-interactive`, all 14 stages (first-run 33 s, optional_profiles with the terminal 33 s, smoke tests 39 s) | 317 s |
+| Smoke tests: 18 passed, 0 skipped (inside the install) | |
+| `install.sh --apply` again: 14 stages already completed | 0 s |
+| `sso-login-check.sh --target http://{terminal,files,portainer,glances}.<domain> --expect allowed` as akadmin | PASS ×4 |
+| `scripts/tests/ops-mounts.sh` | PASS |
+
+In a browser, signed in as akadmin through Authentik: `terminal.` opened a shell on the VM as the installing user (a command ran and printed the host name); `files.` showed exactly `apps/` (with `smoke-app/`) and `backup-reports/` (the status files), under a FileBrowser user created from the SSO header.
+
+Checked by hand on the first VM of this run:
+
+- **Writes.** The app container writes `/data` (`DATA_DIR=/data`), and the file lands in `app-data/smoke-app/`; FileBrowser writes there too; a write to `/srv/backup-reports` fails with "Read-only file system".
+- **Terminal disabled.** With `ops.wetty.enabled: false` the install completes, Wetty is not running, the handoff and `state.json` say why, and tests 17 and 18 pass on the three other tools. The same branch runs when the preflight finds no sshd: the detector returns nothing inside a container without sshd and `22` on the host.
+- **Key not installed.** With `ops.wetty.install_key: false` and the key line removed from `authorized_keys`, the terminal comes up as "up, key not authorized" in `state.json` and the handoff prints the one `cat … >> ~/.ssh/authorized_keys` command.
+- **Migration.** A binding of `harness-users` added by hand to the `ops-files` application is removed by the next `first-run.sh`, and the smoke user is denied again.
+- **Interactive questions.** "Enable the ops tools (Portainer, Glances, web terminal, file browser)?" defaults to yes, followed by the authorized_keys question; the preflight prints the sshd port and the two file browser paths.
+
+What broke on the way:
+
+- **`host.docker.internal` does not reach the host's sshd under rootless Docker**: `host-gateway` resolves to the gateway inside rootlesskit's namespace, where nothing listens. The installer now tries it, then the host's own address (`ip route get`), and keeps the first one where the key sign-in works; on rootful Docker and Docker Desktop the first try should succeed (not tested).
+- The installer read the image name with an inline comment from `docker/.env.example` (`WETTY_IMAGE=… # …`), and `dc up` failed silently inside the loop. The comment moved to its own line, and a failed `dc up` of Wetty is now logged.
+- `derive_ops` ended with `[ -n "$SSHD_PORT" ] && WETTY_ON=true`, which returns 1 under `set -e` when there is no sshd: the installer exited with no message exactly in the no-sshd case. Fixed with `if`.
+- The smoke user's password went through `env_secret … _`, whose indirection read bash's `$_` (the previous command's last argument) as a value supplied by the environment. It now has its own variable, `HARNESS_AUTHENTIK_SMOKE_USER_PASSWORD`, and is generated when that is unset.
+- The path rule refused `backups/reports` when the backup destination sits inside the install directory (the default). The rule now allows `<destination>/reports` wherever the destination is.
+
+Not tested: rootful Docker and Docker Desktop (the `host.docker.internal` path), a host without sshd end to end (only the detector and the skip branch), ingress other than `local/off`, an app image that drops to a non-root user writing `/data`.

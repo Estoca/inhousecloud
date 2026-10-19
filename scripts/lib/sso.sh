@@ -139,7 +139,7 @@ location = @HEALTH_PATH@ {
     proxy_pass $forward_scheme://$server:$port$request_uri;
     proxy_set_header Host $host;
 }
-
+@END_HEALTH@
 location / {
     proxy_pass $forward_scheme://$server:$port$request_uri;
     proxy_set_header Host $host;
@@ -188,10 +188,45 @@ location @goauthentik_proxy_signin {
 }'
 
 # forward_auth_conf HEALTH_PATH: the advanced config of a protected host, with
-# HEALTH_PATH (one exact path, e.g. /health) left public.
+# HEALTH_PATH (one exact path, e.g. /health) left public. An empty HEALTH_PATH leaves
+# nothing public (the ops tools).
 forward_auth_conf() {
   local tpl="$FORWARD_AUTH_TEMPLATE"
-  printf '%s' "${tpl/@HEALTH_PATH@/$1}"
+  if [ -z "$1" ]; then
+    printf '%s' "$tpl" | awk '/^# Health stays public/{skip=1} !skip{print} /^@END_HEALTH@/{skip=0}'
+  else
+    tpl="${tpl/@HEALTH_PATH@/$1}"
+    printf '%s' "${tpl/@END_HEALTH@
+/}"
+  fi
+}
+
+# ensure_admin_tool SLUG NAME HOST GROUP_PK: the Authentik side of an ops tool. Proxy
+# provider (forward auth, nothing public), application bound to GROUP_PK only, and the
+# embedded outpost serving it. The caller adds the proxy host with forward_auth_conf "".
+ensure_admin_tool() {
+  local slug="$1" name="$2" host="$3" gpk="$4" url prov app
+  url="https://$host"; [ "${TLS_MODE:-off}" = off ] && url="http://$host"
+  prov="$(ensure_proxy_provider "$slug" "$url" "")"
+  app="$(ensure_application "$slug" "$name" "$prov" "$url")"
+  outpost_serve "$prov" >/dev/null
+  ensure_admin_binding "$app" "$gpk" "$slug"
+}
+
+# ensure_admin_binding APP_PK GROUP_PK LABEL: the application's only binding is GROUP_PK;
+# bindings to any other group (e.g. harness-users from an older install) are removed.
+ensure_admin_binding() {
+  local pk
+  api GET "$AK/policies/bindings/?target=$1"
+  api_ok || die "list bindings: HTTP $API_CODE"
+  for pk in $(printf '%s' "$API_BODY" | $PY -c 'import json,sys
+for b in json.load(sys.stdin).get("results",[]):
+    if b.get("group") and b["group"]!=sys.argv[1]: print(b["pk"])' "$2"); do
+    api DELETE "$AK/policies/bindings/$pk/"
+    api_ok || die "remove binding $pk from $3: HTTP $API_CODE"
+    ok "binding of $3 to another group removed"
+  done
+  ensure_binding "$1" "$2" "$3 <- admins only"
 }
 
 ensure_proxy_host() { # HOST FORWARD_HOST FORWARD_PORT ADVANCED_CONFIG
