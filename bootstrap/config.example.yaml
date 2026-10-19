@@ -18,7 +18,7 @@ ingress:
   mode: local                    # local | private | public (see docs/install-design.md for the valid matrix)
   base_domain: harness.localhost
   public_base_url: http://portal.harness.localhost
-  tls_mode: off                  # off | internal | edge | acme
+  tls_mode: "off"                # off | internal | edge | acme (quoted: a bare off is YAML for false)
   tunnel_provider: none          # none | tailscale | cloudflared
   cloudflared:
     tunnel_token_env: HARNESS_CLOUDFLARED_TUNNEL_TOKEN
