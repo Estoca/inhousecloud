@@ -99,7 +99,7 @@ for m in scope-openid scope-email scope-profile; do
 done
 
 # OAuth2 provider for Gitea: probe by name, then create or reconcile.
-PROVIDER_BODY="$(jsonq build name=gitea authorization_flow="$AUTHZ_FLOW" invalidation_flow="$INVAL_FLOW" client_type=confidential client_id="$GITEA_OIDC_CLIENT_ID" client_secret="$GITEA_OIDC_CLIENT_SECRET" signing_key="$SIGNING_KEY" property_mappings:="$SCOPES" redirect_uris:="[{\"matching_mode\":\"strict\",\"url\":\"$GITEA_CALLBACK\"}]" sub_mode=hashed_user_id issuer_mode=per_provider)"
+PROVIDER_BODY="$(jsonq build name=gitea authorization_flow="$AUTHZ_FLOW" invalidation_flow="$INVAL_FLOW" client_type=confidential grant_types:='["authorization_code","refresh_token"]' client_id="$GITEA_OIDC_CLIENT_ID" client_secret="$GITEA_OIDC_CLIENT_SECRET" signing_key="$SIGNING_KEY" property_mappings:="$SCOPES" redirect_uris:="[{\"matching_mode\":\"strict\",\"url\":\"$GITEA_CALLBACK\"}]" sub_mode=hashed_user_id issuer_mode=per_provider)"
 GITEA_PROVIDER_PK="$(ak_list_find "providers/oauth2/?name=gitea" name gitea pk)"
 if [ -z "$GITEA_PROVIDER_PK" ]; then
   api POST "$AK/providers/oauth2/" "$PROVIDER_BODY"
@@ -364,8 +364,10 @@ api_init gt "Authorization: token $TOKEN"
 
 if [ "$GITEA_OIDC_ENABLED" = true ]; then
   # Gitea fetches the discovery document when the source is added, so the auth route
-  # must already answer by its public name from inside the container.
-  disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
+  # must already answer by its public name from inside the container. Probed with
+  # busybox wget: curl resolves every *.localhost name to loopback by itself and would
+  # never reach the proxy alias.
+  disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container"
   ok "OIDC discovery reachable from Gitea (issuer $disc)"
   SRC_ID="$(gitea_cli admin auth list 2>/dev/null | awk -F'\t' -v n="$GITEA_OIDC_SOURCE_NAME" 'NR>1 && $2==n {print $1}' | head -n 1)"

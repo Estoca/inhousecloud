@@ -98,12 +98,25 @@ if [ -z "$row" ]; then result 11 gitea-oidc-source fail "source $GITEA_OIDC_SOUR
 elif printf '%s' "$row" | grep -qi 'false'; then result 11 gitea-oidc-source fail "source exists but is disabled"
 else result 11 gitea-oidc-source pass "source $GITEA_OIDC_SOURCE_NAME enabled"; fi
 
-# 12. authenticated clone (ls-remote) against Gitea, from inside the container so the
-#     public name resolves; the token goes in through the environment.
-head_ref="$(docker exec -i -e GITEA_READONLY_TOKEN -e GITEA_ADMIN_USERNAME -e GITEA_SMOKE_REPOSITORY "$GITEA_CID" sh -c '
-printf "#!/bin/sh\ncase \"\$1\" in *sername*) printf \"%%s\\\\n\" \"\$GITEA_ADMIN_USERNAME\";; *) printf \"%%s\\\\n\" \"\$GITEA_READONLY_TOKEN\";; esac\n" > /tmp/askpass && chmod 700 /tmp/askpass
-GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null; rm -f /tmp/askpass' | awk '{print $2}' | head -n 1)"
-[ "$head_ref" = HEAD ] && result 12 git-ls-remote pass "HEAD returned for ${GITEA_SMOKE_REPOSITORY#*://}" || result 12 git-ls-remote fail "ls-remote returned nothing"
+# 12. authenticated clone (ls-remote) against Gitea with the read-only token. From the
+#     host by the public URL when the name resolves here (Linux resolves *.localhost to
+#     loopback, where the proxy listens); otherwise from inside the Gitea container by
+#     the internal URL, since curl (and so git) resolves *.localhost itself and skips
+#     the network alias. The token reaches git through GIT_ASKPASS, never an argument.
+GITEA_CID="$(dc ps -q gitea | head -n 1)"
+ASKPASS_SRC='#!/bin/sh
+case "$1" in *sername*) printf "%s\n" "$GITEA_ADMIN_USERNAME" ;; *) printf "%s\n" "$GITEA_READONLY_TOKEN" ;; esac'
+head_ref=""; where=""
+if have git && $PY -c 'import socket,sys;socket.gethostbyname(sys.argv[1])' "$GITEA_HOST" 2>/dev/null; then
+  ap="$(mktemp "${TMPDIR:-/tmp}/harness-askpass.XXXXXX")"; printf '%s\n' "$ASKPASS_SRC" > "$ap"; chmod 700 "$ap"
+  head_ref="$(GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
+  rm -f "$ap"; where="from the host, ${GITEA_SMOKE_REPOSITORY#*://}"
+else
+  internal="http://127.0.0.1:3000/${GITEA_SMOKE_REPOSITORY#"$GITEA_BASE_URL"/}"
+  head_ref="$(printf '%s\n' "$ASKPASS_SRC" | docker exec -i -e GITEA_READONLY_TOKEN -e GITEA_ADMIN_USERNAME -e REPO="$internal" "$GITEA_CID" sh -c 'cat > /tmp/askpass && chmod 700 /tmp/askpass && GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0 git ls-remote "$REPO" HEAD 2>/dev/null; rm -f /tmp/askpass' | awk '{print $2}' | head -n 1)"
+  where="inside the container, ${internal#*://}"
+fi
+[ "$head_ref" = HEAD ] && result 12 git-ls-remote pass "HEAD returned $where" || result 12 git-ls-remote fail "ls-remote returned nothing ($where)"
 
 # 13. the portal's database role is isolated
 row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT rolname, rolsuper FROM pg_roles WHERE rolname='$PORTAL_DB_ROLE';" 2>/dev/null | tr -d '[:space:]')"

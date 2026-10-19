@@ -8,8 +8,9 @@ PY="python3 -I"
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
 
 # ------------------------------------------------------------------ output
-# With --json, human output goes to stderr and stdout carries only the final JSON.
-_out() { if [ "$JSON_OUTPUT" = true ]; then printf '%s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
+# Human output always goes to stderr: stdout carries data (ids captured by callers,
+# the final JSON with --json).
+_out() { printf '%s\n' "$*" >&2; }
 log()  { _out "    $*"; }
 step() { _out "==> $*"; }
 ok()   { _out "[ok] $*"; }
@@ -140,7 +141,7 @@ api_init() {
       printf 'silent\nshow-error\nmax-time = 60\n'
       printf 'header = "Accept: application/json"\n'
       printf 'header = "Content-Type: application/json"\n'
-      [ -n "$2" ] && printf 'header = "%s"\n' "$2"
+      if [ -n "$2" ]; then printf 'header = "%s"\n' "$2"; fi
     } > "$API_CFG"
   )
 }
