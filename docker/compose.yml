@@ -8,6 +8,7 @@
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node (ingress private)
 #   backup       the backup job (on when BACKUP_ENABLED=true; docs/backup.md)
+#   agent        the operator agent and its read-only Docker API (docs/operator-contract.md)
 # The Gitea Actions runners (gitea-runner, gitea-deployer) are core: push to main deploys.
 # A leftover `ci` in COMPOSE_PROFILES selects nothing and does no harm.
 #
@@ -549,12 +550,94 @@ services:
       retries: 3
       start_period: 10s
 
+  # ----------------------------------------------------------------- agent
+  # The operator agent (docs/operator-contract.md, docs/security.md), off unless the
+  # `agent` profile is on. Reference implementation: OpenClaw. It reads the Docker API
+  # through agent-docker-proxy only (GET allowlist, Env as names only; writes only with
+  # ops.agent.allow_write), never the socket, the install directory or its .env. Its LLM
+  # key and chat tokens are AGENT_* variables a human puts in .env.
+  agent-docker-proxy:
+    profiles: ["agent"]
+    image: ${AGENT_PROXY_IMAGE:-python:3.13-alpine}
+    command: ["python3", "-I", "/app/docker-ro-proxy.py"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      HARNESS_PROJECT: ${COMPOSE_PROJECT_NAME:-harness}
+      AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./agent-proxy:/app:ro
+    networks: [agent]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:2375/_ping',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  agent:
+    profiles: ["agent"]
+    image: ${OPENCLAW_IMAGE:-openclaw/openclaw:latest}
+    # The gateway listens on the container's loopback only: no port, no route. People
+    # reach the agent through the chat channel; the admin through `docker compose exec`.
+    command: ["node", "dist/index.js", "gateway", "--bind", "loopback", "--port", "18789"]
+    user: ${AGENT_USER:-1000:1000}
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      agent-docker-proxy:
+        condition: service_healthy
+    environment:
+      HOME: /agent/state/home
+      OPENCLAW_HOME: /agent/state/home
+      OPENCLAW_STATE_DIR: /agent/state
+      OPENCLAW_CONFIG_PATH: /agent/state/openclaw.json
+      OPENCLAW_WORKSPACE_DIR: /agent/workspace
+      OPENCLAW_NO_RESPAWN: "1"
+      NODE_COMPILE_CACHE: /agent/state/compile-cache
+      PATH: /agent/workspace/reference/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      TZ: ${AGENT_TZ:-UTC}
+      ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY:-}
+      SLACK_BOT_TOKEN: ${AGENT_SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${AGENT_SLACK_APP_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${AGENT_TELEGRAM_BOT_TOKEN:-}
+      GITEA_READONLY_TOKEN: ${GITEA_READONLY_TOKEN:-}
+      AGENT_GITEA_TOKEN: ${AGENT_GITEA_TOKEN:-}
+      HARNESS_DOCKER_API: http://agent-docker-proxy:2375
+      HARNESS_GITEA_URL: http://gitea:3000
+      HARNESS_BACKUP_REPORTS: /harness/backup-reports
+      HARNESS_BASE_DOMAIN: ${BASE_DOMAIN:-}
+    volumes:
+      - ${AGENT_DIR:-./agent}/state:/agent/state
+      - ${AGENT_DIR:-./agent}/workspace:/agent/workspace
+      - ${AGENT_DIR:-./agent}/reference:/agent/workspace/reference:ro
+      - ${AGENT_BACKUP_REPORTS_DIR:-./backups/reports}:/harness/backup-reports:ro
+    networks: [harness, agent]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
 networks:
   harness:
     name: ${HARNESS_NETWORK}
   ops:
     # Ops tools and the proxy only. Not internal: Wetty needs the route to the host's sshd.
     name: ${HARNESS_OPS_NETWORK:-harness-ops}
+  agent:
+    # The agent and its read-only Docker API only. Internal: the proxy has no way out.
+    name: ${HARNESS_AGENT_NETWORK:-harness-agent}
+    internal: true
 
 volumes:
   proxy-data:

@@ -3,11 +3,12 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 19. Test 14 runs `harness-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 20. Test 14 runs `harness-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core); the app stays on the box. Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
-# storage and is skipped only when the storage profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# storage and is skipped only when the storage profile is off; test 20 covers the operator
+# agent and is skipped when the agent profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   HARNESS_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -318,6 +319,100 @@ PY
     || result 19 object-storage fail "${bad# }"
 }
 if [ "$STORAGE" = true ]; then t19; else result 19 object-storage skip "storage profile off"; fi
+# 20. the operator agent (agent profile): its two containers are healthy; the brief is
+#     generated, names every core service and holds no value of .env or of an app's env
+#     file; the Docker API it sees refuses writes (a restart of a core container and a
+#     container create, whatever ops.agent.allow_write says) and returns Env as names
+#     only; the agent has no Docker socket, no mount that reaches the install directory's
+#     .env, apps/ or local/, no place on the ops network, and no harness secret in its
+#     environment except the read-only Gitea token and its own AGENT_* keys.
+AGENT=false; case ",$COMPOSE_PROFILES," in *,agent,*) AGENT=true ;; esac
+t20() {
+  local bad="" h acid pgid out insp
+  for s in agent-docker-proxy agent; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
+  [ -z "$bad" ] || { result 20 operator-agent fail "not healthy:$bad"; return; }
+  acid="$(dc ps -q agent | head -n 1)"; pgid="$(dc ps -q postgres | head -n 1)"
+  out="$($PY - "$AGENT_DIR/reference" "$ENV_FILE" "$INSTALL_DIR" <<'PY'
+import json, os, re, sys
+ref, envf, inst = sys.argv[1:4]
+sec = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY|DATABASE_URL|REDIS_URL)")
+def env(p):
+    d = {}
+    for l in open(p).read().splitlines():
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', l)
+        if m: d[m.group(1)] = m.group(2).strip().strip('"')
+    return d
+try:
+    b = json.load(open(os.path.join(ref, "brief.json"))); md = open(os.path.join(ref, "brief.md")).read()
+except (OSError, ValueError) as e:
+    print("brief missing or invalid: %s" % e); sys.exit()
+vals = [v for k, v in env(envf).items() if sec.search(k) and len(v) >= 8]
+appd = os.path.join(inst, "apps")
+for s in (os.listdir(appd) if os.path.isdir(appd) else []):
+    f = os.path.join(appd, s, ".env")
+    if os.path.isfile(f): vals += [v for k, v in env(f).items() if sec.search(k) and len(v) >= 8]
+text = json.dumps(b) + md
+svcs = {s["service"] for s in b.get("services", [])}
+miss = {"proxy", "authentik-server", "postgres", "redis", "gitea", "portal"} - svcs
+if any(v in text for v in vals): print("brief contains a secret value")
+elif miss: print("brief misses services: %s" % ",".join(sorted(miss)))
+elif not b.get("access_matrix"): print("brief has no access matrix")
+else: print("ok %d services, %d apps, %d credentials" % (len(svcs), len(b.get("apps", [])), len(b["access_matrix"])))
+PY
+)"
+  case "$out" in ok*) ;; *) bad="$bad brief:$out" ;; esac
+  # The Docker API as the agent sees it.
+  out="$(docker exec -i "$acid" node - "$pgid" <<'JS' 2>&1
+const api = process.env.HARNESS_DOCKER_API, pg = process.argv[2];
+const r = async (m, p) => (await fetch(api + p, { method: m })).status;
+(async () => {
+  const restart = await r("POST", `/containers/${pg}/restart`);
+  const create = await r("POST", "/containers/create");
+  const del = await r("DELETE", `/containers/${pg}`);
+  const list = await r("GET", "/containers/json");
+  const env = (await (await fetch(`${api}/containers/${pg}/json`)).json()).Config.Env;
+  console.log(`restart=${restart} create=${create} delete=${del} list=${list} envvalues=${env.filter((e) => e.includes("=")).length}`);
+})().catch((e) => console.log("error " + e.message));
+JS
+)"
+  [ "$out" = "restart=403 create=403 delete=403 list=200 envvalues=0" ] || bad="$bad docker-api:$out"
+  # What the agent container can reach on the box.
+  insp="$(mktemp "${TMPDIR:-/tmp}/harness-smoke20.XXXXXX")"; docker inspect "$acid" > "$insp" 2>/dev/null || true
+  out="$($PY - "$INSTALL_DIR" "$ENV_FILE" "${HARNESS_OPS_NETWORK:-harness-ops}" "$insp" <<'PY'
+import json, os, re, sys
+inst, envf, opsnet, insp = sys.argv[1:5]
+try:
+    c = json.load(open(insp))[0]
+except (OSError, ValueError, IndexError):
+    print("cannot inspect the agent container"); sys.exit()
+bad = []
+guard = [os.path.realpath(p) for p in (envf, os.path.join(inst, "apps"), os.path.join(inst, "local"))]
+for m in c.get("Mounts", []):
+    src = os.path.realpath(m.get("Source", ""))
+    if m.get("Destination") == "/var/run/docker.sock" or src.endswith("docker.sock"): bad.append("docker socket mounted")
+    for g in guard:
+        if g == src or g.startswith(src.rstrip("/") + "/"): bad.append("mount %s reaches %s" % (src, g))
+if opsnet in (c.get("NetworkSettings", {}).get("Networks") or {}): bad.append("on the ops network")
+sec = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY)")
+allowed = re.compile(r"^(GITEA_READONLY_TOKEN|AGENT_[A-Z_]+)$")
+vals = {}
+for l in open(envf).read().splitlines():
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', l)
+    if m and sec.search(m.group(1)) and not allowed.match(m.group(1)):
+        v = m.group(2).strip().strip('"')
+        if len(v) >= 8: vals[v] = m.group(1)
+leak = sorted({vals[e.split("=", 1)[1]] for e in c["Config"]["Env"] if "=" in e and e.split("=", 1)[1] in vals})
+if leak: bad.append("harness secrets in its environment: " + ",".join(leak))
+print("; ".join(bad) or "ok")
+PY
+)"
+  rm -f "$insp"
+  [ "$out" = ok ] || bad="$bad isolation:$out"
+  docker exec "$acid" sh -c 'test -e /var/run/docker.sock' 2>/dev/null && bad="$bad socket-visible-in-container"
+  [ -z "$bad" ] && result 20 operator-agent pass "agent and its Docker API healthy; brief generated; POST/DELETE refused, Env as names; no socket, no .env, apps/ or local/, no ops network, no harness secret in its env" \
+    || result 20 operator-agent fail "${bad# }"
+}
+if [ "$AGENT" = true ]; then t20; else result 20 operator-agent skip "agent profile off"; fi
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

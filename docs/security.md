@@ -21,6 +21,34 @@ The `ops` profile (on by default in the interactive installer) adds four tools f
 - **No way around the SSO.** The four run on the `harness-ops` network, which only the proxy joins; apps on the `harness` network cannot reach them directly. They publish no host port and their routes leave no path public. FileBrowser trusts the `X-authentik-username` header only because nothing but the proxy can reach it.
 - **The smoke user.** With `ops`, first-run keeps `harness-smoke-user` in `harness-users` (no admin rights; password only in `.env`, 0600) so smoke test 18 can prove the denial with a real sign-in. It can open Gitea and the apps like any user; deactivate it in Authentik if you do not want it, and test 18 will then fail at the sign-in rather than at the denial.
 
+## The operator agent: the largest surface of the installation
+
+The `agent` profile (off by default) runs an LLM agent on the box that reads chat messages, logs and web pages, any of which can carry instructions written by someone else. It is therefore built to hold nothing whose loss would be worse than a wrong answer. Its rules are [`operator-contract.md`](operator-contract.md); this is what it can technically reach.
+
+| It sees | How |
+|---|---|
+| Containers, images, networks, volumes, disk usage, logs, process lists, stats | `agent-docker-proxy`, a read-only filter in front of the Docker socket (`docker/agent/docker-ro-proxy.py`): GET on an allowlist only; logs and stats never stream. **Every `Env` in a container or image inspect comes back as names only**: a plain socket proxy that allows `GET /containers/<id>/json` hands out every service's passwords, the backup key included |
+| Every service on the `harness` network, by name | it joins `harness` to run HTTP checks the way the proxy does (`http://proxy/` with a `Host` header, health endpoints). It holds no database or admin credential for any of them |
+| Gitea, read only | `GITEA_READONLY_TOKEN` (read:misc, read:repository, read:organization, read:user) |
+| The backup status | `<BACKUP_DESTINATION>/reports`, mounted read only |
+| The map of the box | `<install-dir>/agent/reference/` (read only): the contract, the runbooks, the generated brief (names and places of credentials, never values; the generator refuses to write one that contains a value) |
+| Its own LLM key and chat tokens | `AGENT_*` in `.env`, written by a human, passed to its container by name |
+
+| It does not see | Why |
+|---|---|
+| The Docker socket | only the filter has it; the filter's network (`harness-agent`) is internal |
+| The install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), `state.json`'s directory | not mounted; smoke test 20 checks every mount source |
+| Any harness secret in its environment | only `GITEA_READONLY_TOKEN` and `AGENT_*`; smoke test 20 compares its environment with `.env` |
+| The ops tools | not on `harness-ops` |
+| A shell on the host | none; what needs the host, it asks a human to run |
+| A port or route | the gateway listens on the container's loopback; people reach it through the chat channel only |
+
+Writes. By default none: every POST, PUT, DELETE through the filter answers 403, and the agent cannot restart even an app. `ops.agent.allow_write: true` adds exactly two: `POST /containers/<id>/restart` for a container of an app's Compose project (never one of the `harness` project) and `POST /build/prune` (the build cache, never images or volumes). Nothing else is ever on the list: no exec (exec is a shell), no create, no image or volume removal. Re-running a deploy needs a Gitea token that a human creates for it (`AGENT_GITEA_TOKEN`). Each request through the filter is logged (`docker compose logs agent-docker-proxy`).
+
+Who can talk to it. `ops.agent.allow_from` lists chat user ids; empty means pairing, and the admin approves each first DM (`docker compose exec agent node dist/index.js pairing approve <channel> <code>`). Anyone who can talk to it can make it read anything above and repeat it in the chat, logs included: keep the allow list to people who could read the logs anyway. Its LLM provider receives what it reads.
+
+What remains. On the `harness` network it can open a TCP connection to any service: the shared Redis's default user is still open to every container on that network (apps included; a known gap, to be closed), and a vulnerable service there is reachable from it as from any app. Logs can contain whatever an app chose to log. The OpenClaw image downloads channel plugins at first start, so it needs egress.
+
 ## Rules
 
 - Never store secrets in app manifests, compose files or `.env.example`.
