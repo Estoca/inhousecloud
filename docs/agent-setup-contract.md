@@ -1,173 +1,94 @@
 # Agent Setup Contract
 
-This document describes the target experience for installing Open Company App Harness with a terminal-connected LLM.
+What a terminal-connected coding agent may ask, must do and must never do on a company cloud built with this harness. The commands are in [`llm-bootstrap.md`](llm-bootstrap.md).
 
-The ideal user prompt is intentionally simple:
-
-```text
-Clone this repository and set up this machine as an internal company cloud.
-Explain what you will install before changing anything.
-```
-
-The agent should be able to read the repository, understand the stack, ask for missing decisions, generate a plan, apply approved steps, and leave the machine ready to deploy its first internal app.
-
-## Target Experience
-
-1. The user sends the public repository URL to an LLM with terminal access.
-2. The LLM clones the repository.
-3. The LLM reads the README, architecture, quickstart, bootstrap playbook, compose files, schemas, and templates.
-4. The LLM explains the whole stack before making changes.
-5. The LLM asks for required local choices and credentials.
-6. The LLM generates an inspectable setup plan.
-7. The user approves the plan.
-8. The LLM installs and configures the approved services.
-9. The LLM verifies the stack and reports URLs, credentials handling, health, and next steps.
-10. The machine is ready for a new app deploy flow.
-
-## What The Agent Must Explain
-
-Before applying changes, the agent should explain:
-
-- which services will be installed;
-- why each service exists;
-- which ports, domains, and local paths will be used;
-- which data will persist on disk;
-- which generated files may contain secrets;
-- which actions require human approval;
-- how to stop, inspect, update, and back up the stack;
-- how the first app deploy will work after bootstrap.
-
-## Reference Services
-
-The default single-box cloud includes:
-
-- `cloudflared` or another tunnel for public ingress;
-- Nginx Proxy Manager, Traefik, Caddy, or nginx for reverse proxying;
-- Authentik, Authelia, OAuth2 Proxy, or another auth gateway for SSO;
-- Gitea, GitHub Enterprise, GitLab, or GitHub for source control and automation;
-- Docker Compose as the runtime;
-- Portainer for container and stack inspection;
-- Glances for host observability;
-- Postgres and Redis as common shared services;
-- an app portal (read-only) for inventory, deploys, health, and drift;
-- deploys by push to `main`, run on the box by Gitea Actions (`docs/gitops-flow.md`);
-- one repository per internal app.
-
-The reference ingress path is:
+## The two requests this contract covers
 
 ```text
-user -> tunnel -> reverse proxy -> auth gateway -> app
+"Set up this machine as our company cloud."              -> install (llm-bootstrap.md, section 1)
+"Build an internal app for X and put it on the air."      -> create an app (llm-bootstrap.md, section 2)
 ```
 
-## Questions The Agent Should Ask
+Before either, run section 0 of the playbook to learn whether the cloud is already installed. A box with `status: completed` is never reinstalled.
 
-The agent should ask only for values it cannot infer safely:
+## How it works today
 
-- install directory;
-- internal base domain;
-- tunnel provider and token setup method;
-- reverse proxy choice;
-- auth provider choice;
-- Git provider choice;
-- initial admin email;
-- initial admin username, when needed;
-- initial admin password or permission to generate one locally;
-- default database/cache/storage choices;
-- whether Docker services may be started now;
-- whether public routes or DNS records may be created now.
-
-The agent must never ask the user to paste long-lived secrets into committed files.
-
-## Required Safety Behavior
-
-The agent must:
-
-- run plan mode before apply mode;
-- keep generated config under `local/` or another ignored path;
-- avoid committing secrets;
-- avoid deleting existing data;
-- avoid overwriting existing repositories, volumes, databases, or proxy routes;
-- request explicit approval before starting services or changing external routing;
-- verify generated files and service health after each major phase;
-- produce a final report with what changed and what still needs manual setup.
-
-## Bootstrap Phases
-
-The installer (`install.sh`, built from `docs/install-design.md`) is the whole path: the agent runs it and answers its questions, through a config file. The phases below map to its modes.
-
-### 1. Inspect
-
-Read the repository and inspect the host:
-
-```bash
-git status --short
-docker --version
-docker compose version
-./install.sh status --install-dir /opt/open-company-harness   # fails cleanly on a fresh box
+```text
+install.sh                     one command: secrets, services, SSO, Git, runners, smoke tests
+harness-app.sh new <slug>      app repository from templates/app, created in the Gitea organization
+git push origin main           the deploy: Gitea Actions on the box provisions and starts the app
+http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in; /health public
 ```
 
-If Docker or Compose v2 is missing, stop and report prerequisites instead of improvising an installation.
+A push to `main` of the app's repository is the only approval a deploy needs. The deploy job ([`gitops-flow.md`](gitops-flow.md)) gives the app its own database and role on the shared Postgres, a Redis user limited to its key prefix, an env file on the box, the route and the SSO application, builds it, starts it and waits for its healthcheck. Nobody else has to act for the app to go live.
 
-### 2. Plan
+## Install: what to ask the human
 
-Write the answers to a local, ignored config file and ask the installer for its plan:
+Ask once, all together, offering the defaults from [`bootstrap/config.example.yaml`](../bootstrap/config.example.yaml):
 
-```bash
-mkdir -p local && cp bootstrap/config.example.yaml local/config.yaml
-./install.sh --plan --config local/config.yaml
-```
+1. install directory;
+2. ingress mode (`local`, `private`, `public`) and base domain;
+3. admin email;
+4. Gitea organization name;
+5. backup destination, ideally another disk;
+6. optional profiles: object storage (`storage`), Portainer and Glances (`ops`);
+7. for `private` or `public`: the name of the environment variable that holds the tunnel token (they export it; you never see it).
 
-Preflight validates Docker, disk, memory, ports and the ingress matrix and refuses what it cannot install. Review the plan with the user.
+Then show `./install.sh --plan` and ask: "apply this plan?". That yes covers starting the services.
 
-### 3. Apply
+## Install: what never to ask
 
-After approval, one command does everything: secrets, images, networks and volumes, every service in order with its healthcheck, the first access, the smoke tests, the handoff:
+- Passwords, API tokens, keys, bootstrap credentials. The installer generates all of them into `<install-dir>/.env` (0600).
+- Anything already in the config with a sensible default (ports, image versions, group names, backup schedule).
+- To paste a secret into the chat or into a file in a repository.
 
-```bash
-./install.sh --non-interactive --config local/config.yaml --json
-```
+## App: what to ask the human
 
-Starting services is part of this step; the separate approval the contract asks for is the approval of the plan. Public routes and DNS records are never created by the installer.
+Only what changes the app, and only if the request does not say it:
 
-### 4. Resume
+- what the app must do (fields, screens, who uses it), in a few lines;
+- who owns it (an email); if nobody says, the install's admin email, stated in the report.
 
-A failed stage prints its cause and the resume command; nothing is rolled back and completed stages are skipped:
+Pick the slug yourself from the request (`despesas`, `expense-report`) and say it. Do not ask about databases, ports, domains, auth or deploys: the harness decides them.
 
-```bash
-./install.sh --apply --install-dir <dir> --from <stage>
-```
+## The agent must
 
-### 5. Verify
+- Run commands on the box, as the user that installed it. From another machine, through `ssh`.
+- Use `install.sh` to install and `scripts/harness-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
+- Keep the app inside [`app-contract.md`](app-contract.md): listen on `PORT`, answer `/health`, read `DATABASE_URL` and `REDIS_URL`, create its tables on start, take the user from the `X-authentik-*` headers.
+- Push to `main` to deploy, then confirm three things before saying it is live:
+  1. the deploy run of the pushed commit is `success`;
+  2. `GET http://<slug>.<BASE_DOMAIN>/health` answers 200;
+  3. `GET http://<slug>.<BASE_DOMAIN>/` answers 302 to the sign-in.
+- On a failed run, read the job log, fix the cause in the app repository and push again. The harness's errors say what to change.
+- Report: the URL, the repository, the owner, what the human must do (sign in; for a non-local ingress, open the URL from the company network).
 
-`./install.sh status --install-dir <dir> --json` is the source of the report. The smoke tests (`docs/smoke-tests.md`) have already checked:
+## The agent never
 
-- every core container is running and healthy;
-- the shared Postgres and Redis answer;
-- Authentik is live and ready and publishes OIDC discovery with the expected issuer;
-- Gitea answers its API, has the OIDC source, and an authenticated `ls-remote` works;
-- the proxy routes the local names, and the portal route redirects anonymous requests to the outpost;
-- the portal answers `/health`;
-- the portal's database role is not a superuser.
+- adds `postgres`, `redis`, `minio` (or `valkey`, `keydb`, `postgis`...) services to an app's `docker-compose.yml`: the app uses the shared ones through `DATABASE_URL`, `REDIS_URL`, `S3_*`;
+- mounts the Docker socket, uses `network_mode: host`, `privileged: true` or publishes host ports for an app;
+- reads or edits another app's `<install-dir>/apps/<other>/.env`, or edits its own by hand (`provision` writes it);
+- prints a secret: the values in `<install-dir>/.env` or any app env file. Key names only (`python3 scripts/lib/envfile.py keys <file>`);
+- drops a database or role, deletes a bucket, a Redis user, a proxy route, an Authentik object, a repository, a volume or the install directory. Removing an app is a human's job;
+- edits `.gitea/workflows/deploy.yml` of an app, or writes a workflow with `runs-on: harness-deploy` anywhere else;
+- changes Authentik, the proxy or Gitea settings by hand; `install.sh` and `harness-app` own them;
+- turns `auth.required` off, unless the human asked for a public app in those words;
+- runs on a box the human did not name, creates DNS records or tunnel routes, or applies an install plan without a yes.
 
-## Expected Final State
+## Human checkpoints
 
-At the end, the user should have:
+Stop and ask before:
 
-- a running single-box internal cloud;
-- local admin credentials stored outside Git;
-- Git hosting for the harness and apps;
-- SSO protecting internal routes;
-- container and host visibility;
-- a sample app template;
-- the deploy runner, so apps deploy from the box by push to `main` (`harness-app`, `docs/gitops-flow.md`);
-- a documented path for creating the next app with an LLM.
+- applying the install plan;
+- resuming an install with `--from` on a box that already serves apps;
+- anything that removes or overwrites data;
+- making an app public (`auth.required: false`);
+- creating DNS records, tunnels or anything outside the box.
 
-The agent should finish with a short report:
+Creating an app and pushing it to `main` is not a checkpoint when the human asked for the app: the push is the deploy they asked for.
 
-- installed services and profiles;
-- local URLs (`inventory.json` in the install directory);
-- public URLs, if any;
-- generated files, and the names of the credentials in `.env` (never their values);
-- smoke test results;
-- manual steps still required (`docs/first-run.md`: first login, MFA, bootstrap password, SMTP, DNS or tunnel);
-- how to create the first real app.
+## Done means
+
+For an install: `./install.sh status --json` says `completed`, the smoke tests passed, and the human has the URLs, the path of `.env` and the list of steps left to them.
+
+For an app: the three checks above pass, and the human has the URL and knows it asks for the company sign-in.

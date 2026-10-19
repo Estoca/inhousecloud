@@ -407,11 +407,18 @@ cmd_wait() {
   done
   ok "$host$M_HEALTH_PATH answers $code through the proxy"
   if [ "$M_AUTH" = true ]; then
-    loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $host" "$PROXY/" 2>/dev/null || echo 000)"
-    case "$loc" in
-      302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) ok "anonymous requests to / are sent to the Authentik sign-in" ;;
-      *) fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run harness-app provision $SLUG"; exit 1 ;;
-    esac
+    # The embedded outpost loads a new provider a few seconds after provision; until then
+    # the forward-auth call answers 500. Retry for up to 60 s before calling it unprotected.
+    t0=$(date +%s)
+    while :; do
+      loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $host" "$PROXY/" 2>/dev/null || echo 000)"
+      case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) break ;; esac
+      if [ $(( $(date +%s) - t0 )) -ge 60 ]; then
+        fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run harness-app provision $SLUG"; exit 1
+      fi
+      sleep 3
+    done
+    ok "anonymous requests to / are sent to the Authentik sign-in"
   fi
   ok "$SLUG is up at $(app_url "$SLUG")"
 }
