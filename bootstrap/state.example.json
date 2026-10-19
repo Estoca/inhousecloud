@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "installation_id": "00000000-0000-4000-8000-000000000000",
+  "status": "running",
+  "config_sha256": "sha256-of-the-config-file",
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "paths": {
+    "install_dir": "/opt/open-company-harness",
+    "env_file": ".env",
+    "compose_file": "compose.generated.yml"
+  },
+  "stages": {
+    "preflight": { "status": "completed", "attempts": 1, "started_at": "", "finished_at": "", "config_sha256": "", "probe": {}, "resources": [], "error_code": null, "resume_command": "install.sh --apply --from preflight" },
+    "plan": {},
+    "secrets": {},
+    "foundation": {},
+    "authentik": {},
+    "shared_data": {},
+    "proxy_ingress": {},
+    "gitea": {},
+    "portal": {},
+    "first_run": {},
+    "optional_profiles": {},
+    "smoke_tests": {},
+    "handoff": {}
+  },
+  "_stage_contract": {
+    "fields": ["status", "attempts", "started_at", "finished_at", "config_sha256", "probe", "resources", "error_code", "resume_command"],
+    "preflight": "Docker and Compose, disk, memory, ports, domain, ingress matrix",
+    "plan": "intended resources, profiles, derived URLs",
+    "secrets": "names, fingerprints and permissions only; never values",
+    "foundation": "networks, volumes, directories, rendered files",
+    "authentik": "dependencies, health, bootstrap, provider and outpost ids",
+    "shared_data": "shared Postgres and Redis; portal database and role",
+    "proxy_ingress": "proxy, certificate, tunnel, local route",
+    "gitea": "API healthy, admin, organization, OIDC source",
+    "portal": "migrations, health, admin group, protected route",
+    "first_run": "Authentik to Gitea, first login pending or done, groups",
+    "optional_profiles": "storage, ci and ops resources",
+    "smoke_tests": "result per test; no headers, cookies or tokens",
+    "handoff": "URLs, next steps, backup schedule, status command"
+  }
+}
