@@ -19,10 +19,11 @@ Companion files:
 
 | Profile | Services | When |
 |---|---|---|
-| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
+| `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the Gitea Actions runners (`gitea-runner` for CI, `gitea-deployer` for deploys by push to `main`, [`gitops-flow.md`](gitops-flow.md)), the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
 | `storage` | MinIO (S3-compatible object storage) | when an app declares object storage |
-| `ci` | Gitea Actions runners: `gitea-runner` for CI, `gitea-deployer` for deploys ([`gitops-flow.md`](gitops-flow.md)) | when apps deploy by push to `main` |
 | `ops` | Portainer, Glances | useful, never blocking |
+
+- **The runners are core, not a profile.** The base experience is "push to `main`, the app is on the air"; a box without a runner cannot do it. Configs with the old `install.profile.ci` or `ci.gitea_runner.enabled` still load: the value is ignored with a warning.
 
 Rules that came from the first box:
 
@@ -85,8 +86,8 @@ Preflight → plan → apply → verify → handoff. Copied from how agent frame
 14. `first-run`: Gitea admin and organization; Authentik bootstrap; OIDC between Authentik and Gitea; minimum groups; portal access.
 15. Protected route for the portal on the proxy with forward auth.
 16. Backup job: start the backup container, run and verify the first backup ([`backup.md`](backup.md)).
-17. Optional profiles: `storage`, `ops`, `ci` (both runners, the deployer image).
-18. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)); test 16 deploys an app by push when `ci` is on.
+17. The Gitea Actions runners (core, started once Gitea can issue their registration tokens) and the optional profiles: `storage`, `ops`.
+18. Smoke tests ([`docs/smoke-tests.md`](smoke-tests.md)); test 16 deploys an app by push to `main`.
 19. Write the final inventory, URLs, completed state and the status command.
 
 ## First Access: Automated Versus Human

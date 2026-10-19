@@ -291,7 +291,7 @@ docs/app-rules-example.md
 schemas/               JSON schema for company-app.yaml
 templates/app/         The app template harness-app new copies: runnable app, manifest, deploy workflow
 examples/minimal-web-app/  The placeholder portal
-docker/                compose.yml (profiles core, storage, ci, ops, backup), .env.example, backup/ and deployer/ images
+docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup), .env.example, backup/ and deployer/ images
 install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
 scripts/harness-app.sh new, provision, checkout, wait: the app loop (docs/gitops-flow.md)
@@ -355,7 +355,7 @@ Same path for an agent or CI, with the answers in a file:
 Part of the install, on by default. A small `backup` container runs `scripts/harness-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and MinIO volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
 
 ```bash
-export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # optional; default <install-dir>/backups
+export HARNESS_BACKUP_DESTINATION=/mnt/backup-disk/harness   # or answer the installer's question, or backup.destination in the config
 scripts/harness-backup.sh --install-dir /opt/open-company-harness run
 scripts/harness-backup.sh --install-dir /opt/open-company-harness verify --latest
 scripts/harness-backup.sh --install-dir /opt/open-company-harness status
@@ -365,7 +365,7 @@ Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository c
 
 ## Deploy an app
 
-With the `ci` profile on (`install.profile.ci: true`), on the box:
+On the box (the Actions runners are part of every install):
 
 ```bash
 scripts/harness-app.sh new expense-report --owner maria@example.com --install-dir /opt/open-company-harness

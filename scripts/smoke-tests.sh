@@ -5,7 +5,7 @@
 #
 # Runs tests 1 to 16. Test 14 runs `harness-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
-# main and is skipped only when the ci profile is off; the app stays on the box. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# main (never skipped: the runners are core); the app stays on the box. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   HARNESS_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -45,7 +45,7 @@ result() { # NUMBER NAME STATUS DETAIL
   esac
 }
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
-CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal"
+CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer"
 INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
 
 # 1. compose file valid
@@ -222,10 +222,7 @@ print(m[0].get("status","") if m else "")' "$sha")"
   if [ -n "$fp_before" ] && [ "$fp_before" != "$fp_after" ]; then result 16 app-deploy fail "the redeploy changed the database password"; return; fi
   result 16 app-deploy pass "push to green run in ${run}s; /health 200, / to the SSO, $db owned by its role$( [ -n "$fp_before" ] && echo ', password kept on redeploy')"
 }
-case ",${COMPOSE_PROFILES:-}," in
-  *,ci,*) t16 ;;
-  *) result 16 app-deploy skip "ci profile off: no runner to deploy with" ;;
-esac
+t16
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

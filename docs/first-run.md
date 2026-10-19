@@ -126,7 +126,7 @@ Not tested: macOS as the host (Docker Desktop must share the destination directo
 
 ## Test record: the app loop (smoke test 16)
 
-On a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless, socket `/run/user/<uid>/docker.sock`), with `bootstrap/config.example.yaml` changed only to `install.profile.ci: true` and `ci.gitea_runner.enabled: true`:
+On a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless, socket `/run/user/<uid>/docker.sock`). The first run used `bootstrap/config.example.yaml` with the then `ci` profile turned on; after the runners moved into core, a third clean VM ran the example config unchanged: install 230 s, 16 passed (core-healthy counts 10 services, the runners included), `new --push` to `/health` 200 in 14 s, a re-run of `install.sh --apply` with all 14 stages already completed.
 
 | Step | Time |
 |---|---|
@@ -147,6 +147,7 @@ Checked by hand on the same kind of VM:
 - **App that never gets healthy.** An app listening on 9090 instead of `runtime.port` 8080 fails `harness-app wait` after 240 s: `/health through the proxy answered '502' (wanted 200), container state 'running'`, the container log, and what to check.
 - **Object storage asked for with the `storage` profile off** fails before anything is created, with the profile to turn on.
 - **Redis ACL.** The app's user writes `smoke-app:*`, gets `NOPERM` on another app's keys, on `FLUSHALL` and on `KEYS`; after `docker restart` of Redis the user is still there (`/data/users.acl`).
+- **Interactive questions.** The backup destination is asked right after the Gitea organization; the default `<install-dir>/backups` and a path under a missing mount on the root disk both get the same-disk warning, and the answer lands in `backup.destination`. A config with the old `install.profile.ci` / `ci.gitea_runner.enabled` loads with a warning that they are ignored.
 - **Idempotency.** `install.sh --apply --from foundation` on the box with three apps: every Authentik, proxy and Gitea object "exists" or "reconciled", the deployer image rebuilt, `inventory.json` kept its `apps`, smoke tests 16/16 with the app's password unchanged, 54 s.
 
 What broke on the way:

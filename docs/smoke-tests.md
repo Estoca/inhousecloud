@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, after the optional profiles (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 18 of the install sequence, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -9,7 +9,7 @@ docker compose -f "$HARNESS_COMPOSE_FILE" config --quiet
 
 # 2. Every core service is running and healthy
 docker compose -f "$HARNESS_COMPOSE_FILE" ps --format json
-# PASS: all core services running/healthy
+# PASS: all core services running/healthy, the two Actions runners included
 
 # 3. The shared Postgres accepts connections
 docker compose -f "$HARNESS_COMPOSE_FILE" exec -T postgres \
@@ -70,7 +70,7 @@ scripts/harness-backup.sh --install-dir "$HARNESS_INSTALL_DIR" verify --latest -
 harness-install status --json
 # PASS: status = completed; no stage failed or pending
 
-# 16. An app reaches the air (skipped only when the ci profile is off)
+# 16. An app reaches the air (never skipped: the runners are core)
 scripts/harness-app.sh new smoke-app --install-dir "$HARNESS_INSTALL_DIR"   # or clone it when it exists
 git commit --allow-empty ... && git push origin main                        # a new commit every run
 curl -fsS -H "Authorization: token $GITEA_ADMIN_TOKEN" \

@@ -159,7 +159,7 @@ At the end, the user should have:
 - SSO protecting internal routes;
 - container and host visibility;
 - a sample app template;
-- the `ci` profile's deploy runner, when apps will deploy from the box (`harness-app`, `docs/gitops-flow.md`);
+- the deploy runner, so apps deploy from the box by push to `main` (`harness-app`, `docs/gitops-flow.md`);
 - a documented path for creating the next app with an LLM.
 
 The agent should finish with a short report:

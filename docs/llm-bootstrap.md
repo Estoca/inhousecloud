@@ -33,7 +33,8 @@ Everything the installer accepts is in `bootstrap/config.example.yaml`, with def
 - ingress mode (`local`, `private`, `public`) and base domain; the TLS mode and tunnel provider follow the matrix in `docs/install-design.md`;
 - admin email;
 - Gitea organization name;
-- which optional profiles to turn on (`storage`, `ci`, `ops`);
+- the backup destination (`backup.destination`, ideally another disk);
+- which optional profiles to turn on (`storage`, `ops`; the Actions runners are always installed);
 - for tunnels, the name of the environment variable holding the token (never the token itself).
 
 Secrets are never inputs: the installer generates every password, key and token into `<install-dir>/.env` with mode 0600. If the human wants to provide one, they export it in the environment variable named in the config (`*_env` keys) before the run.

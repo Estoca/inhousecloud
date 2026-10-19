@@ -68,7 +68,7 @@ Each app repository contains:
 
 ### Deploy Runner and Executor
 
-The `ci` profile runs two Gitea Actions runners. `gitea-runner` serves CI for any repository, with no Docker socket in its jobs. `gitea-deployer` serves the organization's repositories only (label `harness-deploy`) and gives its jobs the Docker socket, the harness network and the install directory.
+The core runs two Gitea Actions runners. `gitea-runner` serves CI for any repository, with no Docker socket in its jobs. `gitea-deployer` serves the organization's repositories only (label `harness-deploy`) and gives its jobs the Docker socket, the harness network and the install directory.
 
 An app's deploy workflow runs there on every push to `main`. Its executor is `scripts/harness-app.sh provision`: it validates the manifest and the compose file, then ensures the app's database and role on the shared Postgres, its Redis ACL user, its optional bucket, its env file in the install directory, the proxy route with forward auth, the Authentik application and the inventory record. Then the job builds the app, starts it on the harness network and waits for its healthcheck through the proxy. The executor is idempotent and never deletes. Details: [`gitops-flow.md`](gitops-flow.md).
 

@@ -76,7 +76,7 @@ The point is that the box's data lives in one place, is backed up by one job and
 
 ## The runners
 
-The `ci` profile runs two `act_runner` daemons ([`docker/compose.yml`](../docker/compose.yml)); `install.sh` renders their configuration into `<install-dir>/runner/`:
+The core runs two `act_runner` daemons ([`docker/compose.yml`](../docker/compose.yml)); `install.sh` renders their configuration into `<install-dir>/runner/`:
 
 | | `gitea-runner` | `gitea-deployer` |
 |---|---|---|

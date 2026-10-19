@@ -83,7 +83,6 @@ install:
   profile:
     core: true
     storage: $A_STORAGE
-    ci: $A_CI
     ops: $A_OPS
 ingress:
   mode: $A_INGRESS
@@ -135,7 +134,6 @@ portal:
     - $A_EMAIL
 ci:
   gitea_runner:
-    enabled: $A_CI
     registration_token_env: HARNESS_GITEA_RUNNER_TOKEN
 ops:
   portainer: $A_OPS
@@ -146,6 +144,7 @@ backup:
   timezone: UTC
   max_run_minutes: 240
   max_age_hours: 26
+  destination: $A_BACKUP
   destination_env: HARNESS_BACKUP_DESTINATION
   encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY
   local_retention_daily: 7
@@ -157,6 +156,16 @@ backup:
     enabled: true
     schedule: "0 4 1 * *"
 YAML
+}
+
+# existing_parent PATH: PATH or its nearest existing ancestor.
+existing_parent() { local p="$1"; while [ ! -e "$p" ] && [ "$p" != / ]; do p="$(dirname "$p")"; done; printf '%s' "$p"; }
+# same_disk A B: true when A and B (or their nearest existing ancestors) are on one file system.
+same_disk() {
+  local a b
+  a="$(df -P "$(existing_parent "$1")" 2>/dev/null | awk 'NR==2{print $1}')"
+  b="$(df -P "$(existing_parent "$2")" 2>/dev/null | awk 'NR==2{print $1}')"
+  [ -n "$a" ] && [ "$a" = "$b" ]
 }
 
 interactive_config() {
@@ -174,8 +183,10 @@ interactive_config() {
   esac
   ask A_EMAIL "Admin email (Authentik, Gitea and proxy admin)" "admin@example.com"
   ask A_ORG "Gitea organization" "company"
+  ask A_BACKUP "Backup destination (a path on another disk or mount)" "${HARNESS_BACKUP_DESTINATION:-${A_DIR%/}/backups}"
+  case "$A_BACKUP" in /*) ;; *) die "the backup destination must be an absolute path" ;; esac
+  same_disk "$A_BACKUP" "$(dirname "$A_DIR")" && warn "that is the same disk as the installation: a dead disk takes both. Fine for a try; for real use point it at another disk (docs/backup.md)"
   A_STORAGE=$(ask_yn "Enable object storage (MinIO)?" n)
-  A_CI=$(ask_yn "Enable the Gitea Actions runner?" n)
   A_OPS=$(ask_yn "Enable Portainer and Glances?" n)
   A_SCHEME=https; [ "$A_TLS" = off ] && A_SCHEME=http
   INSTALL_DIR="$A_DIR"
@@ -221,7 +232,10 @@ derive() {
   BIND_ADDRESS=0.0.0.0; [ "$INGRESS" = local ] && BIND_ADDRESS=127.0.0.1
   PROFILES=""
   [ "${CFG_install__profile__storage:-false}" = true ] || [ "${CFG_storage__provider:-none}" = minio ] && PROFILES="$PROFILES,storage"
-  [ "${CFG_install__profile__ci:-false}" = true ] || [ "${CFG_ci__gitea_runner__enabled:-false}" = true ] && PROFILES="$PROFILES,ci"
+  # The Gitea Actions runners are core (push to main deploys): no ci profile any more.
+  CI_IGNORED=""
+  [ -n "${CFG_install__profile__ci:-}" ] && CI_IGNORED="install.profile.ci"
+  [ -n "${CFG_ci__gitea_runner__enabled:-}" ] && CI_IGNORED="${CI_IGNORED:+$CI_IGNORED and }ci.gitea_runner.enabled"
   [ "${CFG_install__profile__ops:-false}" = true ] || [ "${CFG_ops__portainer:-false}" = true ] || [ "${CFG_ops__glances:-false}" = true ] && PROFILES="$PROFILES,ops"
   case "$TUNNEL_PROVIDER" in cloudflared|tailscale) PROFILES="$PROFILES,$TUNNEL_PROVIDER" ;; esac
   BACKUP_ENABLED="${CFG_backup__enabled:-true}"
@@ -229,9 +243,10 @@ derive() {
   PROFILES="${PROFILES#,}"
   BACKUP_DEST_ENV="${CFG_backup__destination_env:-${CFG_backup__remote__destination_env:-HARNESS_BACKUP_DESTINATION}}"
   BACKUP_KEY_ENV="${CFG_backup__encryption_key_env:-${CFG_backup__remote__encryption_key_env:-HARNESS_BACKUP_ENCRYPTION_KEY}}"
-  # Destination: the environment variable named in the config, else what .env already
-  # has, else <install-dir>/backups.
+  # Destination: the environment variable named in the config, else backup.destination,
+  # else what .env already has, else <install-dir>/backups.
   eval "BACKUP_DEST=\${$BACKUP_DEST_ENV:-}"
+  [ -z "$BACKUP_DEST" ] && BACKUP_DEST="${CFG_backup__destination:-}"
   [ -z "$BACKUP_DEST" ] && [ -f "$INSTALL_DIR/.env" ] && BACKUP_DEST="$($PY "$HARNESS_LIB/envfile.py" get "$INSTALL_DIR/.env" BACKUP_DESTINATION)"
   [ -z "$BACKUP_DEST" ] && BACKUP_DEST="$INSTALL_DIR/backups"
   BACKUP_DEST="${BACKUP_DEST%/}"
@@ -240,6 +255,8 @@ derive() {
 }
 
 has_profile() { case ",$PROFILES," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+# `ci` is kept as an alias: the runners are core, so it is always on.
+has_profile_ci() { return 0; }
 
 # ------------------------------------------------------------------ stages
 STAGES="$($PY "$HARNESS_LIB/state.py" /dev/null stages | tr '\n' ' ')"
@@ -299,6 +316,7 @@ stage_preflight() {
     cloudflared) eval "t=\${${CFG_ingress__cloudflared__tunnel_token_env:-HARNESS_CLOUDFLARED_TUNNEL_TOKEN}:-}"; [ -n "$t" ] && ok "cloudflared tunnel token present in the environment" || { fail "set ${CFG_ingress__cloudflared__tunnel_token_env:-HARNESS_CLOUDFLARED_TUNNEL_TOKEN} in the environment"; errors=$((errors+1)); } ;;
     tailscale) [ -n "${HARNESS_TAILSCALE_AUTHKEY:-}" ] && ok "tailscale auth key present in the environment" || { fail "set HARNESS_TAILSCALE_AUTHKEY in the environment"; errors=$((errors+1)); } ;;
   esac
+  [ -n "$CI_IGNORED" ] && warn "config: $CI_IGNORED ignored; the Gitea Actions runners are part of core now (docs/gitops-flow.md)"
   # Backup destination: warned about, not fatal (the backup stage fails on its own).
   if [ "$BACKUP_ENABLED" = true ]; then
     if case "$BACKUP_DEST" in /*) false ;; *) true ;; esac; then
@@ -307,8 +325,8 @@ stage_preflight() {
       [ -w "$BACKUP_DEST" ] && ok "backup destination writable: $BACKUP_DEST" || warn "backup destination not writable by $(id -un): $BACKUP_DEST. Fix with: sudo chown $(id -un) $BACKUP_DEST (or set $BACKUP_DEST_ENV to another path); the backup stage will fail until then"
     elif mkdir -p "$BACKUP_DEST" 2>/dev/null; then ok "backup destination created: $BACKUP_DEST"
     else warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"; fi
-    if [ -d "$BACKUP_DEST" ] && [ "$(df -P "$BACKUP_DEST" 2>/dev/null | awk 'NR==2{print $1}')" = "$(df -P "$(dirname "$INSTALL_DIR")" 2>/dev/null | awk 'NR==2{print $1}')" ]; then
-      warn "backup destination is on the same disk as the installation: a dead disk takes both. Point $BACKUP_DEST_ENV at another disk or mount (docs/backup.md)"
+    if same_disk "$BACKUP_DEST" "$(dirname "$INSTALL_DIR")"; then
+      warn "backup destination is on the same disk as the installation: a dead disk takes both. Set backup.destination (or $BACKUP_DEST_ENV) to another disk or mount (docs/backup.md)"
     fi
     eval "k=\${$BACKUP_KEY_ENV:-}"
     [ -n "$k" ] && ok "backup encryption key present in the environment ($BACKUP_KEY_ENV)" || log "backup encryption key: generated into .env unless $BACKUP_KEY_ENV is set; keep a copy off this box"
@@ -324,7 +342,7 @@ stage_preflight() {
 stage_plan() {
   local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal"
   has_profile storage && services="$services minio"
-  has_profile ci && services="$services gitea-runner gitea-deployer"
+  services="$services gitea-runner gitea-deployer"
   has_profile ops && services="$services portainer glances"
   has_profile cloudflared && services="$services cloudflared"
   has_profile tailscale && services="$services tailscale"
@@ -344,7 +362,7 @@ stage_plan() {
     log "backup            : disabled"
   fi
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
-  has_profile ci && log "deploys           : push to main of a repository in $(env_get GITEA_ORGANIZATION 2>/dev/null || echo the organization) runs on the gitea-deployer runner (label harness-deploy, image $INSTALL_DIR/deployer)"
+  log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label harness-deploy, image $INSTALL_DIR/deployer)"
   log "human afterwards  : DNS/tunnel, MFA for the admin, replace bootstrap password, SMTP (docs/first-run.md)"
   state stage plan set probe "$(jsonq build services="$services" profiles="core${PROFILES:+,$PROFILES}" portal_url="$PORTAL_BASE_URL" authentik_url="$AUTHENTIK_BASE_URL" gitea_url="$GITEA_BASE_URL" install_dir="$INSTALL_DIR")"
 }
@@ -543,7 +561,7 @@ stage_foundation() {
   step "pulling images and creating containers, network and volumes (first run takes a few minutes)"
   dc build --quiet portal >&2 || return 1
   has_profile backup && dc build --quiet backup >&2
-  if has_profile ci; then build_deployer || { fail "deployer image build failed"; return 1; }; fi
+  build_deployer || { fail "deployer image build failed"; return 1; }
   dc up --no-start --quiet-pull >&2
   state stage foundation set resources "$(docker volume ls --filter "label=com.docker.compose.project=$(env_get COMPOSE_PROJECT_NAME)" --format '{{.Name}}' | $PY -c 'import json,sys;print(json.dumps(["volume:"+l.strip() for l in sys.stdin if l.strip()]))')"
   state stage foundation set resources "[\"network:$(env_get HARNESS_NETWORK)\"]"
@@ -656,9 +674,11 @@ stage_smoke_tests() {
   "$HARNESS_ROOT/scripts/smoke-tests.sh" $args
 }
 
+# Starts the Gitea Actions runners (core, but they need registration tokens Gitea can only
+# issue once it runs, so they start here) and the optional profiles' services.
 stage_optional_profiles() {
   local svcs="" tok
-  if has_profile ci; then
+  if has_profile_ci; then
     tok="$(env_get GITEA_RUNNER_TOKEN)"
     if [ -z "$tok" ]; then
       tok="$(dc exec -T -u git gitea gitea actions generate-runner-token 2>/dev/null | tail -n 1 | tr -d '[:space:]')"

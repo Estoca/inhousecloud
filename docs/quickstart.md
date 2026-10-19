@@ -34,13 +34,12 @@ cp bootstrap/config.example.yaml local/config.yaml   # edit, then:
 
 What comes up, as Compose profiles of `docker/compose.yml` (`docs/install-design.md`):
 
-- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea, the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
+- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea with its two Actions runners (CI, and deploys by push to `main`), the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
 - `storage`: MinIO;
-- `ci`: the Gitea Actions runner;
 - `ops`: Portainer and Glances;
 - `cloudflared` or `tailscale`, chosen by the ingress mode.
 
-The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route), starts the backup job and runs the first backup (`docs/backup.md`; set `HARNESS_BACKUP_DESTINATION` to a directory on another disk first), then the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands.
+The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route), starts the backup job and runs the first backup (`docs/backup.md`; the installer asks for the backup destination, ideally a directory on another disk; in a config file it is `backup.destination`), then the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands.
 
 Then, by hand: copy `BACKUP_ENCRYPTION_KEY` from `.env` to a password manager; sign in to Authentik as `akadmin` with the bootstrap password from `.env`, enrol MFA and change it; set DNS or the tunnel for `private` and `public` ingress; configure SMTP.
 
@@ -77,7 +76,7 @@ Tell coding agents to read the live rules before copying patterns from existing 
 
 ## 5. Create the First App
 
-Turn on the `ci` profile (`install.profile.ci: true`; re-run `install.sh` if the box is already installed), then on the box:
+On the box:
 
 ```bash
 scripts/harness-app.sh new example-app --owner owner@example.com --install-dir /opt/open-company-harness
