@@ -76,7 +76,7 @@ A lesson from testing: curl resolves every `*.localhost` name to loopback by its
 
 Asked for, or left to you, never guessed:
 
-- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `OCC_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
+- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; on macOS 26.7 the names resolved natively in Chrome and `curl` too; only if one does not resolve, as in Safari, add it to `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `OCC_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
 - **First login, MFA, bootstrap password.** Sign in to Authentik as `akadmin` with `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`, enrol MFA, save recovery codes, then change the password; the value in `.env` is then stale by design.
 - **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours.
 - **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled.
@@ -336,3 +336,27 @@ What broke along the way:
 - **Found, not fixed here: Portainer and Glances do not start after a reboot under rootless Docker.** `docker/compose.yml` mounts `/var/run/docker.sock` for both instead of `${DOCKER_SOCKET}`, as the runners do; after the VM restart both exited with "not a directory" on that mount. A forced recreate brought them back for this run; the fix belongs to the ops profile.
 
 Not covered: installing the CA on Windows, iOS, Android and in Firefox (the handoff prints the commands; only macOS was used), Gitea over SSH through the tailnet (port 2222 is served; not tried from a device), `local` with `TLS_MODE=internal` (same code path for the CA, not run), a non-ephemeral or tagged key, an ephemeral node left offline long enough to be removed, and `public` ingress.
+
+## macOS run (Docker Desktop)
+
+The install on a Mac with no VM: Docker Desktop instead of Linux and rootless Docker.
+
+**Setup.** A Mac mini (Apple Silicon M4, macOS 26.7) with Docker Desktop: Docker 29.8, not rootless, Compose v5.5. `main` at `a0057a5` (before the rename; the names below are the current ones). A second agent on a Mac mini ran it from the repository's instructions: `local` ingress, profiles `core` and `backup`, the install directory in the user's home, no `sudo`.
+
+**Result.**
+
+| Check | Result |
+|---|---|
+| `install.sh status` | `completed` |
+| Smoke tests | 17 passed, 0 failed, 4 skipped (reported as storage, ops, agent and private: the profiles and ingress left off) |
+| Services | 11 healthy |
+| First backup | verified |
+| Test app deployed by a push to `main` | run green in 16 s; `/health` 200; `/` redirects to the sign-in |
+| Disk | 14 GiB free before, 8.6 GiB after |
+| Names | `*.<base>.localhost` resolved to `127.0.0.1` natively in Chrome and `curl`: no `/etc/hosts` line needed |
+
+**What it changed.**
+
+- `docs/try-it.md`: a Mac with Docker Desktop installs directly; Lima is the path for a Mac without Docker or for a throwaway VM.
+- `/etc/hosts` on macOS is a fallback ("if a name does not resolve, add it"), not a step, here, in `try-it.md` and in the handoff.
+- `install.sh --plan` printed "nothing was changed" after creating the backup directory in the preflight. The plan no longer creates it (it says "created on apply"), and its last line says what it did write: `state.json` and `config.yaml` in the install directory.

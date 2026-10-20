@@ -16,9 +16,22 @@ About 8 minutes, most of it waiting for the install. Step 3 downloads the contai
 
 ## What you need
 
-**macOS:** [Homebrew](https://brew.sh), and port 80 of the Mac free (nothing else listening on it, no other VM forwarding it). Lima runs the VM; Docker Desktop is not needed.
+**macOS with Docker Desktop:** nothing else. The cloud installs directly on the Mac, with no VM: see [Mac with Docker Desktop](#mac-with-docker-desktop-no-vm) below, then continue at step 4.
+
+**macOS without Docker, or if you want a throwaway VM:** [Homebrew](https://brew.sh), and port 80 of the Mac free (nothing else listening on it, no other VM forwarding it). Lima runs the VM; Docker Desktop is not needed. Steps 1 to 5 below.
 
 **Linux laptop, a VM or a VPS:** Ubuntu (tested: 26.04) with 2 CPUs, 4 GiB of memory, 10 GiB free disk, Docker Engine usable without `sudo` (rootless, or your user in the `docker` group) with Docker Compose v2, `git`, `curl` and `python3`, and `sudo` for one command. Skip step 1 and run the rest on that machine.
+
+## Mac with Docker Desktop (no VM)
+
+Docker Desktop running, with Compose v2, port 80 of the Mac free and about 10 GiB of free disk (the images take about 5.4 GiB). In a terminal on the Mac, no `sudo`, the install directory in your home (any path you own; `~/occ-install` here):
+
+```bash
+cd ~ && git clone https://github.com/Estoca/open-company-cloud.git && cd open-company-cloud
+./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/occ-install
+```
+
+Then follow steps 4 and 5 on the Mac itself, with `~/occ-install` wherever they say `/opt/open-company-cloud`. Tested on 2026-10-20 on a Mac mini (Apple Silicon, macOS 26.7, Docker Desktop with Docker 29.8 and Compose v5.5): core and backup, 17 smoke tests passed and 4 skipped (the profiles left off), a first app deployed by push in 16 s ([`first-run.md`](first-run.md#macos-run-docker-desktop)).
 
 ## 1. A clean VM (macOS)
 
@@ -80,7 +93,7 @@ python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/
 
 The portal is a placeholder today (it says it is running); the point is the sign-in in front of it. <http://git.cloud.localhost> is Gitea, with "Sign in with authentik".
 
-- Safari does not resolve `*.localhost` by itself: add `127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost` (and each app's name) to `/etc/hosts` on the Mac, or use another browser.
+- `*.cloud.localhost` names resolve to `127.0.0.1` on their own in Chrome, Edge, Firefox and `curl` (tested on macOS 26.7). If one does not resolve (Safari, some older systems), add `127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost` (and each app's name) to `/etc/hosts` on the Mac, or use another browser.
 - On a VPS or a VM with no port forwarding, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open on your laptop first. It must be port 80: the sign-in redirect drops any other port.
 
 ## 5. Your first app

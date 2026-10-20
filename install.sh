@@ -679,6 +679,8 @@ stage_preflight() {
       fail "backup destination must be an absolute path: $BACKUP_DEST ($BACKUP_DEST_ENV)"; errors=$((errors+1))
     elif [ -d "$BACKUP_DEST" ]; then
       [ -w "$BACKUP_DEST" ] && ok "backup destination writable: $BACKUP_DEST" || warn "backup destination not writable by $(id -un): $BACKUP_DEST. Fix with: sudo chown $(id -un) $BACKUP_DEST (or set $BACKUP_DEST_ENV to another path); the backup stage will fail until then"
+    elif [ "$MODE" = plan ]; then
+      [ -w "$(existing_parent "$BACKUP_DEST")" ] && ok "backup destination: $BACKUP_DEST (created on apply)" || warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"
     elif mkdir -p "$BACKUP_DEST" 2>/dev/null; then ok "backup destination created: $BACKUP_DEST"
     else warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"; fi
     if same_disk "$BACKUP_DEST" "$(dirname "$INSTALL_DIR")"; then
@@ -1312,7 +1314,7 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   if [ "$INGRESS" = local ]; then
     _out "  local ingress: these URLs answer on this box only. From another computer, keep a tunnel of its port 80 open:"
     _out "    sudo ssh -N -L 80:127.0.0.1:80 $(id -un)@<this box>   (port 80 only: the sign-in redirect drops any other port)"
-    _out "  then open them in Chrome, Edge or Firefox; elsewhere add the names to /etc/hosts pointing at 127.0.0.1"
+    _out "  then open them in a browser: *.localhost names resolve to 127.0.0.1 on their own in Chrome, Edge, Firefox and curl; if one does not resolve (Safari), add it to /etc/hosts"
     if [ "$TLS_MODE" = internal ]; then _out "  TLS internal: install the CA on that computer:"; ca_install_help "    "; fi
   fi
   [ "$INGRESS" = private ] && private_handoff
@@ -1379,7 +1381,8 @@ run_stage plan
 [ -d "$INSTALL_DIR" ] && [ ! "$SOURCE_CONFIG" -ef "$CONFIG_FILE" ] && cp "$SOURCE_CONFIG" "$CONFIG_FILE"
 
 if [ "$MODE" = plan ]; then
-  ok "plan only: nothing was changed. Apply with: $SELF --apply --install-dir $INSTALL_DIR${CONFIG_ARG:+ --config $CONFIG_ARG}"
+  # The plan writes only its own record: state.json and config.yaml in the install directory.
+  ok "plan only: no service, secret, Docker object or backup directory was created (the plan wrote state.json and config.yaml in $INSTALL_DIR). Apply with: $SELF --apply --install-dir $INSTALL_DIR${CONFIG_ARG:+ --config $CONFIG_ARG}"
   [ "$JSON_OUTPUT" = true ] && state status --json
   exit 0
 fi
