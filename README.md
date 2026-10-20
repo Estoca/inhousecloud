@@ -351,6 +351,8 @@ Next:
 - `occ doctor`: one command that checks the box the way the smoke tests do (routes and DNS, TLS, the sign-in, disk, containers and their health checks, the age of the last backup) and answers in plain text for a person and with `--json` for an agent or the operator. It works with or without the `agent` profile.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
+- **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `occ-app new` and the agent path produce it by default; a company can make it mandatory.
+- **The cloud's own MCP.** One gateway per company at `mcp.<BASE_DOMAIN>`, behind the SSO, that knows which person is calling: the platform's tools read only (status, apps, deploy runs, backup age, `doctor`) and a route to each app's provider by audience and scope, with a token per person or team. Apps never expose MCP on their own; the gateway does. This is the endpoint the [Open Company OS](https://github.com/Estoca/open-company-os) assumes exists. The reference installation runs a separate internal MCP service today; it becomes the reference implementation and moves inside.
 
 Later:
 
