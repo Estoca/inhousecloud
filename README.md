@@ -8,6 +8,26 @@ Internal tools are often small enough to build quickly but important enough to n
 
 > **Sibling project:** [Open Company OS](https://github.com/Estoca/open-company-os) is the people-and-work half: a protocol for giving every person a personal LLM agent, a private second brain, a shared tracker and a company compass. It runs on top of this harness (its services are ordinary harness apps) and is adopted separately.
 
+## Try It in 10 Minutes
+
+On a Mac with [Homebrew](https://brew.sh) (or skip the VM on any Ubuntu box with Docker):
+
+```bash
+brew install lima
+limactl start --tty=false --name harness --cpus 2 --memory 4 --disk 30 template:docker
+limactl shell harness
+# inside the VM:
+cd ~ && git clone https://github.com/Estoca/open-company-app-harness.git && cd open-company-app-harness
+sudo install -d -o $(id -un) -g $(id -gn) /opt/open-company-harness
+./install.sh --non-interactive --config bootstrap/config.example.yaml
+```
+
+About a minute for the VM and five for the install. Then open <http://portal.harness.localhost> on the Mac and sign in, and put a first app on the air with `scripts/harness-app.sh new <name> --push`, about 30 seconds later behind the same sign-in. Every step, with the times measured on a clean VM: [`docs/try-it.md`](docs/try-it.md).
+
+Or ask a coding agent. Below, Claude Code gets one sentence in Portuguese ("create an internal expense log app on our company cloud and put it on the air") and `ssh` to a box it has never seen; recordings and how they were made are in [`docs/demo/`](docs/demo/).
+
+![A coding agent turns a one-sentence request into an app behind the company sign-in](docs/demo/agent-first-app.gif)
+
 ## What This Is
 
 Open Company App Harness is a reference architecture and starter kit for a self-hosted internal platform that includes:
@@ -18,7 +38,7 @@ Open Company App Harness is a reference architecture and starter kit for a self-
 - Docker Compose as the default runtime;
 - shared services such as Postgres, Redis, and object storage;
 - container and host observability;
-- an app portal for inventory, deploys, health, and drift;
+- an app portal for inventory, deploy runs, health, and backups (a placeholder today);
 - an operational contract for each app with `company-app.yaml`;
 - push-to-deploy: a push to `main` is the approval, and Gitea Actions on the box provisions and starts the app behind the SSO;
 - coding-agent instructions that let agents build and repair apps without broad production access.
@@ -55,12 +75,12 @@ That machine runs the control plane, the support plane, and the apps:
 
 - code is hosted in the same environment through Gitea or another Git server;
 - SSO is handled by Authentik or another identity gateway;
-- public ingress enters through a tunnel and reverse proxy;
+- ingress enters through a reverse proxy: on the box itself (`local`, tested), or through Tailscale or a Cloudflare tunnel (`private` and `public`, in the installer but not yet tested end to end);
 - internal apps run as Docker Compose projects;
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
 - an optional operator agent answers "why is it down" in Slack or Telegram from a generated map of the box, read only by default, inside a written contract (the `agent` profile, [`docs/operator-contract.md`](docs/operator-contract.md));
-- an app portal records what should exist, what is running, and what changed;
+- an app portal shows what should exist, what is running, and what changed (next on the roadmap; a placeholder answers today);
 - coding agents connect to the same machine and use the same contracts as humans.
 
 This is not meant to replace AWS, Kubernetes, or a mature platform team. It is meant to cover the first, surprisingly large stage where a company needs internal software to be real, authenticated, observable, and repeatable, but does not yet need a distributed platform.
@@ -77,7 +97,7 @@ Two requests, each one sentence from a person who does not need to know the stac
 What a terminal-connected agent does with them, today:
 
 1. Reads `AGENTS.md`, which routes it to `docs/agent-setup-contract.md` (what to ask, what never to do) and `docs/llm-bootstrap.md` (the commands, with success conditions).
-2. **Install.** Asks for the install directory, ingress mode and domain, admin email, Gitea organization, backup destination and optional profiles; never for a password (the installer generates them). Shows `./install.sh --plan`, applies after a yes, and reports the URLs and the steps left to the human. About 4 minutes on a clean box.
+2. **Install.** Asks for the install directory, ingress mode and domain, admin email, Gitea organization, backup destination and optional profiles; never for a password (the installer generates them). Shows `./install.sh --plan`, applies after a yes, and reports the URLs and the steps left to the human. Four to seven minutes on a clean box.
 3. **App.** Runs `scripts/harness-app.sh new <slug>`, writes the app in the generated repository (shared Postgres and Redis through `DATABASE_URL` and `REDIS_URL`, the user from the SSO headers), pushes to `main`, and confirms the deploy run is green, `/health` answers 200 and `/` asks for the sign-in.
 4. **Repair.** On a red run, reads the job log, fixes the app and pushes again.
 
@@ -128,10 +148,11 @@ The support plane keeps the environment operable:
 - Gitea stores repositories and runs the deploy workflows on the box.
 - Portainer gives visibility into containers, images, volumes, and stacks.
 - Glances exposes host-level resource usage.
-- The app portal records app inventory, deploy history, health checks, and drift.
-- Shared services such as Postgres, Redis, and object storage are optional but standardized.
+- The app portal shows app inventory, deploy runs, health checks, and backups (planned; a placeholder today).
+- Postgres and Redis are shared by every app, each app with its own database, role and key prefix; S3-compatible object storage (Garage) is the optional `storage` profile, a bucket and key per app.
+- Portainer and Glances, with a web terminal and a file browser, are the optional `ops` profile, for admins only.
 
-Every box can be swapped. The harness cares about the contracts between them: Git repositories, app manifests, reverse-proxy routes, auth headers, health checks, and deploy events.
+Every box can be swapped. The harness cares about the contracts between them: Git repositories, app manifests, reverse-proxy routes, auth headers, health checks, and deploy runs.
 
 ## Deployment Control Loop
 
@@ -219,7 +240,7 @@ The reference stack assumes:
 - runtime: Docker Compose;
 - portal: an internal, read-only app that shows apps, deploy runs, checks, health, and backups.
 
-These tools are intentionally replaceable. The contract matters more than the exact vendor.
+What `install.sh` sets up is one choice from each line: Gitea, Nginx Proxy Manager, Authentik, Docker Compose, Postgres and Redis, Garage for object storage, restic for backups. The others are where the contracts allow a swap, not something the installer does for you. The contract matters more than the exact vendor.
 
 ## What Makes This Different
 
@@ -281,25 +302,31 @@ The key lessons:
 
 ```text
 AGENTS.md              Agent instructions for terminal-connected LLMs
-docs/                  Architecture, quickstart, GitOps flow, security
-docs/agent-setup-contract.md
-docs/app-rules-example.md
+docs/                  Architecture, install design, GitOps flow, app contract, backup, security
+docs/try-it.md         The ten-minute path for a person; docs/demo/ has the recordings
+docs/first-run.md      What the install automates, what it leaves to you, and every test record
+docs/llm-bootstrap.md, docs/agent-setup-contract.md   The agent path
+docs/operator-contract.md, docs/runbooks/             The operator agent (agent profile)
 schemas/               JSON schema for company-app.yaml
 templates/app/         The app template harness-app new copies: runnable app, manifest, deploy workflow
 examples/minimal-web-app/  The placeholder portal
-docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup), .env.example, backup/ and deployer/ images
+docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup, agent,
+                       cloudflared, tailscale), .env.example, backup/ and deployer/ images
 install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
-scripts/harness-app.sh new, provision, checkout, wait: the app loop (docs/gitops-flow.md)
+scripts/harness-app.sh new, provision, checkout, wait, list: the app loop (docs/gitops-flow.md)
+scripts/harness-backup.sh run, verify, status: the nightly backup (docs/backup.md)
 scripts/smoke-tests.sh The checks that decide "installed"
+scripts/sso-login-check.sh  Walks the sign-in with curl, the way a browser would
 scripts/harness-operator.sh brief: the generated map an operator reads first (docs/operator-contract.md)
+scripts/lib/, scripts/tests/  Helpers (Authentik and proxy, Garage, env files, state) and their tests
 bootstrap/             config.example.yaml and state.example.json for the installer
 packages/cli/          Placeholder for validation and workflow tooling
 ```
 
 ## Status
 
-Early extraction. `install.sh` brings up the core cloud on one box and `harness-app` takes an app from `new` to the air by push to `main`; both pass on a clean VM ([`docs/first-run.md`](docs/first-run.md)). The portal is still a placeholder.
+Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `harness-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the harness installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). Not there yet: the real portal (a placeholder answers), `private` and `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
 
 ## Roadmap
 
@@ -310,12 +337,16 @@ Done:
 - PR 3: backup job (restic sidecar, lock, hard timeout, status file).
 - PR 4: the app loop: `harness-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
 - PR 5: the agent path (`AGENTS.md`, `docs/llm-bootstrap.md`, `docs/agent-setup-contract.md`) rewritten for the loop above and tested with a cold agent run.
-- PR 7: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/harness-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
+- PR 6: the `ops` profile: Portainer, Glances, a web terminal and a file browser, for admins only behind the SSO.
+- PR 7: the cold install run: an agent installs the harness from zero on a clean box from a layperson's request.
+- PR 8: the `storage` profile on Garage (the earlier S3 server's images were no longer downloadable), a bucket and key per app.
+- PR 9: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/harness-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
 
 Next:
 
 - The real portal: read-only inventory, deploy runs, health, backups, and `GET /api/platform/status` for agents.
 - `private` (tailnet) and `public` (tunnel) ingress, tested end to end.
+- The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
 
 ## Safety Principles
 
@@ -338,8 +369,11 @@ Next:
 - `git`, `curl`, `python3`; `sshd` for the web terminal of the admin tools;
 - `sudo` for one command if the install directory is under `/opt` (or answer with a folder the user owns).
 
+**Trying it yourself.** [`docs/try-it.md`](docs/try-it.md): a VM on your laptop, one install command, a first app on the air, about 8 minutes.
+
 Start with the docs:
 
+- `docs/try-it.md`
 - `docs/architecture.md`
 - `docs/quickstart.md`
 - `docs/app-rules-example.md`
