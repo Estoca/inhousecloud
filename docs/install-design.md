@@ -103,6 +103,33 @@ Refused: `local` with any tunnel; `private` without Tailscale; `public` with `TL
 
 For a company of about thirty people the recommended mode is `private`: a private domain with split DNS over Tailscale, not MagicDNS as the app URL. MagicDNS is fine for administering the machine; a private domain keeps `BASE_DOMAIN`, wildcard routing, stable per-app URLs and a single proxy.
 
+### Private ingress (`private` / `internal` / `tailscale`)
+
+Built and tested end to end ([`first-run.md`](first-run.md#private-ingress-run)). Every app is `https://<slug>.<BASE_DOMAIN>`, no port, on the tailnet only, with a certificate browsers accept once the harness CA is installed.
+
+```text
+device on the tailnet --DNS--> <tailnet IP>:53  tailnet-dns (CoreDNS): *.<BASE_DOMAIN> = <tailnet IP>
+                      --TLS--> <tailnet IP>:443 tailscale (serve, TCP forward) --> proxy:443 --> app
+the box itself: proxy, Gitea SSH and control ports on 127.0.0.1 only
+```
+
+| Piece | What the installer does |
+|---|---|
+| Tailscale node | service `tailscale` (`tailscale/tailscale`, pinned): userspace networking in **its own** network namespace, state in the volume `tailscale-state`, name `ingress.tailscale.hostname`. Its serve config (`<install-dir>/tailscale/serve.json`) forwards tailnet ports 80 and 443 to `proxy` and the Gitea SSH port to `gitea:22` as raw TCP: TLS ends at the proxy |
+| Auth key | `HARNESS_TAILSCALE_AUTHKEY`, read from the installer's environment for the first login only and never written to `.env`: compose gets it from the installer's process, the node logs in, and the container is recreated without it. The node then lives on its state; a re-run with the node logged in needs no key (a value an older install left in `.env` is blanked) |
+| TLS | a CA of the installation's own in `<install-dir>/local/ca/` (`ca.key` 0600, `ca.crt` public), **name-constrained to `BASE_DOMAIN`** and to no IP address, 10 years; a wildcard `*.<BASE_DOMAIN>` certificate signed by it (397 days, renewed by any install run when 30 days remain), uploaded to the proxy as a custom certificate and attached to every host with HTTPS forced. Gitea trusts the CA through `SSL_CERT_DIR`, because it calls Authentik's OIDC endpoints by the public name |
+| DNS | service `tailnet-dns` (CoreDNS, pinned) in the node's namespace, bound to its loopback, answering every `*.<BASE_DOMAIN>` with the node's tailnet address (empty answers for other types, other zones refused). The tailnet's split DNS, a nameserver set in the Tailscale admin console, points `BASE_DOMAIN` at it; the installer cannot set that, and the handoff says exactly what to enter |
+| Checks | the `proxy_ingress` stage fails unless `portal.<BASE_DOMAIN>` resolves to the tailnet address on the node, and says whether the tailnet's own resolver already does (the console step); smoke test 21 checks the surface and the certificate |
+
+Decisions:
+
+- **`tailscale serve` from a separate namespace, not the node inside the proxy's namespace.** Sharing the proxy's namespace is the usual sidecar recipe, but in userspace mode Tailscale forwards *every* tailnet port to the namespace's loopback, which would have put the proxy admin (81) and its API on the tailnet. In its own namespace the node exposes what serve forwards plus the DNS server, nothing else. The cost: the proxy sees the node's address as the client, not the person's tailnet address.
+- **Own CA, not `tailscale cert`.** Tailscale certificates cover the node's MagicDNS name only (no wildcard, no private domain): one URL for the box instead of one per app. The name constraint means a device that trusts the CA trusts nothing outside `BASE_DOMAIN`.
+- **A DNS server on the node, not public records.** A private domain (`.internal` is reserved for this) has no public DNS; split DNS needs a nameserver on the tailnet, and the node is the one place that knows its own address.
+- **Nothing published beyond loopback** (`BIND_ADDRESS=127.0.0.1` in `private`): the LAN does not see the proxy; the installer's checks use the loopback ports and the tailnet path.
+
+What `main` had before: the ingress matrix in preflight; a `tailscale` container in userspace mode on the harness network, with `TS_AUTHKEY` kept in `.env` and nothing routed through it; `BIND_ADDRESS=0.0.0.0`; proxy hosts created without a certificate in `internal` (the preflight told the person to upload one by hand); no DNS for `BASE_DOMAIN`; every installer check and smoke test speaking plain HTTP to the proxy.
+
 ## Execution Model
 
 Preflight → plan → apply → verify → handoff. Copied from how agent frameworks install themselves, because it is the shape a human and an LLM can both follow.

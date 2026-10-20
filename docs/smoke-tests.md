@@ -129,7 +129,28 @@ docker inspect <agent>                                               # mounts, n
 #       Env as names only; the agent has no Docker socket, no mount reaching .env, apps/
 #       or local/, is not on the ops network, and has no harness secret in its environment
 #       except GITEA_READONLY_TOKEN and its own AGENT_* keys
+
+# 21. The ingress surface (skipped only in public ingress, where the proxy listens everywhere)
+docker inspect -f '{{json .HostConfig.PortBindings}}' <proxy>        # 80/tcp and 443/tcp
+ss -Hltn                                                             # listeners on 80 and 443
+python3 -c 'socket.create_connection((addr, 443), timeout=2)'        # each address of hostname -I
+# TLS internal:
+openssl s_client -connect 127.0.0.1:443 -servername "portal.$BASE_DOMAIN" | openssl verify -CAfile local/ca/ca.crt
+curl --cacert local/ca/ca.crt --resolve "portal.$BASE_DOMAIN:443:127.0.0.1" "https://portal.$BASE_DOMAIN/health"
+# private ingress, from inside the Tailscale node's namespace:
+nslookup -type=a "portal.$BASE_DOMAIN" 127.0.0.1                     # the split-DNS server
+tailscale nc "$TAILSCALE_IP" 80 / 443 / 81                           # the tailnet path
+# PASS: 80 and 443 are published on 127.0.0.1 only, nothing listens on them elsewhere and
+#       the box's other addresses refuse them; with TLS internal the certificate served
+#       for portal.<BASE_DOMAIN> is the harness wildcard, verifies against the CA (which is
+#       name-constrained to BASE_DOMAIN), covers *.<BASE_DOMAIN>, has more than 30 days
+#       left, and https://portal.<BASE_DOMAIN>/health answers 200 with the CA as the only
+#       trust; in private ingress any *.<BASE_DOMAIN> resolves to TAILSCALE_IP on the
+#       node's DNS, the tailnet address answers on 80 and 443 and not on the proxy admin
+#       port, and no auth key is left in .env or in the node's container
 ```
+
+Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
 
 Test 20 does not talk to the LLM or the chat channel: the installer never has their keys. A conversation is checked by a human after putting the keys in `.env` ([`operator-contract.md`](operator-contract.md), section 7).
 

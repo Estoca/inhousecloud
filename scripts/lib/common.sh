@@ -45,6 +45,23 @@ curl_resolve() { # URL
   printf -- '--resolve\n%s:%s:127.0.0.1\n' "$host" "$port"
 }
 
+# proxy_url HOST PATH and proxy_args HOST: how a check on the box reaches a public name
+# through the proxy. TLS off: plain HTTP to PROXY (the proxy's port) with a Host header.
+# TLS internal: https://HOST pinned to PROXY_PIN (127.0.0.1 on the box, the proxy's
+# address inside a deploy job) and verified against the harness CA, never with -k.
+# proxy_args prints space-separated curl arguments, none of which contains a space.
+proxy_url() {
+  if [ "${TLS_MODE:-off}" = internal ]; then printf 'https://%s%s' "$1" "$2"
+  else printf '%s%s' "${PROXY:-http://127.0.0.1:${PROXY_HTTP_PORT:-80}}" "$2"; fi
+}
+proxy_args() {
+  if [ "${TLS_MODE:-off}" = internal ]; then
+    printf -- '--resolve %s:%s:%s --cacert %s/local/ca/ca.crt' "$1" "${PROXY_TLS_PORT:-${PROXY_HTTPS_PORT:-443}}" "${PROXY_PIN:-127.0.0.1}" "$INSTALL_DIR"
+  else printf -- '-HHost:%s' "$1"; fi
+}
+# ca_args: --cacert for a URL by its public name when TLS is internal, nothing otherwise.
+ca_args() { if [ "${TLS_MODE:-off}" = internal ]; then printf -- '--cacert %s/local/ca/ca.crt' "$INSTALL_DIR"; fi; }
+
 # load_env: export every variable of the install's .env into this shell.
 load_env() {
   [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE (run install.sh first)"

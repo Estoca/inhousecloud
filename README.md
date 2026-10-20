@@ -75,7 +75,7 @@ That machine runs the control plane, the support plane, and the apps:
 
 - code is hosted in the same environment through Gitea or another Git server;
 - SSO is handled by Authentik or another identity gateway;
-- ingress enters through a reverse proxy: on the box itself (`local`, tested), or through Tailscale or a Cloudflare tunnel (`private` and `public`, in the installer but not yet tested end to end);
+- ingress enters through a reverse proxy: on the box itself (`local`, tested), through Tailscale with the installation's own CA and split DNS (`private`, tested end to end: `https://<app>.<domain>` on the tailnet only), or through a Cloudflare tunnel (`public`, in the installer but not yet tested end to end);
 - internal apps run as Docker Compose projects;
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
@@ -103,7 +103,7 @@ What a terminal-connected agent does with them, today:
 
 The test of this is a cold run: an agent given only the repository and a one-line request in a layperson's words. Results in `docs/first-run.md`, "Cold agent run".
 
-Not yet: the read-only portal with `GET /api/platform/status` for agents (a placeholder answers today), and tested `private` and `public` ingress.
+Not yet: the read-only portal with `GET /api/platform/status` for agents (a placeholder answers today), and tested `public` ingress. `private` ingress (Tailscale, own CA, split DNS, `https://<app>.<domain>` on the tailnet only) is tested end to end: `docs/install-design.md`, "Private ingress".
 
 The harness should also expose live app-building rules for day-to-day app creation. See `docs/app-rules-example.md` for a generalized example based on a real internal app platform rules file.
 
@@ -326,7 +326,7 @@ packages/cli/          Placeholder for validation and workflow tooling
 
 ## Status
 
-Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `harness-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the harness installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). Not there yet: the real portal (a placeholder answers), `private` and `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
+Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `harness-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the harness installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). `private` ingress (Tailscale) is tested end to end too, with a sign-in from another device on the tailnet. Not there yet: the real portal (a placeholder answers), `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
 
 ## Roadmap
 
@@ -345,7 +345,7 @@ Done:
 Next:
 
 - The real portal: read-only inventory, deploy runs, health, backups, and `GET /api/platform/status` for agents.
-- `private` (tailnet) and `public` (tunnel) ingress, tested end to end.
+- `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
 
 ## Safety Principles

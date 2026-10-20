@@ -39,7 +39,7 @@ Logs in with `PROXY_ADMIN_EMAIL` / `PROXY_ADMIN_PASSWORD` (the admin the proxy c
 
 The forward-auth snippet is the one Authentik documents for nginx, in the host's advanced configuration: `auth_request` against `/outpost.goauthentik.io/auth/nginx`, the `X-authentik-*` headers passed to the app, anonymous requests redirected to `/outpost.goauthentik.io/start`. `GET /health` is left public so the installer and monitors can probe the app.
 
-TLS per mode: `off` and `edge` create plain HTTP hosts (the Cloudflare edge terminates TLS in `edge`); `acme` requests a Let's Encrypt certificate for each host and forces HTTPS; `internal` creates the hosts without a certificate and leaves the development certificate to you (see below).
+TLS per mode: `off` and `edge` create plain HTTP hosts (the Cloudflare edge terminates TLS in `edge`); `acme` requests a Let's Encrypt certificate for each host and forces HTTPS; `internal` uploads the harness wildcard certificate (`<install-dir>/local/ca/wildcard.crt`, signed by the installation's own CA, made by the `foundation` stage) as the custom certificate `harness internal wildcard`, writes its id to `.env` as `PROXY_CERTIFICATE_ID`, and attaches it to every host with HTTPS forced. It is uploaded again on every run, so a renewed certificate reaches nginx. With TLS internal the checks below go to `https://<name>` pinned to 127.0.0.1 and verify the certificate against the CA, never with `-k`.
 
 Containers resolve the public names to the proxy through network aliases, so Gitea fetches Authentik's discovery document by its public URL and the issuer in the tokens is the same one browsers see.
 
@@ -74,11 +74,11 @@ A lesson from testing: curl resolves every `*.localhost` name to loopback by its
 
 Asked for, or left to you, never guessed:
 
-- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs split DNS for `BASE_DOMAIN` on your Tailscale network and the auth key in `HARNESS_TAILSCALE_AUTHKEY`. `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
+- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `HARNESS_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
 - **First login, MFA, bootstrap password.** Sign in to Authentik as `akadmin` with `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`, enrol MFA, save recovery codes, then change the password; the value in `.env` is then stale by design.
 - **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours.
 - **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled.
-- **Development certificate** in `tls_mode: internal`: upload it in the proxy admin (`http://127.0.0.1:81`) and attach it to the three hosts.
+- **The CA on each device** in `tls_mode: internal`: the installer makes the CA and the certificate; installing `ca.crt` on the people's devices is theirs (the handoff prints the file, its SHA-256 and the command per OS).
 - **Replacing the placeholder portal.** The `portal` service builds `examples/minimal-web-app`; the real portal takes its place with the same service name, port 8080 and `/health`.
 - **Migrating an existing installation.** Nothing here imports data.
 
@@ -305,3 +305,32 @@ What broke on the way:
 - Nothing else: the install, test 19 and the app deploy passed on the first VM run.
 
 Not tested: a real disk-full or capacity change after the first layout (`storage.capacity` is applied only once; changing it later is `garage layout assign` by hand), a restore from Garage's metadata snapshots (`meta/snapshots/` was still empty when the backup ran, an hour after start; the restore above used the live copy of the metadata on an idle box), presigned URLs through `s3.<BASE_DOMAIN>` from a browser, ingress other than `local/off`, rootful Docker.
+
+## Private ingress run
+
+`INGRESS=private`, `TLS_MODE=internal`, `TUNNEL_PROVIDER=tailscale` on a clean box, then a sign-in from another device on the tailnet ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)).
+
+**Setup.** A new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template, no host mounts, every port forward ignored): Docker 29.9.1 rootless, Compose 5.6.0, OpenSSL 3.5.5, `sshd` on 22. The branch copied onto the box. Config: `bootstrap/config.example.yaml` with `mode: private`, `base_domain: harness.internal`, `tls_mode: internal`, `tunnel_provider: tailscale`, a test node name, and every profile on (`storage`, `ops` with the terminal key, `agent` without keys, `backup`). The auth key (reusable, ephemeral) reached `install.sh` through the environment of that one command, read from a file outside the repository and piped over stdin, never on a command line.
+
+**Result: installed, 21 of 21 smoke tests, sign-in from another device confirmed.**
+
+| Step | Result |
+|---|---|
+| `install.sh --non-interactive`, preflight to handoff, images pulled | 9 min 37 s (19:07:20 to 19:16:57) |
+| Tailscale | logged in with the key, container recreated without it, node back from its state; tailnet ports 80, 443 and 2222 served, 81, 3000, 9000 and 22 refused |
+| TLS | CA and wildcard made in `foundation`, uploaded in `first_run`, every host HTTPS-forced; Gitea's OIDC discovery over HTTPS verified with the CA |
+| DNS | `*.harness.internal` answered with the tailnet address by the node's DNS server; the stage reported the console split DNS as "not yet", then the person set it |
+| Smoke tests, first run (4 GiB) | 19 passed: 20 failed (agent OOM-killed, below) and 21 failed (a false negative of the test itself, fixed) |
+| VM restarted with 6 GiB, smoke tests again | the node came back on its own, with no key anywhere; 21 of 21 after recreating Portainer and Glances (below) |
+| `sso-login-check.sh`, Gitea and `--target https://portal.harness.internal`, CA as the only trust | PASS, PASS |
+| From another device on the tailnet (a person): split DNS set in the admin console, `ca.crt` installed, `https://portal.harness.internal` | no certificate warning, Authentik sign-in, the placeholder portal |
+
+Checked afterwards: `TAILSCALE_AUTHKEY` empty in `.env`, no `TS_AUTHKEY` value in the running container, proxy ports 80 and 443 bound to 127.0.0.1 only and refused on the VM's address (test 21). Tailscale and CoreDNS together use about 22 MiB.
+
+What broke along the way:
+
+- **Test 21 first said the tailnet path on port 80 did not answer.** `tailscale nc` closes the connection when its stdin ends, before nginx replies. The test now keeps stdin open a few seconds; the same fix turned the "admin port refused" check from a check that could not fail into a real one.
+- **4 GiB is not enough with every profile on.** During test 16's app build the kernel's OOM killer took the agent (OpenClaw, about 1 GiB resident), and test 20 found it restarting. Not related to ingress; with 6 GiB it stayed up. The memory floor in preflight (3.5 GiB) assumes fewer profiles.
+- **Found, not fixed here: Portainer and Glances do not start after a reboot under rootless Docker.** `docker/compose.yml` mounts `/var/run/docker.sock` for both instead of `${DOCKER_SOCKET}`, as the runners do; after the VM restart both exited with "not a directory" on that mount. A forced recreate brought them back for this run; the fix belongs to the ops profile.
+
+Not covered: installing the CA on Windows, iOS, Android and in Firefox (the handoff prints the commands; only macOS was used), Gitea over SSH through the tailnet (port 2222 is served; not tried from a device), `local` with `TLS_MODE=internal` (same code path for the CA, not run), a non-ephemeral or tagged key, an ephemeral node left offline long enough to be removed, and `public` ingress.

@@ -21,12 +21,19 @@ ingress:
   base_domain: harness.localhost
   public_base_url: http://portal.harness.localhost
   tls_mode: "off"                # off | internal | edge | acme (quoted: a bare off is YAML for false)
+                                 # internal: the installer makes a CA in <install-dir>/local/ca
+                                 # (name-constrained to base_domain) and a *.base_domain certificate
   tunnel_provider: none          # none | tailscale | cloudflared
   cloudflared:
     tunnel_token_env: HARNESS_CLOUDFLARED_TUNNEL_TOKEN
+  # Private ingress (mode: private, tls_mode: internal, tunnel_provider: tailscale), e.g.
+  #   base_domain: apps.internal   public_base_url: https://portal.apps.internal
+  # The auth key is read from HARNESS_TAILSCALE_AUTHKEY for the first login only and never
+  # written to .env. The split DNS for base_domain is set by a person in the Tailscale admin
+  # console (nameserver: the node's tailnet IP); the handoff prints the exact values.
   tailscale:
-    hostname: harness
-    private_dns_zone: apps.internal
+    hostname: harness            # the node's name on the tailnet
+    private_dns_zone: apps.internal   # informative: the split-DNS zone is always base_domain
 
 admin:
   email: admin@example.com

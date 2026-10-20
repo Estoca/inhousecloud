@@ -43,7 +43,9 @@ eval "PASSWORD=\${$PASSWORD_ENV:-}"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/harness-sso.XXXXXX")"; chmod 700 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 JAR="$TMP/jar"; : > "$JAR"
-INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
+# TLS internal: certificates are checked against the harness CA, as a device that
+# installed it would.
+INSECURE="$(ca_args)"
 # shellcheck disable=SC2046
 R="$(curl_resolve "$AUTHENTIK_BASE_URL" | tr '\n' ' ') $(curl_resolve "$GITEA_BASE_URL" | tr '\n' ' ') $(curl_resolve "$PORTAL_BASE_URL" | tr '\n' ' ') $INSECURE"
 [ -n "$TARGET" ] && R="$R $(curl_resolve "$TARGET" | tr '\n' ' ')"

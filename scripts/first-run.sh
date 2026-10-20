@@ -156,6 +156,13 @@ done
 # ==================================================================== Proxy
 step "Proxy routes"
 npm_login
+# TLS internal: the wildcard certificate from <install-dir>/local/ca goes up first; every
+# host below is created with it and HTTPS forced.
+if [ "$TLS_MODE" = internal ]; then
+  [ -s "$INSTALL_DIR/local/ca/wildcard.crt" ] || die "tls internal: $INSTALL_DIR/local/ca/wildcard.crt missing; run install.sh --apply --from foundation"
+  PROXY_CERTIFICATE_ID="$(ensure_internal_certificate "$INSTALL_DIR/local/ca/wildcard.crt" "$INSTALL_DIR/local/ca/wildcard.key")"
+  [ "$(env_get PROXY_CERTIFICATE_ID)" = "$PROXY_CERTIFICATE_ID" ] || env_set PROXY_CERTIFICATE_ID "$PROXY_CERTIFICATE_ID"
+fi
 FORWARD_AUTH_CONF="$(forward_auth_conf /health)"
 
 ensure_proxy_host "$AUTHENTIK_HOST" authentik-server 9000 ""
@@ -177,9 +184,9 @@ done
 # Give nginx a moment to reload, then check the routes from the box itself.
 t0=$(date +%s)
 while :; do
-  c_auth="$(http_code "http://127.0.0.1:${PROXY_HTTP_PORT}/-/health/live/" -H "Host: $AUTHENTIK_HOST")"
-  c_git="$(http_code "http://127.0.0.1:${PROXY_HTTP_PORT}/api/healthz" -H "Host: $GITEA_HOST")"
-  c_health="$(http_code "http://127.0.0.1:${PROXY_HTTP_PORT}/health" -H "Host: $PORTAL_HOST")"
+  c_auth="$(http_code "$(proxy_url "$AUTHENTIK_HOST" /-/health/live/)" $(proxy_args "$AUTHENTIK_HOST"))"
+  c_git="$(http_code "$(proxy_url "$GITEA_HOST" /api/healthz)" $(proxy_args "$GITEA_HOST"))"
+  c_health="$(http_code "$(proxy_url "$PORTAL_HOST" /health)" $(proxy_args "$PORTAL_HOST"))"
   [ "$c_auth" = 200 ] && [ "$c_git" = 200 ] && [ "$c_health" = 200 ] && break
   [ $(( $(date +%s) - t0 )) -ge 90 ] && die "routes not answering through the proxy (auth $c_auth, git $c_git, portal health $c_health)"
   sleep 3
@@ -245,8 +252,13 @@ if [ "$GITEA_OIDC_ENABLED" = true ]; then
   # Gitea fetches the discovery document when the source is added, so the auth route
   # must already answer by its public name from inside the container. Probed with
   # busybox wget: curl resolves every *.localhost name to loopback by itself and would
-  # never reach the proxy alias.
-  disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
+  # never reach the proxy alias. With TLS internal, curl checks the certificate against
+  # the harness CA mounted at /etc/harness-ca (Gitea itself trusts it through SSL_CERT_DIR).
+  if [ "$TLS_MODE" = internal ]; then
+    disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/harness-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
+  else
+    disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
+  fi
   [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container"
   ok "OIDC discovery reachable from Gitea (issuer $disc)"
   SRC_ID="$(gitea_cli admin auth list 2>/dev/null | awk -F'\t' -v n="$GITEA_OIDC_SOURCE_NAME" 'NR>1 && $2==n {print $1}' | head -n 1)"
@@ -266,7 +278,7 @@ fi
 step "Protected route"
 t0=$(date +%s)
 while :; do
-  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $PORTAL_HOST" "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || echo 000)"
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /)" 2>/dev/null || echo 000)"
   case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) break ;; esac
   [ $(( $(date +%s) - t0 )) -ge 90 ] && die "portal route is not protected: got '$loc' (wanted 302 to the outpost)"
   sleep 3
