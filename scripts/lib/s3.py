@@ -5,11 +5,11 @@
   s3.py get URL HOST BUCKET KEY   prints the HTTP status; the body goes to fd 3 if open
 
 URL is where the request is sent (http://127.0.0.1:80); HOST is the Host header that is
-signed and sent (s3.harness.localhost), so the request goes through the proxy by its
+signed and sent (s3.cloud.localhost), so the request goes through the proxy by its
 public name. Credentials come from the environment, never the command line:
 S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION. With an https URL (TLS internal), the
 connection goes to URL's address with HOST as the TLS server name, and the certificate is
-verified against HARNESS_CA_FILE.
+verified against OCC_CA_FILE.
 """
 import datetime, hashlib, hmac, http.client, os, socket, ssl, sys, urllib.error, urllib.parse, urllib.request
 
@@ -47,7 +47,7 @@ def request(method, url, host, bucket, key, body=b""):
     auth = "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s" % (access, scope, signed, signature)
     u = urllib.parse.urlsplit(url)
     if u.scheme == "https":
-        ctx = ssl.create_default_context(cafile=os.environ.get("HARNESS_CA_FILE") or None)
+        ctx = ssl.create_default_context(cafile=os.environ.get("OCC_CA_FILE") or None)
         c = PinnedHTTPSConnection(u.hostname, u.port or 443, host, ctx, 15)
         try:
             c.request(method, path, body=body if method == "PUT" else None, headers=dict(headers, Authorization=auth))

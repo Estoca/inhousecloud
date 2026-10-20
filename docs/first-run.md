@@ -3,8 +3,10 @@
 What `scripts/first-run.sh` automates after the stack is healthy, what it leaves to a human, and how to re-run it. It is stage `first_run` of [`install.sh`](../install.sh) (steps 14 and 15 of the sequence in [`install-design.md`](install-design.md)) and can also be run on its own:
 
 ```bash
-scripts/first-run.sh --install-dir /opt/open-company-harness
+scripts/first-run.sh --install-dir /opt/open-company-cloud
 ```
+
+The test records below that predate 2026-10-20 ran under the project's old name, Open Company App Harness; their commands and paths are written here with the current names (`occ-app`, `/opt/open-company-cloud`, `cloud.localhost`), which map one to one ([`install-design.md`](install-design.md#renamed-from-open-company-app-harness)).
 
 It is repeatable. Every action probes before it creates and reconciles what exists, so running it twice changes nothing, and running it after a half-finished attempt completes the missing pieces.
 
@@ -16,13 +18,13 @@ Talks to the three control planes on their loopback ports (`127.0.0.1:9000` Auth
 
 | Resource | Probe | Create or reconcile |
 |---|---|---|
-| Groups `harness-admins`, `harness-users` (names from config) | by name | created, not superuser |
+| Groups `occ-admins`, `occ-users` (names from config) | by name | created, not superuser |
 | OAuth2 provider `gitea` | by name | client id and secret from `.env`, callback `<GITEA_BASE_URL>/user/oauth2/authentik/callback`, scopes openid/email/profile, signed with the self-signed certificate Authentik generates on first start, issuer per provider |
 | Application `gitea` | by slug | launch URL `GITEA_BASE_URL` |
 | Proxy provider `portal` | by name | mode forward auth (single application), external host `PORTAL_BASE_URL`, `/health` skipped |
 | Application `portal` | by slug | launch URL `PORTAL_BASE_URL` |
 | Embedded outpost | managed id | the portal provider is added; `authentik_host` set to `AUTHENTIK_BASE_URL` so browsers are sent to the public name |
-| Policy bindings | by target and group | `portal` requires `harness-admins`, `gitea` requires `harness-users` |
+| Policy bindings | by target and group | `portal` requires `occ-admins`, `gitea` requires `occ-users` |
 | `akadmin` membership | by group users | added to both groups |
 
 The outpost id is written to `.env` as `AUTHENTIK_OUTPOST_ID` (it is not a secret).
@@ -35,11 +37,11 @@ Logs in with `PROXY_ADMIN_EMAIL` / `PROXY_ADMIN_PASSWORD` (the admin the proxy c
 - `git.<BASE_DOMAIN>` to `gitea:3000`
 - `portal.<BASE_DOMAIN>` to `portal:8080` with the forward-auth snippet (below)
 - with the `storage` profile: `s3.<BASE_DOMAIN>` to Garage's S3 API (`garage:3900`), no forward auth: every request is signed with an app's key
-- with the `ops` profile: `portainer.<BASE_DOMAIN>`, `glances.<BASE_DOMAIN>`, `files.<BASE_DOMAIN>` and, when the installer found an sshd for it, `terminal.<BASE_DOMAIN>`, each with the forward-auth snippet and nothing public, its Authentik application bound to `harness-admins` only (an existing binding to another group is removed). Portainer keeps its own login behind the SSO. The same block creates `harness-smoke-user`, a member of `harness-users` only, with the password `AUTHENTIK_SMOKE_USER_PASSWORD` from `.env`, for smoke test 18
+- with the `ops` profile: `portainer.<BASE_DOMAIN>`, `glances.<BASE_DOMAIN>`, `files.<BASE_DOMAIN>` and, when the installer found an sshd for it, `terminal.<BASE_DOMAIN>`, each with the forward-auth snippet and nothing public, its Authentik application bound to `occ-admins` only (an existing binding to another group is removed). Portainer keeps its own login behind the SSO. The same block creates `occ-smoke-user`, a member of `occ-users` only, with the password `AUTHENTIK_SMOKE_USER_PASSWORD` from `.env`, for smoke test 18
 
 The forward-auth snippet is the one Authentik documents for nginx, in the host's advanced configuration: `auth_request` against `/outpost.goauthentik.io/auth/nginx`, the `X-authentik-*` headers passed to the app, anonymous requests redirected to `/outpost.goauthentik.io/start`. `GET /health` is left public so the installer and monitors can probe the app.
 
-TLS per mode: `off` and `edge` create plain HTTP hosts (the Cloudflare edge terminates TLS in `edge`); `acme` requests a Let's Encrypt certificate for each host and forces HTTPS; `internal` uploads the harness wildcard certificate (`<install-dir>/local/ca/wildcard.crt`, signed by the installation's own CA, made by the `foundation` stage) as the custom certificate `harness internal wildcard`, writes its id to `.env` as `PROXY_CERTIFICATE_ID`, and attaches it to every host with HTTPS forced. It is uploaded again on every run, so a renewed certificate reaches nginx. With TLS internal the checks below go to `https://<name>` pinned to 127.0.0.1 and verify the certificate against the CA, never with `-k`.
+TLS per mode: `off` and `edge` create plain HTTP hosts (the Cloudflare edge terminates TLS in `edge`); `acme` requests a Let's Encrypt certificate for each host and forces HTTPS; `internal` uploads the cloud wildcard certificate (`<install-dir>/local/ca/wildcard.crt`, signed by the installation's own CA, made by the `foundation` stage) as the custom certificate `occ internal wildcard`, writes its id to `.env` as `PROXY_CERTIFICATE_ID`, and attaches it to every host with HTTPS forced. It is uploaded again on every run, so a renewed certificate reaches nginx. With TLS internal the checks below go to `https://<name>` pinned to 127.0.0.1 and verify the certificate against the CA, never with `-k`.
 
 Containers resolve the public names to the proxy through network aliases, so Gitea fetches Authentik's discovery document by its public URL and the issuer in the tokens is the same one browsers see.
 
@@ -50,7 +52,7 @@ Containers resolve the public names to the proxy through network aliases, so Git
 | Admin user | `gitea admin user list --admin` | created with `GITEA_ADMIN_PASSWORD`, no forced password change |
 | Admin API token (`GITEA_ADMIN_TOKEN`) | the token answers `/api/v1/user` | generated with scope `all`, written to `.env` |
 | Organization (`GITEA_ORGANIZATION`) | `GET /api/v1/orgs/<org>` | visibility limited (members and signed-in users) |
-| Repository `<org>/harness-smoke` | `GET /api/v1/repos/...` | private, initialised with a README on `main`; the target of smoke test 12 (`GITEA_SMOKE_REPOSITORY`). Apps get their own repositories from `harness-app new` ([`gitops-flow.md`](gitops-flow.md)); older installs created `<org>/deploy-requests`, which is kept |
+| Repository `<org>/occ-smoke` | `GET /api/v1/repos/...` | private, initialised with a README on `main`; the target of smoke test 12 (`GITEA_SMOKE_REPOSITORY`). Apps get their own repositories from `occ-app new` ([`gitops-flow.md`](gitops-flow.md)); older installs created `<org>/deploy-requests`, which is kept |
 | Read-only API token (`GITEA_READONLY_TOKEN`) | the token answers `/api/v1/user` | scopes `read:misc,read:repository,read:organization,read:user`, written to `.env`; smoke test 6 uses it because the instance requires sign-in to view |
 | OIDC source `authentik` | `gitea admin auth list` | `add-oauth` or `update-oauth` with the client id and secret from `.env`, discovery URL `<AUTHENTIK_BASE_URL>/application/o/gitea/.well-known/openid-configuration`, scopes openid/profile/email, local 2FA skipped |
 
@@ -63,18 +65,18 @@ Before finishing, the script checks from the box itself that `auth`, `git` and t
 The whole SSO path can then be proven with curl, the way a browser would walk it:
 
 ```bash
-scripts/sso-login-check.sh --install-dir /opt/open-company-harness
+scripts/sso-login-check.sh --install-dir /opt/open-company-cloud
 ```
 
 It starts at Gitea's `/user/oauth2/authentik`, signs in as `akadmin` through Authentik's flow executor API with the bootstrap password from `.env`, follows the code back to Gitea's callback and reports the signed-in user and the linked account. It is not a smoke test because it needs a password, and the bootstrap password is meant to be replaced by a human. On a fresh box the result is `signed in as 'admin'`: Authentik's `akadmin` and the Gitea admin share the admin email, so Gitea links them (`ACCOUNT_LINKING=auto`); any other Authentik user is created on first login.
 
-A lesson from testing: curl resolves every `*.localhost` name to loopback by itself (RFC 6761), ignoring DNS and Docker's network aliases. Inside a container that means `curl http://auth.harness.localhost` never reaches the proxy; Go programs such as Gitea and busybox `wget` use the resolver and do. The scripts use `--resolve` on the host and `wget` inside containers for that reason.
+A lesson from testing: curl resolves every `*.localhost` name to loopback by itself (RFC 6761), ignoring DNS and Docker's network aliases. Inside a container that means `curl http://auth.cloud.localhost` never reaches the proxy; Go programs such as Gitea and busybox `wget` use the resolver and do. The scripts use `--resolve` on the host and `wget` inside containers for that reason.
 
 ## Human
 
 Asked for, or left to you, never guessed:
 
-- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `HARNESS_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
+- **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; Safari on macOS needs the names in `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `OCC_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
 - **First login, MFA, bootstrap password.** Sign in to Authentik as `akadmin` with `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`, enrol MFA, save recovery codes, then change the password; the value in `.env` is then stale by design.
 - **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours.
 - **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled.
@@ -90,19 +92,19 @@ Asked for, or left to you, never guessed:
 
 ## Test record: the backup job
 
-On a clean Lima VM (Ubuntu 26.04, 2 CPU, 4 GiB, 30 GiB, Docker 29 rootless), with the backup destination on a separate 4 GiB ext4 file system mounted at `/mnt/backup` (`HARNESS_BACKUP_DESTINATION=/mnt/backup/harness`) and `bootstrap/config.example.yaml` otherwise unchanged:
+On a clean Lima VM (Ubuntu 26.04, 2 CPU, 4 GiB, 30 GiB, Docker 29 rootless), with the backup destination on a separate 4 GiB ext4 file system mounted at `/mnt/backup` (`OCC_BACKUP_DESTINATION=/mnt/backup/occ`) and `bootstrap/config.example.yaml` otherwise unchanged:
 
 | Step | Time |
 |---|---|
 | VM created and started | 48 s |
 | `install.sh --non-interactive`, including the backup image build and the first backup | 194 s |
-| `harness-backup.sh run` (second run, deduplicated) | 9 s |
-| `harness-backup.sh verify --latest` | 8 s |
+| `occ-backup.sh run` (second run, deduplicated) | 9 s |
+| `occ-backup.sh verify --latest` | 8 s |
 | `smoke-tests.sh`: 15 passed, 0 skipped | 10 s |
 | `sso-login-check.sh`: PASS | 1 s |
 | From VM creation to everything green | 270 s |
 
-A run holds 10 items: 5 dumps of the shared Postgres (`gitea`, `harness`, `harness_platform`, `postgres`, globals), 3 of Authentik's (`authentik`, `postgres`, globals), the volumes and the install directory. About 3.4 MB of dumps on a fresh box; the repository was 3.8 MB after five runs.
+A run holds 10 items: 5 dumps of the shared Postgres (`gitea`, `occ`, `occ_platform`, `postgres`, globals), 3 of Authentik's (`authentik`, `postgres`, globals), the volumes and the install directory. About 3.4 MB of dumps on a fresh box; the repository was 3.8 MB after five runs.
 
 Failure cases, run by hand on the first VM:
 
@@ -134,7 +136,7 @@ On a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless, 
 | `install.sh --non-interactive`, all 14 stages, including the deployer image, both runners and the first deploy of `smoke-app` inside smoke test 16 | 238 s |
 | Smoke tests: 16 passed, 0 skipped (inside the install) | |
 | Smoke test 16 alone: push to main until the deploy run is green (first deploy of `smoke-app`) | 16 s |
-| `harness-app new expense-report --push` until `GET /health` answers 200 through the proxy | 13 s |
+| `occ-app new expense-report --push` until `GET /health` answers 200 through the proxy | 13 s |
 | Redeploy with a code change (new image built): push until the run is green | 19 s |
 | `smoke-tests.sh` again on the installed box (16 passed; test 16 redeploys and finds the password unchanged) | 21 s |
 | `sso-login-check.sh` | PASS |
@@ -144,7 +146,7 @@ The deploy times are short because the template's base image (`node:22-alpine`) 
 Checked by hand on the same kind of VM:
 
 - **Rule against local infrastructure.** An app whose compose file adds `image: postgres:16-alpine` fails at `provision` in 3 s with the alternative in the log; no database, env file or route was created.
-- **App that never gets healthy.** An app listening on 9090 instead of `runtime.port` 8080 fails `harness-app wait` after 240 s: `/health through the proxy answered '502' (wanted 200), container state 'running'`, the container log, and what to check.
+- **App that never gets healthy.** An app listening on 9090 instead of `runtime.port` 8080 fails `occ-app wait` after 240 s: `/health through the proxy answered '502' (wanted 200), container state 'running'`, the container log, and what to check.
 - **Object storage asked for with the `storage` profile off** fails before anything is created, with the profile to turn on.
 - **Redis ACL.** The app's user writes `smoke-app:*`, gets `NOPERM` on another app's keys, on `FLUSHALL` and on `KEYS`; after `docker restart` of Redis the user is still there (`/data/users.acl`).
 - **Interactive questions.** The backup destination is asked right after the Gitea organization; the default `<install-dir>/backups` and a path under a missing mount on the root disk both get the same-disk warning, and the answer lands in `backup.destination`. A config with the old `install.profile.ci` / `ci.gitea_runner.enabled` loads with a warning that they are ignored.
@@ -152,20 +154,20 @@ Checked by hand on the same kind of VM:
 
 What broke on the way:
 
-- The template's placeholders were not replaced in `.gitea/workflows/deploy.yml`: the walk skipped every path containing `/.git`, which `/.gitea` does. `harness-app new` now refuses to finish while a placeholder is left.
-- Files written by deploy jobs came out `0666`: `docker exec` runs with umask 0000 (the backup job hit the same). `harness-app` sets umask 022 and sets the overlay's mode explicitly, since an existing file keeps its old mode.
+- The template's placeholders were not replaced in `.gitea/workflows/deploy.yml`: the walk skipped every path containing `/.git`, which `/.gitea` does. `occ-app new` now refuses to finish while a placeholder is left.
+- Files written by deploy jobs came out `0666`: `docker exec` runs with umask 0000 (the backup job hit the same). `occ-app` sets umask 022 and sets the overlay's mode explicitly, since an existing file keeps its old mode.
 - `install.sh` reported success with a service that never started: stage functions run inside `if`, where `set -e` does not apply, so a failed `wait_healthy` did not fail the stage. Every `dc up` and `wait_healthy` in a stage now returns the failure.
 - **The `storage` profile could not start**: its pinned S3 server image was no longer downloadable. The profile now runs Garage; see the object storage record below.
 
-Not tested: `harness-app new` from a laptop with `HARNESS_GITEA_*` (only on the box), rootful Docker and Docker Desktop (the socket path detection covers them), ingress other than `local/off`, fork pull requests against the deploy runner.
+Not tested: `occ-app new` from a laptop with `OCC_GITEA_*` (only on the box), rootful Docker and Docker Desktop (the socket path detection covers them), ingress other than `local/off`, fork pull requests against the deploy runner.
 
 ## Cold agent run
 
-The test of the agent path (`AGENTS.md`, [`llm-bootstrap.md`](llm-bootstrap.md), [`agent-setup-contract.md`](agent-setup-contract.md)): a coding agent that has never seen the harness gets a one-paragraph request in a layperson's words and nothing else, and has to put a working app on the air.
+The test of the agent path (`AGENTS.md`, [`llm-bootstrap.md`](llm-bootstrap.md), [`agent-setup-contract.md`](agent-setup-contract.md)): a coding agent that has never seen the cloud gets a one-paragraph request in a layperson's words and nothing else, and has to put a working app on the air.
 
-**Setup.** A clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless) with the harness installed from `bootstrap/config.example.yaml` unchanged (`local` ingress, `harness.localhost`). The agent was the Claude Code CLI (`claude -p`, Claude Opus 5.5) on the host machine, in a fresh clone of this branch, with no project memory, no MCP servers and no user settings, and with its tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`: it could read the repository and reach the box only through `ssh`. The prompt, in Portuguese as a person would write it, said what the app should do, gave the `ssh` command for the server and said that the folder was a copy of the harness repository. Nothing about the harness, its commands or its docs.
+**Setup.** A clean Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9 rootless) with the cloud installed from `bootstrap/config.example.yaml` unchanged (`local` ingress, `cloud.localhost`). The agent was the Claude Code CLI (`claude -p`, Claude Opus 5.5) on the host machine, in a fresh clone of this branch, with no project memory, no MCP servers and no user settings, and with its tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`: it could read the repository and reach the box only through `ssh`. The prompt, in Portuguese as a person would write it, said what the app should do, gave the `ssh` command for the server and said that the folder was a copy of the cloud repository. Nothing about the cloud, its commands or its docs.
 
-> Cria um app interno de registro de despesas na nossa company cloud e coloca no ar, por favor. A ideia é cada pessoa lançar suas despesas (data, descrição, valor, categoria) e ver a lista das suas. [ssh command, "esta pasta é uma cópia do repositório do harness"] Me avisa quando estiver no ar.
+> Cria um app interno de registro de despesas na nossa company cloud e coloca no ar, por favor. A ideia é cada pessoa lançar suas despesas (data, descrição, valor, categoria) e ver a lista das suas. [ssh command, "esta pasta é uma cópia do repositório do projeto"] Me avisa quando estiver no ar.
 
 **Result: on the air in the first round, without help.** No doc had to be fixed between rounds, so a second round used a different request (room booking with no overlapping reservations) to check it was not luck.
 
@@ -174,15 +176,15 @@ The test of the agent path (`AGENTS.md`, [`llm-bootstrap.md`](llm-bootstrap.md),
 | Turns | 17 | 8 |
 | Tool calls | 16 (2 local shell commands refused by the tool limits; it fell back to `Read` and `Glob`) | 7, none refused |
 | Wall time, prompt to report | 113 s | 141 s |
-| Path taken | contract and playbook → section 0 (`install.sh status`, `harness-app list`) → `harness-app new despesas` → `server.js` with `pg`, tables created on start → `redis.required: false` (unused) → `docker compose build` on the box → commit, push with the playbook's credential helper → `harness-app wait` → run status, `/health`, `/` → requests with `X-authentik-email` inside the container | the same, slug `salas`; overlap refused by the database, five concurrent identical bookings with one accepted |
+| Path taken | contract and playbook → section 0 (`install.sh status`, `occ-app list`) → `occ-app new despesas` → `server.js` with `pg`, tables created on start → `redis.required: false` (unused) → `docker compose build` on the box → commit, push with the playbook's credential helper → `occ-app wait` → run status, `/health`, `/` → requests with `X-authentik-email` inside the container | the same, slug `salas`; overlap refused by the database, five concurrent identical bookings with one accepted |
 | Deploy run of its commit | `success` | `success` |
-| Checked by hand afterwards | `/health` 200, `/` 302 to the outpost, table `expenses` in `app_despesas` owned by the app's role (not superuser), no infrastructure in the compose file | `/health` 200, `/` 302, compose file unchanged, both apps in `harness-app list` |
+| Checked by hand afterwards | `/health` 200, `/` 302 to the outpost, table `expenses` in `app_despesas` owned by the app's role (not superuser), no infrastructure in the compose file | `/health` 200, `/` 302, compose file unchanged, both apps in `occ-app list` |
 
 Both reports to the person gave the URL, said it asks for the company sign-in, named the repository, said the owner defaulted to the install's admin email because none was given, and explained how to open a `local` URL from a laptop through an SSH tunnel.
 
 What the run exposed:
 
-- **A race in `harness-app wait`, fixed in this branch.** The embedded Authentik outpost loads a new app's provider a few seconds after `provision`; until then the forward-auth call answers 500, and `wait` checked `/` once, right after `/health`. It failed smoke test 16 of the install on this clean VM (`/ is not protected: got '500'`; the outpost logged the provider 2 s later) and would have failed the first deploy of every new app. `wait` now retries the check for up to 60 s. Round 1's first deploy needed it: `/` answered 302 three seconds after `/health`.
+- **A race in `occ-app wait`, fixed in this branch.** The embedded Authentik outpost loads a new app's provider a few seconds after `provision`; until then the forward-auth call answers 500, and `wait` checked `/` once, right after `/health`. It failed smoke test 16 of the install on this clean VM (`/ is not protected: got '500'`; the outpost logged the provider 2 s later) and would have failed the first deploy of every new app. `wait` now retries the check for up to 60 s. Round 1's first deploy needed it: `/` answered 302 three seconds after `/health`.
 - The install failing at smoke test 16 was diagnosed with the playbook's own commands (section 3.2 and 4): the run list and the job log through the Gitea API.
 - The agent set the commit author from its own environment (the person driving it) instead of the app owner. Harmless; the playbook asks for the owner's name and email in the commit.
 - The agent deleted the rows it created while testing. That stays inside its own app's database; the contract forbids dropping databases, not cleaning test data.
@@ -197,11 +199,11 @@ Not covered: the install half of the path through an agent (since covered: "Cold
 
 ## Cold install run
 
-Day one through an agent: a clean box with nothing of the harness on it, a person who cannot answer technical questions, and a coding agent that has to install the whole platform from the repository alone.
+Day one through an agent: a clean box with nothing of the cloud on it, a person who cannot answer technical questions, and a coding agent that has to install the whole platform from the repository alone.
 
-**Setup.** For each round a new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template with no host mounts and no port forwards), which is exactly the prerequisite list in the README's "Getting Started": Docker 29.9.1 rootless and Compose v5.6 usable without `sudo`, `git` 2.53, `curl` 8.18, `python3` 3.14, `sshd` on 22, passwordless `sudo` for the login user, and an empty `/opt` (only Docker's `containerd`). No checkout of the harness, no `local/`, nothing listening but `sshd` and the resolver. The agent was `claude -p` (Claude Opus 5.5) on the host machine, in a fresh clone of the branch, with no project memory, no MCP servers, no user or project settings, slash commands off, and tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`. The prompt, in Portuguese:
+**Setup.** For each round a new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template with no host mounts and no port forwards), which is exactly the prerequisite list in the README's "Getting Started": Docker 29.9.1 rootless and Compose v5.6 usable without `sudo`, `git` 2.53, `curl` 8.18, `python3` 3.14, `sshd` on 22, passwordless `sudo` for the login user, and an empty `/opt` (only Docker's `containerd`). No checkout of the cloud, no `local/`, nothing listening but `sshd` and the resolver. The agent was `claude -p` (Claude Opus 5.5) on the host machine, in a fresh clone of the branch, with no project memory, no MCP servers, no user or project settings, slash commands off, and tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`. The prompt, in Portuguese:
 
-> Quero montar a company cloud da nossa empresa nesse servidor para a gente conseguir criar apps internos com o Claude. Instala para mim. Acesso ao servidor: [ssh command] (esta pasta é uma cópia do repositório do harness). Não sei responder pergunta técnica; pergunta o que precisar em linguagem simples.
+> Quero montar a company cloud da nossa empresa nesse servidor para a gente conseguir criar apps internos com o Claude. Instala para mim. Acesso ao servidor: [ssh command] (esta pasta é uma cópia do repositório do projeto). Não sei responder pergunta técnica; pergunta o que precisar em linguagem simples.
 
 `claude -p` answers once and exits, so the person was simulated: each question got a layperson's answer in a new call with `--resume` on the same session. The answers were always the same: a fictitious bakery, a fictitious email, "only this machine for now", admin tools yes, file storage no, "I have no separate disk for backups, use what you can", "you can generate the password".
 
@@ -224,11 +226,11 @@ Checked by hand on each VM afterwards: `install.sh status` `completed`, the smok
 
 What the runs exposed, and what changed:
 
-- **The repository has to be on the box, and nothing said so.** The playbook began with `cd "$HARNESS"` on the box. Round 1 improvised a copy. Section 0 of [`llm-bootstrap.md`](llm-bootstrap.md), `AGENTS.md` and the contract now say to clone it there (or `scp -r` without GitHub access) and to keep it.
-- **`sudo` for the install directory.** The playbook said the person creates `/opt/open-company-harness`. The agent had passwordless `sudo` and ran it without saying. Section 1.2 now allows that one command when `sudo -n true` works, announced with the plan, and otherwise sends it to the person.
+- **The repository has to be on the box, and nothing said so.** The playbook began with `cd "$OCC"` on the box. Round 1 improvised a copy. Section 0 of [`llm-bootstrap.md`](llm-bootstrap.md), `AGENTS.md` and the contract now say to clone it there (or `scp -r` without GitHub access) and to keep it.
+- **`sudo` for the install directory.** The playbook said the person creates `/opt/open-company-cloud`. The agent had passwordless `sudo` and ran it without saying. Section 1.2 now allows that one command when `sudo -n true` works, announced with the plan, and otherwise sends it to the person.
 - **`local` URLs from another computer.** The handoff said "add these names to /etc/hosts pointing at 127.0.0.1", which is right on the box and wrong on a laptop, and the agent repeated it as "open it in Chrome". Section 3.3 suggested `ssh -L 8080:127.0.0.1:80` and `:8080` URLs. That reaches `/health` but not a page behind the sign-in: the outpost redirects to `http://<host>/outpost.goauthentik.io/start?rd=…:8080/`, without the port, so the browser lands on port 80 of the laptop. Checked from the host with a tunnel on 18080 and curl. With every request sent through the tunnel but the URLs kept on port 80 (`curl --connect-to ::127.0.0.1:18080`, which is what a port-80 tunnel does), `portal.` and `terminal.` end on the Authentik sign-in page and `git.` on Gitea. The handoff of `install.sh` now prints the port-80 tunnel for `local` ingress (a message that misled the agent, so a code change), and sections 1.6 and 3.3 and "Human" above say the same. Round 2's report used it.
 - **The prerequisites, declared.** The README's "Getting Started" now lists what the box must have before an agent starts, which is what these VMs had.
-- Not a harness issue: the CLI hands the agent the signed-in account's email and the repository's commit history, and in both rounds the agent offered those as defaults for the admin email and company name. The answers replaced them. A cold run on another machine or account would offer others.
+- Not an issue of this project: the CLI hands the agent the signed-in account's email and the repository's commit history, and in both rounds the agent offered those as defaults for the admin email and company name. The answers replaced them. A cold run on another machine or account would offer others.
 
 Not covered: the `sudo ssh -L 80` tunnel itself in a browser (port 80 of the test host was held by another VM, so the flow was checked with `--connect-to` as above), a box without passwordless `sudo`, Docker through the `docker` group instead of rootless, ingress other than `local`, and the full day one in a single session: install, then the first app (that half is the "Cold agent run" above).
 
@@ -252,7 +254,7 @@ Checked by hand on the first VM of this run:
 - **Writes.** The app container writes `/data` (`DATA_DIR=/data`), and the file lands in `app-data/smoke-app/`; FileBrowser writes there too; a write to `/srv/backup-reports` fails with "Read-only file system".
 - **Terminal disabled.** With `ops.wetty.enabled: false` the install completes, Wetty is not running, the handoff and `state.json` say why, and tests 17 and 18 pass on the three other tools. The same branch runs when the preflight finds no sshd: the detector returns nothing inside a container without sshd and `22` on the host.
 - **Key not installed.** With `ops.wetty.install_key: false` and the key line removed from `authorized_keys`, the terminal comes up as "up, key not authorized" in `state.json` and the handoff prints the one `cat … >> ~/.ssh/authorized_keys` command.
-- **Migration.** A binding of `harness-users` added by hand to the `ops-files` application is removed by the next `first-run.sh`, and the smoke user is denied again.
+- **Migration.** A binding of `occ-users` added by hand to the `ops-files` application is removed by the next `first-run.sh`, and the smoke user is denied again.
 - **Interactive questions.** "Enable the ops tools (Portainer, Glances, web terminal, file browser)?" defaults to yes, followed by the authorized_keys question; the preflight prints the sshd port and the two file browser paths.
 
 What broke on the way:
@@ -260,7 +262,7 @@ What broke on the way:
 - **`host.docker.internal` does not reach the host's sshd under rootless Docker**: `host-gateway` resolves to the gateway inside rootlesskit's namespace, where nothing listens. The installer now tries it, then the host's own address (`ip route get`), and keeps the first one where the key sign-in works; on rootful Docker and Docker Desktop the first try should succeed (not tested).
 - The installer read the image name with an inline comment from `docker/.env.example` (`WETTY_IMAGE=… # …`), and `dc up` failed silently inside the loop. The comment moved to its own line, and a failed `dc up` of Wetty is now logged.
 - `derive_ops` ended with `[ -n "$SSHD_PORT" ] && WETTY_ON=true`, which returns 1 under `set -e` when there is no sshd: the installer exited with no message exactly in the no-sshd case. Fixed with `if`.
-- The smoke user's password went through `env_secret … _`, whose indirection read bash's `$_` (the previous command's last argument) as a value supplied by the environment. It now has its own variable, `HARNESS_AUTHENTIK_SMOKE_USER_PASSWORD`, and is generated when that is unset.
+- The smoke user's password went through `env_secret … _`, whose indirection read bash's `$_` (the previous command's last argument) as a value supplied by the environment. It now has its own variable, `OCC_AUTHENTIK_SMOKE_USER_PASSWORD`, and is generated when that is unset.
 - The path rule refused `backups/reports` when the backup destination sits inside the install directory (the default). The rule now allows `<destination>/reports` wherever the destination is.
 
 Not tested: rootful Docker and Docker Desktop (the `host.docker.internal` path), a host without sshd end to end (only the detector and the skip branch), ingress other than `local/off`, an app image that drops to a non-root user writing `/data`.
@@ -275,11 +277,11 @@ The `storage` profile runs Garage `dxflrs/garage:v2.4.1` (multi-arch image, pull
 |---|---|
 | VM created and started | 54 s |
 | `install.sh --non-interactive`, all 14 stages: Garage started, layout version 1 applied (zone `dc1`, 100G), smoke tests 17 passed and 2 skipped (17 and 18: ops off), test 19 passed on the first run | 277 s |
-| `harness-app new files-demo`, manifest with `object_storage.required: true` (database and Redis off), `server.js` with `@aws-sdk/client-s3` storing `PUT /files/<name>` and reading `GET /files/<name>`; push until `harness-app wait` saw `/health` 200 and `/` behind the SSO (first deploy, `npm install` of the SDK included) | 38 s |
+| `occ-app new files-demo`, manifest with `object_storage.required: true` (database and Redis off), `server.js` with `@aws-sdk/client-s3` storing `PUT /files/<name>` and reading `GET /files/<name>`; push until `occ-app wait` saw `/health` 200 and `/` behind the SSO (first deploy, `npm install` of the SDK included) | 38 s |
 | Inside the app container: `PUT /files/hello.txt`, then `GET` | `stored`, `200 hello from files-demo` |
 | Redeploy with a code change, push until the run is green; the key id and the secret's fingerprint unchanged, the object still there | 29 s |
 | `install.sh --apply --from foundation` on the installed box: "Garage layout version 1 already assigns 1 node(s): unchanged", 17 passed, 2 skipped | 65 s |
-| `harness-backup.sh run` (11 items, `garage-data` among the volumes) / `verify --latest` | 16 s / 10 s |
+| `occ-backup.sh run` (11 items, `garage-data` among the volumes) / `verify --latest` | 16 s / 10 s |
 
 **VM 2, `install.profile.storage: true` and the ops profile as in the ops record (`ops: true`, Portainer, Glances, `install_key: true`):**
 
@@ -292,9 +294,9 @@ The `storage` profile runs Garage `dxflrs/garage:v2.4.1` (multi-arch image, pull
 
 Checked by hand on VM 1:
 
-- **Env file lost the secret.** With `S3_SECRET_ACCESS_KEY` deleted from `apps/files-demo/.env`, `harness-app provision` found the key `app-files-demo` in Garage and wrote back the same id and secret ("restored").
+- **Env file lost the secret.** With `S3_SECRET_ACCESS_KEY` deleted from `apps/files-demo/.env`, `occ-app provision` found the key `app-files-demo` in Garage and wrote back the same id and secret ("restored").
 - **Key deleted in Garage.** After `DeleteKey`, the next provision tried to import the env file's key again and Garage refused: it keeps a tombstone and never accepts a deleted key id ("KeyAlreadyExists ... Even if it is deleted"). Provision now issues a new key in that case, with a warning ("replaced"); after the redeploy the app read its object with the new key. On a wiped volume, where no tombstone exists, the env file's key is imported as it was.
-- **Storage profile off.** `harness-app provision` against a copy of the install `.env` with `COMPOSE_PROFILES=backup` stopped at the manifest step with "asks for object storage but the storage profile is off"; no `apps/` directory, env file or route was created.
+- **Storage profile off.** `occ-app provision` against a copy of the install `.env` with `COMPOSE_PROFILES=backup` stopped at the manifest step with "asks for object storage but the storage profile is off"; no `apps/` directory, env file or route was created.
 - **Restore.** The `garage-data` volume of the backup snapshot, restored with `restic restore` and mounted in a scratch Garage container with the same config and RPC secret: cluster healthy, bucket `app-files-demo` with 1 object of 21 bytes and the key `app-files-demo`, no block errors.
 - **Secrets.** `.env` 0600 with the three `GARAGE_*` secrets; `garage/garage.toml` (0644) has none; the app's env file (0600) has `S3_*` and nothing of Garage's own; the inventory records `garage:bucket:app-files-demo` and `garage:key:app-files-demo`.
 - **Rule against local storage.** A compose service running `dxflrs/garage` (or `minio`, `seaweedfs`) is refused like a local Postgres.
@@ -310,7 +312,7 @@ Not tested: a real disk-full or capacity change after the first layout (`storage
 
 `INGRESS=private`, `TLS_MODE=internal`, `TUNNEL_PROVIDER=tailscale` on a clean box, then a sign-in from another device on the tailnet ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)).
 
-**Setup.** A new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template, no host mounts, every port forward ignored): Docker 29.9.1 rootless, Compose 5.6.0, OpenSSL 3.5.5, `sshd` on 22. The branch copied onto the box. Config: `bootstrap/config.example.yaml` with `mode: private`, `base_domain: harness.internal`, `tls_mode: internal`, `tunnel_provider: tailscale`, a test node name, and every profile on (`storage`, `ops` with the terminal key, `agent` without keys, `backup`). The auth key (reusable, ephemeral) reached `install.sh` through the environment of that one command, read from a file outside the repository and piped over stdin, never on a command line.
+**Setup.** A new Lima VM (Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Lima's `docker` template, no host mounts, every port forward ignored): Docker 29.9.1 rootless, Compose 5.6.0, OpenSSL 3.5.5, `sshd` on 22. The branch copied onto the box. Config: `bootstrap/config.example.yaml` with `mode: private`, `base_domain: cloud.example.internal`, `tls_mode: internal`, `tunnel_provider: tailscale`, a test node name, and every profile on (`storage`, `ops` with the terminal key, `agent` without keys, `backup`). The auth key (reusable, ephemeral) reached `install.sh` through the environment of that one command, read from a file outside the repository and piped over stdin, never on a command line.
 
 **Result: installed, 21 of 21 smoke tests, sign-in from another device confirmed.**
 
@@ -319,11 +321,11 @@ Not tested: a real disk-full or capacity change after the first layout (`storage
 | `install.sh --non-interactive`, preflight to handoff, images pulled | 9 min 37 s (19:07:20 to 19:16:57) |
 | Tailscale | logged in with the key, container recreated without it, node back from its state; tailnet ports 80, 443 and 2222 served, 81, 3000, 9000 and 22 refused |
 | TLS | CA and wildcard made in `foundation`, uploaded in `first_run`, every host HTTPS-forced; Gitea's OIDC discovery over HTTPS verified with the CA |
-| DNS | `*.harness.internal` answered with the tailnet address by the node's DNS server; the stage reported the console split DNS as "not yet", then the person set it |
+| DNS | `*.cloud.example.internal` answered with the tailnet address by the node's DNS server; the stage reported the console split DNS as "not yet", then the person set it |
 | Smoke tests, first run (4 GiB) | 19 passed: 20 failed (agent OOM-killed, below) and 21 failed (a false negative of the test itself, fixed) |
 | VM restarted with 6 GiB, smoke tests again | the node came back on its own, with no key anywhere; 21 of 21 after recreating Portainer and Glances (below) |
-| `sso-login-check.sh`, Gitea and `--target https://portal.harness.internal`, CA as the only trust | PASS, PASS |
-| From another device on the tailnet (a person): split DNS set in the admin console, `ca.crt` installed, `https://portal.harness.internal` | no certificate warning, Authentik sign-in, the placeholder portal |
+| `sso-login-check.sh`, Gitea and `--target https://portal.cloud.example.internal`, CA as the only trust | PASS, PASS |
+| From another device on the tailnet (a person): split DNS set in the admin console, `ca.crt` installed, `https://portal.cloud.example.internal` | no certificate warning, Authentik sign-in, the placeholder portal |
 
 Checked afterwards: `TAILSCALE_AUTHKEY` empty in `.env`, no `TS_AUTHKEY` value in the running container, proxy ports 80 and 443 bound to 127.0.0.1 only and refused on the VM's address (test 21). Tailscale and CoreDNS together use about 22 MiB.
 

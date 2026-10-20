@@ -1,11 +1,11 @@
-# Open Company App Harness: installer input for `install.sh --non-interactive --config <file>`.
+# Open Company Cloud: installer input for `install.sh --non-interactive --config <file>`.
 # Every value here is a default or a placeholder. Secrets are never written in this file:
 # the *_env keys name the environment variable the installer reads them from, and the
 # installer generates any that are missing into .env (mode 0600).
 schema_version: 1
 
 install:
-  directory: /opt/open-company-harness
+  directory: /opt/open-company-cloud
   state_file: state.json
   non_interactive: true
   profile:
@@ -18,21 +18,21 @@ install:
 
 ingress:
   mode: local                    # local | private | public (see docs/install-design.md for the valid matrix)
-  base_domain: harness.localhost
-  public_base_url: http://portal.harness.localhost
+  base_domain: cloud.localhost
+  public_base_url: http://portal.cloud.localhost
   tls_mode: "off"                # off | internal | edge | acme (quoted: a bare off is YAML for false)
                                  # internal: the installer makes a CA in <install-dir>/local/ca
                                  # (name-constrained to base_domain) and a *.base_domain certificate
   tunnel_provider: none          # none | tailscale | cloudflared
   cloudflared:
-    tunnel_token_env: HARNESS_CLOUDFLARED_TUNNEL_TOKEN
+    tunnel_token_env: OCC_CLOUDFLARED_TUNNEL_TOKEN
   # Private ingress (mode: private, tls_mode: internal, tunnel_provider: tailscale), e.g.
   #   base_domain: apps.internal   public_base_url: https://portal.apps.internal
-  # The auth key is read from HARNESS_TAILSCALE_AUTHKEY for the first login only and never
+  # The auth key is read from OCC_TAILSCALE_AUTHKEY for the first login only and never
   # written to .env. The split DNS for base_domain is set by a person in the Tailscale admin
   # console (nameserver: the node's tailnet IP); the handoff prints the exact values.
   tailscale:
-    hostname: harness            # the node's name on the tailnet
+    hostname: occ            # the node's name on the tailnet
     private_dns_zone: apps.internal   # informative: the split-DNS zone is always base_domain
 
 admin:
@@ -41,15 +41,15 @@ admin:
 
 authentik:
   bootstrap_email: admin@example.com
-  bootstrap_password_env: HARNESS_AUTHENTIK_BOOTSTRAP_PASSWORD
-  bootstrap_token_env: HARNESS_AUTHENTIK_BOOTSTRAP_TOKEN
-  portal_group: harness-admins
-  app_group: harness-users
+  bootstrap_password_env: OCC_AUTHENTIK_BOOTSTRAP_PASSWORD
+  bootstrap_token_env: OCC_AUTHENTIK_BOOTSTRAP_TOKEN
+  portal_group: occ-admins
+  app_group: occ-users
 
 gitea:
-  base_url: http://git.harness.localhost
+  base_url: http://git.cloud.localhost
   initial_admin_username: admin
-  initial_admin_password_env: HARNESS_GITEA_ADMIN_PASSWORD
+  initial_admin_password_env: OCC_GITEA_ADMIN_PASSWORD
   organization: company
   enable_actions: true
   oidc_enabled: true
@@ -58,17 +58,17 @@ postgres:
   shared:                        # for apps built inside the cloud
     enabled: true
   portal:                        # core tools own their database on the shared instance
-    database: harness_platform
-    role: harness_platform
-    password_env: HARNESS_PLATFORM_DATABASE_PASSWORD
+    database: occ_platform
+    role: occ_platform
+    password_env: OCC_PLATFORM_DATABASE_PASSWORD
   gitea:
     database: gitea
     role: gitea
-    password_env: HARNESS_GITEA_DATABASE_PASSWORD
+    password_env: OCC_GITEA_DATABASE_PASSWORD
   authentik:                     # identity never depends on app data
     database: authentik
     role: authentik
-    password_env: HARNESS_AUTHENTIK_DATABASE_PASSWORD
+    password_env: OCC_AUTHENTIK_DATABASE_PASSWORD
 
 redis:
   shared:
@@ -80,20 +80,20 @@ storage:
   provider: none                 # none | garage (install.profile.storage: true also turns it on)
   endpoint_public_url: ""        # informative: apps get S3_PUBLIC_ENDPOINT = <scheme>://s3.<base_domain>
   capacity: 100G                 # the node's capacity in Garage's layout (set once, at the first start)
-  # Secrets are generated into .env: GARAGE_RPC_SECRET (or HARNESS_GARAGE_RPC_SECRET, 64 hex
+  # Secrets are generated into .env: GARAGE_RPC_SECRET (or OCC_GARAGE_RPC_SECRET, 64 hex
   # chars), GARAGE_ADMIN_TOKEN, GARAGE_METRICS_TOKEN. None of them ever reaches an app.
 
 portal:
   enabled: true
-  domain: portal.harness.localhost
+  domain: portal.cloud.localhost
   super_admin_emails:
     - admin@example.com
 
 ci:                              # the Gitea Actions runners are core: always installed
   gitea_runner:
-    registration_token_env: HARNESS_GITEA_RUNNER_TOKEN
+    registration_token_env: OCC_GITEA_RUNNER_TOKEN
 
-ops:                             # the ops profile: harness-admins only, through the SSO
+ops:                             # the ops profile: occ-admins only, through the SSO
   agent:                         # the agent profile (install.profile.agent), docs/operator-contract.md
     allow_write: false           # true: it may restart app containers and prune the Docker build
                                  # cache, nothing else (docs/security.md). Default: read only
@@ -123,8 +123,8 @@ backup:                          # docs/backup.md
   max_age_hours: 26              # verify/status call the newest success stale past this
   destination:                   # absolute host directory, ideally another disk or mount;
                                  # empty: <install-dir>/backups (same disk: a warning)
-  destination_env: HARNESS_BACKUP_DESTINATION      # this variable, when set, wins over destination
-  encryption_key_env: HARNESS_BACKUP_ENCRYPTION_KEY # restic password; generated into .env when unset
+  destination_env: OCC_BACKUP_DESTINATION      # this variable, when set, wins over destination
+  encryption_key_env: OCC_BACKUP_ENCRYPTION_KEY # restic password; generated into .env when unset
   local_retention_daily: 7
   local_retention_weekly: 4
   local_retention_monthly: 12

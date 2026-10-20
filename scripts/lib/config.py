@@ -9,6 +9,10 @@ Usage: config.py FILE COMMAND
 
 Uses PyYAML when present; otherwise a small parser for the subset the example uses:
 nested maps by indentation, scalar lists ("- item"), quoted or bare scalars, comments.
+
+A config written before the rename from Open Company App Harness still loads: every
+*_env value HARNESS_<X> is read as OCC_<X>, and `flatten` warns on stderr about it and
+about values that keep the old defaults (docs/install-design.md, "Renamed from ...").
 """
 import hashlib, json, shlex, sys
 
@@ -103,7 +107,35 @@ def load(path):
     ingress = data.get("ingress") if isinstance(data, dict) else None
     if isinstance(ingress, dict) and ingress.get("tls_mode") is False:
         ingress["tls_mode"] = "off"
+    if isinstance(data, dict):
+        migrate_old_names(data)
     return data
+
+
+# Old names found by load(), reported by `flatten` (once per install run).
+OLD_ENV_NAMES, OLD_VALUES = [], []
+
+
+def migrate_old_names(d, prefix=""):
+    for k, v in list(d.items()):
+        key = prefix + str(k)
+        if isinstance(v, dict):
+            migrate_old_names(v, key + ".")
+        elif isinstance(v, str) and str(k).endswith("_env") and v.startswith("HARNESS_"):
+            d[k] = "OCC_" + v[len("HARNESS_"):]
+            OLD_ENV_NAMES.append(key)
+        elif isinstance(v, str) and "harness" in v.lower():
+            OLD_VALUES.append(key)
+
+
+def report_old_names():
+    if OLD_ENV_NAMES:
+        sys.stderr.write("[!!] config written before the rename from Open Company App Harness: %d *_env "
+                         "names HARNESS_<X> are read as OCC_<X> for this version only (%s); rename them\n"
+                         % (len(OLD_ENV_NAMES), ", ".join(OLD_ENV_NAMES)))
+    if OLD_VALUES:
+        sys.stderr.write("[!!] config keeps old default values, used as given (%s); new installs use "
+                         "the occ / cloud.localhost names (docs/install-design.md)\n" % ", ".join(OLD_VALUES))
 
 
 def scalar(v):
@@ -134,6 +166,7 @@ def main():
     data = load(sys.argv[1])
     cmd = sys.argv[2]
     if cmd == "flatten":
+        report_old_names()
         for k, v in flatten(data):
             print("CFG_%s=%s" % (k.replace("-", "_"), shlex.quote(v)))
     elif cmd == "get":

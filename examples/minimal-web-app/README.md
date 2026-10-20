@@ -1,6 +1,6 @@
 # Minimal Web App
 
-Runnable example app for Open Company App Harness.
+Runnable example app for Open Company Cloud.
 
 ## Run
 

@@ -107,22 +107,22 @@ function loadRepos(path) {
 function writeLocalConfig(config, adminPassword, plan) {
   mkdirSync("local", { recursive: true });
   const env = [
-    `HARNESS_WORKSPACE_DIR=${config.workspaceDir}`,
-    `HARNESS_GIT_BASE_URL=${config.gitBaseUrl}`,
-    `HARNESS_GIT_OWNER=${config.gitOwner}`,
-    `HARNESS_INTERNAL_DOMAIN=${config.internalDomain}`,
-    `HARNESS_PORTAL_DOMAIN=${config.portalDomain}`,
-    `HARNESS_TUNNEL_PROVIDER=${config.tunnelProvider}`,
-    `HARNESS_REVERSE_PROXY=${config.reverseProxy}`,
-    `HARNESS_AUTH_PROVIDER=${config.authProvider}`,
-    `HARNESS_GIT_PROVIDER=${config.gitProvider}`,
-    `HARNESS_CONTAINER_MANAGER=${config.containerManager}`,
-    `HARNESS_HOST_MONITOR=${config.hostMonitor}`,
-    `HARNESS_DATABASE=${config.database}`,
-    `HARNESS_CACHE=${config.cache}`,
-    `HARNESS_OBJECT_STORAGE=${config.objectStorage}`,
-    `HARNESS_INITIAL_ADMIN_EMAIL=${config.adminEmail}`,
-    `HARNESS_INITIAL_ADMIN_PASSWORD=${adminPassword}`,
+    `OCC_WORKSPACE_DIR=${config.workspaceDir}`,
+    `OCC_GIT_BASE_URL=${config.gitBaseUrl}`,
+    `OCC_GIT_OWNER=${config.gitOwner}`,
+    `OCC_INTERNAL_DOMAIN=${config.internalDomain}`,
+    `OCC_PORTAL_DOMAIN=${config.portalDomain}`,
+    `OCC_TUNNEL_PROVIDER=${config.tunnelProvider}`,
+    `OCC_REVERSE_PROXY=${config.reverseProxy}`,
+    `OCC_AUTH_PROVIDER=${config.authProvider}`,
+    `OCC_GIT_PROVIDER=${config.gitProvider}`,
+    `OCC_CONTAINER_MANAGER=${config.containerManager}`,
+    `OCC_HOST_MONITOR=${config.hostMonitor}`,
+    `OCC_DATABASE=${config.database}`,
+    `OCC_CACHE=${config.cache}`,
+    `OCC_OBJECT_STORAGE=${config.objectStorage}`,
+    `OCC_INITIAL_ADMIN_EMAIL=${config.adminEmail}`,
+    `OCC_INITIAL_ADMIN_PASSWORD=${adminPassword}`,
     ""
   ].join("\n");
 

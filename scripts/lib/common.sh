@@ -1,8 +1,8 @@
 # Shared shell library for install.sh, first-run.sh and smoke-tests.sh.
 # bash 3.2 compatible. Sourced, never executed.
 
-HARNESS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HARNESS_ROOT="$(cd "$HARNESS_LIB/../.." && pwd)"
+OCC_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OCC_ROOT="$(cd "$OCC_LIB/../.." && pwd)"
 PY="python3 -I"
 
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
@@ -19,13 +19,29 @@ fail() { _out "[xx] $*"; }
 die()  { fail "$*"; exit 1; }
 
 # ------------------------------------------------------------------ helpers
-jsonq()   { $PY "$HARNESS_LIB/jsonq.py" "$@"; }
-envfile() { $PY "$HARNESS_LIB/envfile.py" "$@"; }
-state()   { $PY "$HARNESS_LIB/state.py" "$STATE_FILE" "$@"; }
+jsonq()   { $PY "$OCC_LIB/jsonq.py" "$@"; }
+envfile() { $PY "$OCC_LIB/envfile.py" "$@"; }
+state()   { $PY "$OCC_LIB/state.py" "$STATE_FILE" "$@"; }
 
 env_get() { envfile get "$ENV_FILE" "$1"; }
 # env_set KEY VALUE: the value travels on stdin, never on a command line.
 env_set() { printf '%s' "$2" | envfile set "$ENV_FILE" "$1"; }
+
+# ------------------------------------------------------------------ old names
+# Renamed from Open Company App Harness (docs/install-design.md): for one version, a
+# HARNESS_<X> in the environment still sets OCC_<X> when that is unset, with a warning.
+# Children inherit the OCC_ value and OCC_COMPAT_WARNED, so each name warns once.
+occ_compat_env() {
+  local name new
+  for name in $(env | sed -n 's/^\(HARNESS_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    new="OCC_${name#HARNESS_}"
+    eval "[ -z \"\${$new+x}\" ]" || continue
+    eval "export $new=\"\$$name\""
+    [ -n "${OCC_COMPAT_WARNED:-}" ] || warn "$name is the old name of $new (renamed from Open Company App Harness): read for this version only, rename it"
+  done
+  export OCC_COMPAT_WARNED=1
+}
+occ_compat_env
 
 random_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-40}"; }
 
@@ -48,7 +64,7 @@ curl_resolve() { # URL
 # proxy_url HOST PATH and proxy_args HOST: how a check on the box reaches a public name
 # through the proxy. TLS off: plain HTTP to PROXY (the proxy's port) with a Host header.
 # TLS internal: https://HOST pinned to PROXY_PIN (127.0.0.1 on the box, the proxy's
-# address inside a deploy job) and verified against the harness CA, never with -k.
+# address inside a deploy job) and verified against the cloud CA, never with -k.
 # proxy_args prints space-separated curl arguments, none of which contains a space.
 proxy_url() {
   if [ "${TLS_MODE:-off}" = internal ]; then printf 'https://%s%s' "$1" "$2"
@@ -147,7 +163,7 @@ port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 API_TMPDIR=""
 api_init() {
   if [ -z "$API_TMPDIR" ]; then
-    API_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-api.XXXXXX")"
+    API_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/occ-api.XXXXXX")"
     chmod 700 "$API_TMPDIR"
     trap 'rm -rf "$API_TMPDIR"' EXIT
   fi

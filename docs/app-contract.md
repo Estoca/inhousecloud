@@ -1,6 +1,6 @@
 # App Contract
 
-`company-app.yaml` is the operational contract for a deployable internal app. `harness-app provision` ([`gitops-flow.md`](gitops-flow.md)) reads it on every push to `main` and refuses to deploy when it breaks a rule below; [`templates/app`](../templates/app) starts every new app with a valid one. Schema: [`schemas/company-app.schema.json`](../schemas/company-app.schema.json).
+`company-app.yaml` is the operational contract for a deployable internal app. `occ-app provision` ([`gitops-flow.md`](gitops-flow.md)) reads it on every push to `main` and refuses to deploy when it breaks a rule below; [`templates/app`](../templates/app) starts every new app with a valid one. Schema: [`schemas/company-app.schema.json`](../schemas/company-app.schema.json).
 
 ## Minimal Deployable App
 
@@ -25,8 +25,8 @@ runtime:
 
 deploy:
   enabled: true
-  domain: example-app.harness.localhost   # optional; always <slug>.<BASE_DOMAIN>
-  port: auto                       # no host port: the proxy reaches the app on the harness network
+  domain: example-app.cloud.localhost   # optional; always <slug>.<BASE_DOMAIN>
+  port: auto                       # no host port: the proxy reaches the app on the occ network
   env_example: .env.example
 
 auth:
@@ -51,7 +51,7 @@ checks:
 
 ## What the app receives
 
-`harness-app provision` writes `<install-dir>/apps/<slug>/.env` (mode `0600`, never in Git) and the deploy hands it to every service of the app:
+`occ-app provision` writes `<install-dir>/apps/<slug>/.env` (mode `0600`, never in Git) and the deploy hands it to every service of the app:
 
 | Variable | When | Value |
 |---|---|---|
@@ -60,18 +60,18 @@ checks:
 | `DATA_DIR` | always | `/data`: the host directory `<install-dir>/app-data/<slug>`, mounted in the main service, backed up with the install directory and visible to admins in the ops file browser. Written as the container's root user (rootless Docker: the host user); an image that runs as another user must make `/data` writable for it |
 | `DATABASE_URL`, `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | `database.required` | database and role `app_<slug>` on `postgres:5432` |
 | `REDIS_URL`, `REDIS_PREFIX` | `dependencies.redis.required` | ACL user `app-<slug>` on `redis:6379`, prefix `<slug>:` (every key and channel must start with it) |
-| `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_FORCE_PATH_STYLE` | `object_storage.required` (the `storage` profile must be on, or the deploy stops before changing anything) | bucket `app-<slug>` and access key `app-<slug>` on Garage: `S3_ENDPOINT` is `http://garage:3900` (inside the harness network), `S3_PUBLIC_ENDPOINT` is `<scheme>://s3.<BASE_DOMAIN>` (for presigned URLs a browser opens), `S3_REGION` is `garage`, `S3_FORCE_PATH_STYLE` is `true` (path-style requests: set `forcePathStyle` in the AWS SDK). The key reads and writes this bucket only: it cannot list, create or delete buckets, and gets 403 on another app's |
+| `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_FORCE_PATH_STYLE` | `object_storage.required` (the `storage` profile must be on, or the deploy stops before changing anything) | bucket `app-<slug>` and access key `app-<slug>` on Garage: `S3_ENDPOINT` is `http://garage:3900` (inside the occ network), `S3_PUBLIC_ENDPOINT` is `<scheme>://s3.<BASE_DOMAIN>` (for presigned URLs a browser opens), `S3_REGION` is `garage`, `S3_FORCE_PATH_STYLE` is `true` (path-style requests: set `forcePathStyle` in the AWS SDK). The key reads and writes this bucket only: it cannot list, create or delete buckets, and gets 403 on another app's |
 | keys of `.env.example` | when absent | the example's value; `LOCAL_*` keys are for a laptop and never reach the box |
 
 Passwords and keys are created once and kept: redeploys never change them. To set a value the example cannot hold (an API key of a third party), edit the env file on the box; provision keeps it.
 
-Behind the SSO the signed-in person arrives in the request headers `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups` and `X-authentik-uid`. Access is the users group (`AUTHENTIK_APP_GROUP`, `harness-users` by default); narrower access is a policy binding in Authentik, by hand for now.
+Behind the SSO the signed-in person arrives in the request headers `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups` and `X-authentik-uid`. Access is the users group (`AUTHENTIK_APP_GROUP`, `occ-users` by default); narrower access is a policy binding in Authentik, by hand for now.
 
 Migrations: the app runs its own at start (`database.migrations_command` is documentation for now; the executor does not run it).
 
 ## Required Rules
 
-Checked by `harness-app provision`, each failure with the fix in the message:
+Checked by `occ-app provision`, each failure with the fix in the message:
 
 - `schema_version` is `1`.
 - `app.slug` has 3 to 32 lowercase letters, digits and hyphens, is not a name the platform uses, and equals the repository name.

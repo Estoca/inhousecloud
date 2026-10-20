@@ -5,21 +5,21 @@ This repository installs a company cloud on one machine and puts internal apps o
 | The human asks | Read | Then run |
 |---|---|---|
 | "set up this machine as our company cloud" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 1 | `./install.sh --plan`, then `--non-interactive` after a yes |
-| "build an app for X and put it on the air" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 2 | `scripts/harness-app.sh new <slug>`, write the app, `git push origin main` |
-| "why is it down", "is the backup ok", "the disk is full" (an installed box) | [`docs/operator-contract.md`](docs/operator-contract.md), then the runbook in [`docs/runbooks/`](docs/runbooks/) | `scripts/harness-operator.sh brief --install-dir <dir>` |
+| "build an app for X and put it on the air" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 2 | `scripts/occ-app.sh new <slug>`, write the app, `git push origin main` |
+| "why is it down", "is the backup ok", "the disk is full" (an installed box) | [`docs/operator-contract.md`](docs/operator-contract.md), then the runbook in [`docs/runbooks/`](docs/runbooks/) | `scripts/occ-operator.sh brief --install-dir <dir>` |
 
-First, always: find out whether the cloud is installed (`llm-bootstrap.md`, section 0). Every command runs from a checkout of this repository **on the box**; on a fresh box, clone it there first (`git clone https://github.com/Estoca/open-company-app-harness.git ~/open-company-app-harness`, or `scp -r` this folder):
+First, always: find out whether the cloud is installed (`llm-bootstrap.md`, section 0). Every command runs from a checkout of this repository **on the box**; on a fresh box, clone it there first (`git clone https://github.com/Estoca/open-company-cloud.git ~/open-company-cloud`, or `scp -r` this folder):
 
 ```bash
-cd ~/open-company-app-harness
-./install.sh status --install-dir /opt/open-company-harness --json
+cd ~/open-company-cloud
+./install.sh status --install-dir /opt/open-company-cloud --json
 ```
 
 The loop, in four lines:
 
 ```text
 install.sh                     the cloud: proxy, SSO (Authentik), Git + Actions (Gitea), shared Postgres and Redis, backup
-harness-app.sh new <slug>      a repository from templates/app in the Gitea organization
+occ-app.sh new <slug>      a repository from templates/app in the Gitea organization
 git push origin main           the deploy: Gitea Actions on the box gives the app a database, Redis user, route and SSO, and starts it
 http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in
 ```

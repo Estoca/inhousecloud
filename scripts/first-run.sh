@@ -11,17 +11,17 @@
 #      optional profiles' hosts. The ops tools (Portainer, Glances, the web terminal,
 #      the file browser) each get a proxy provider and application bound to the admin
 #      group only, and a proxy host with forward auth and no public path. With the ops
-#      profile, the user AUTHENTIK_SMOKE_USER (harness-users only, password in .env)
+#      profile, the user AUTHENTIK_SMOKE_USER (occ-users only, password in .env)
 #      exists so smoke test 18 can prove a non-admin is denied.
-#   3. Gitea: admin, API tokens, organization, harness-smoke repository, OIDC source.
+#   3. Gitea: admin, API tokens, organization, occ-smoke repository, OIDC source.
 # Talks to the services on their loopback control ports; tokens travel in curl config
 # files and on stdin, never on a command line, and nothing secret is printed.
 set -eu
-HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OCC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$HARNESS_ROOT/scripts/lib/common.sh"
+. "$OCC_ROOT/scripts/lib/common.sh"
 
-INSTALL_DIR="${HARNESS_INSTALL_DIR:-/opt/open-company-harness}"
+INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -39,7 +39,7 @@ load_env
 HAVE_STATE=false; [ -f "$STATE_FILE" ] && HAVE_STATE=true
 record() { [ "$HAVE_STATE" = true ] && state stage first_run set resources "[\"$1\"]" || true; }
 # shellcheck source=lib/sso.sh
-. "$HARNESS_ROOT/scripts/lib/sso.sh"
+. "$OCC_ROOT/scripts/lib/sso.sh"
 
 AK="http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3"
 GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
@@ -69,7 +69,7 @@ ok "flows resolved (authorization implicit-consent, invalidation)"
 # Signing key for id_tokens: the self-signed pair Authentik generates on first start.
 SIGNING_KEY="$(ak_list_find "crypto/certificatekeypairs/?name=$(urlenc "authentik Self-signed Certificate")&has_key=true" name "authentik Self-signed Certificate" pk)"
 if [ -z "$SIGNING_KEY" ]; then
-  api POST "$AK/crypto/certificatekeypairs/generate/" "$(jsonq build common_name="harness OIDC signing" subject_alt_name="" validity_days:=3650)"
+  api POST "$AK/crypto/certificatekeypairs/generate/" "$(jsonq build common_name="Open Company Cloud OIDC signing" subject_alt_name="" validity_days:=3650)"
   api_ok || die "generate signing key: HTTP $API_CODE"
   SIGNING_KEY="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "signing key generated"
 else ok "signing key: authentik self-signed certificate"; fi
@@ -124,10 +124,10 @@ $t
 TOOL
     ensure_admin_tool "$slug" "$name" "$sub.$BASE_DOMAIN" "$PORTAL_GROUP_PK"
   done
-  # The smoke user: harness-users only. Its password exists only in .env (0600).
+  # The smoke user: occ-users only. Its password exists only in .env (0600).
   SMOKE_PK="$(ak_list_find "core/users/?username=$(urlenc "$AUTHENTIK_SMOKE_USER")" username "$AUTHENTIK_SMOKE_USER" pk)"
   if [ -z "$SMOKE_PK" ]; then
-    api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Harness smoke test (not an admin)" is_active:=true path=harness/smoke)"
+    api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Smoke test user (not an admin)" is_active:=true path=occ/smoke)"
     api_ok || die "create user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
     SMOKE_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "user $AUTHENTIK_SMOKE_USER created"
   else ok "user $AUTHENTIK_SMOKE_USER exists"; fi
@@ -212,7 +212,7 @@ record "gitea:user:$GITEA_ADMIN_USERNAME"
 gitea_token_valid() { api_init gt "Authorization: token $1"; api GET "$GT/user"; [ "$API_CODE" = 200 ]; }
 TOKEN="$(env_get GITEA_ADMIN_TOKEN)"
 if [ -z "$TOKEN" ] || ! gitea_token_valid "$TOKEN"; then
-  TOKEN="$(gitea_cli admin user generate-access-token --username "$GITEA_ADMIN_USERNAME" --token-name "harness-install-$(date +%s)" --scopes all --raw | tr -d '[:space:]')"
+  TOKEN="$(gitea_cli admin user generate-access-token --username "$GITEA_ADMIN_USERNAME" --token-name "occ-install-$(date +%s)" --scopes all --raw | tr -d '[:space:]')"
   [ -n "$TOKEN" ] || die "could not generate the admin API token"
   env_set GITEA_ADMIN_TOKEN "$TOKEN"; ok "admin API token generated into .env"
 else ok "admin API token valid"; fi
@@ -229,10 +229,10 @@ record "gitea:org:$GITEA_ORGANIZATION"
 # A small private repository for smoke test 12 (authenticated clone). Deploys need no
 # repository of their own: push to main of the app's repository is the approval
 # (docs/gitops-flow.md). A deploy-requests repository left by an older install is kept.
-REPO=harness-smoke
+REPO=occ-smoke
 api GET "$GT/repos/$GITEA_ORGANIZATION/$REPO"
 if [ "$API_CODE" = 404 ]; then
-  api POST "$GT/orgs/$GITEA_ORGANIZATION/repos" "$(jsonq build name="$REPO" description="Target of the harness smoke tests (authenticated clone)" private:=true auto_init:=true default_branch=main)"
+  api POST "$GT/orgs/$GITEA_ORGANIZATION/repos" "$(jsonq build name="$REPO" description="Target of the cloud smoke tests (authenticated clone)" private:=true auto_init:=true default_branch=main)"
   api_ok || die "create repository: HTTP $API_CODE $API_BODY"
   ok "repository $GITEA_ORGANIZATION/$REPO created"
 else api_ok || die "probe repository: HTTP $API_CODE"; ok "repository $GITEA_ORGANIZATION/$REPO exists"; fi
@@ -242,7 +242,7 @@ SMOKE="$GITEA_BASE_URL/$GITEA_ORGANIZATION/$REPO.git"
 
 RO="$(env_get GITEA_READONLY_TOKEN)"
 if [ -z "$RO" ] || ! gitea_token_valid "$RO"; then
-  RO="$(gitea_cli admin user generate-access-token --username "$GITEA_ADMIN_USERNAME" --token-name "harness-readonly-$(date +%s)" --scopes read:misc,read:repository,read:organization,read:user --raw | tr -d '[:space:]')"
+  RO="$(gitea_cli admin user generate-access-token --username "$GITEA_ADMIN_USERNAME" --token-name "occ-readonly-$(date +%s)" --scopes read:misc,read:repository,read:organization,read:user --raw | tr -d '[:space:]')"
   [ -n "$RO" ] || die "could not generate the read-only token"
   env_set GITEA_READONLY_TOKEN "$RO"; ok "read-only API token generated into .env"
 else ok "read-only API token valid"; fi
@@ -253,9 +253,9 @@ if [ "$GITEA_OIDC_ENABLED" = true ]; then
   # must already answer by its public name from inside the container. Probed with
   # busybox wget: curl resolves every *.localhost name to loopback by itself and would
   # never reach the proxy alias. With TLS internal, curl checks the certificate against
-  # the harness CA mounted at /etc/harness-ca (Gitea itself trusts it through SSL_CERT_DIR).
+  # the cloud CA mounted at /etc/occ-ca (Gitea itself trusts it through SSL_CERT_DIR).
   if [ "$TLS_MODE" = internal ]; then
-    disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/harness-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
+    disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/occ-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   else
     disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   fi

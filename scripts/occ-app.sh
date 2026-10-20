@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# harness-app: from an empty folder to an app running behind the SSO (docs/gitops-flow.md).
+# occ-app: from an empty folder to an app running behind the SSO (docs/gitops-flow.md).
 #
-#   harness-app new SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--push]
+#   occ-app new SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--push]
 #       Generate the app repository from templates/app (manifest, compose file,
 #       .gitea/workflows/deploy.yml), create SLUG in the Gitea organization and set it as
 #       origin. --push pushes main, which is the deploy.
-#   harness-app provision SLUG [--manifest FILE]
+#   occ-app provision SLUG [--manifest FILE]
 #       The executor, run on the box by the deploy job: validates the manifest and the
 #       compose file, then ensures the app's database and role on the shared Postgres,
 #       its Redis ACL user and key prefix, its bucket (only when asked for and the storage
@@ -13,27 +13,27 @@
 #       <install-dir>/app-data/SLUG (mounted at /data), the compose overlay, the
 #       Authentik provider and application, the proxy host SLUG.<BASE_DOMAIN> with
 #       forward auth, and the app's record in inventory.json.
-#   harness-app checkout                   inside a deploy job: fetch the pushed commit
-#   harness-app wait SLUG [--timeout S]    wait for the manifest healthcheck behind the proxy
-#   harness-app list [--json]              the apps in inventory.json
+#   occ-app checkout                   inside a deploy job: fetch the pushed commit
+#   occ-app wait SLUG [--timeout S]    wait for the manifest healthcheck behind the proxy
+#   occ-app list [--json]              the apps in inventory.json
 #
-# Options: --install-dir DIR (default $HARNESS_INSTALL_DIR, else /opt/open-company-harness).
+# Options: --install-dir DIR (default $OCC_INSTALL_DIR, else /opt/open-company-cloud).
 # Idempotent: every step probes first; a second run keeps every password. It never deletes
 # a database, role, bucket, route or Authentik object. Secrets go to the app's env file
 # and travel on stdin or in the environment, never on a command line or in the output.
-# `new` away from the box reads HARNESS_GITEA_URL, HARNESS_GITEA_TOKEN, HARNESS_GITEA_ORG
-# and HARNESS_BASE_DOMAIN from the environment when there is no readable install .env.
+# `new` away from the box reads OCC_GITEA_URL, OCC_GITEA_TOKEN, OCC_GITEA_ORG
+# and OCC_BASE_DOMAIN from the environment when there is no readable install .env.
 set -eu
 # Deploy jobs run through `docker exec`, whose umask is 0000: set ours. Env files are
 # created 0600 on top of this.
 umask 022
-HARNESS_ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+OCC_ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$HARNESS_ROOT/scripts/lib/common.sh"
+. "$OCC_ROOT/scripts/lib/common.sh"
 
-usage() { sed -n '2,/^set -eu/p' "$HARNESS_ROOT/scripts/harness-app.sh" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^set -eu/p' "$OCC_ROOT/scripts/occ-app.sh" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
-INSTALL_DIR="${HARNESS_INSTALL_DIR:-/opt/open-company-harness}"
+INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 SLUG=""; DIR=""; NAME=""; OWNER=""; PUSH=false; MANIFEST="company-app.yaml"; TIMEOUT=240
 while [ $# -gt 0 ]; do
@@ -60,16 +60,16 @@ RESOURCES=""
 record() { RESOURCES="$RESOURCES $1"; }
 
 # Endpoints: the loopback control ports on the box itself, the service names on the
-# harness network inside a deploy job (HARNESS_ENDPOINTS=internal, set by the runner).
+# occ network inside a deploy job (OCC_ENDPOINTS=internal, set by the runner).
 endpoints() {
-  local mode="${HARNESS_ENDPOINTS:-auto}"
+  local mode="${OCC_ENDPOINTS:-auto}"
   if [ "$mode" = auto ]; then
     if $PY -c 'import socket;socket.gethostbyname("authentik-server")' >/dev/null 2>&1; then mode=internal; else mode=loopback; fi
   fi
   if [ "$mode" = internal ]; then
     AK="http://authentik-server:9000/api/v3"; GT_ROOT="http://gitea:3000"
     NPM="http://proxy:81/api"; PROXY="http://proxy:80"
-    # TLS internal: https://<name> pinned to the proxy's address on the harness network.
+    # TLS internal: https://<name> pinned to the proxy's address on the occ network.
     PROXY_PIN="$($PY -c 'import socket;print(socket.gethostbyname("proxy"))' 2>/dev/null || true)"; PROXY_TLS_PORT=443
   else
     AK="http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3"; GT_ROOT="http://127.0.0.1:${GITEA_LOCAL_PORT}"
@@ -79,26 +79,26 @@ endpoints() {
   ENDPOINTS="$mode"
 }
 
-# svc_cid SERVICE: the running container of a harness service, found by its Compose labels.
+# svc_cid SERVICE: the running container of a cloud service, found by its Compose labels.
 svc_cid() {
-  docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-harness}" \
+  docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-occ}" \
     --filter "label=com.docker.compose.service=$1" | head -n 1
 }
 
 app_url() { printf '%s://%s.%s' "${PORTAL_BASE_URL%%://*}" "$1" "$BASE_DOMAIN"; }
 db_ident() { printf 'app_%s' "$(printf '%s' "$1" | tr '-' '_')"; }
 
-# askpass FILE USER: a GIT_ASKPASS helper that answers USER and $HARNESS_GIT_TOKEN, so
+# askpass FILE USER: a GIT_ASKPASS helper that answers USER and $OCC_GIT_TOKEN, so
 # the token never appears in an argument or a remote URL.
 askpass() {
-  (umask 077; printf '#!/bin/sh\ncase "$1" in *sername*) printf "%%s\\n" "%s" ;; *) printf "%%s\\n" "$HARNESS_GIT_TOKEN" ;; esac\n' "$2" > "$1")
+  (umask 077; printf '#!/bin/sh\ncase "$1" in *sername*) printf "%%s\\n" "%s" ;; *) printf "%%s\\n" "$OCC_GIT_TOKEN" ;; esac\n' "$2" > "$1")
   chmod 700 "$1"
 }
 
 # ======================================================================== new
 cmd_new() {
-  [ -n "$SLUG" ] || die "usage: harness-app new SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--push]"
-  $PY "$HARNESS_LIB/appmanifest.py" slug-check "$SLUG" || exit 1
+  [ -n "$SLUG" ] || die "usage: occ-app new SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--push]"
+  $PY "$OCC_LIB/appmanifest.py" slug-check "$SLUG" || exit 1
   local gitea_url token org domain dir tmpl ap push_url
   if [ -r "$ENV_FILE" ]; then
     load_env; endpoints
@@ -106,8 +106,8 @@ cmd_new() {
     push_url="$GT_ROOT/$org/$SLUG.git"
     [ -n "$OWNER" ] || OWNER="$GITEA_ADMIN_EMAIL"
   else
-    gitea_url="${HARNESS_GITEA_URL:-}"; token="${HARNESS_GITEA_TOKEN:-}"; org="${HARNESS_GITEA_ORG:-company}"; domain="${HARNESS_BASE_DOMAIN:-}"
-    [ -n "$gitea_url" ] && [ -n "$token" ] && [ -n "$domain" ] || die "no readable $ENV_FILE: set HARNESS_GITEA_URL, HARNESS_GITEA_TOKEN (a token of yours with repository write) and HARNESS_BASE_DOMAIN, or pass --install-dir on the box"
+    gitea_url="${OCC_GITEA_URL:-}"; token="${OCC_GITEA_TOKEN:-}"; org="${OCC_GITEA_ORG:-company}"; domain="${OCC_BASE_DOMAIN:-}"
+    [ -n "$gitea_url" ] && [ -n "$token" ] && [ -n "$domain" ] || die "no readable $ENV_FILE: set OCC_GITEA_URL, OCC_GITEA_TOKEN (a token of yours with repository write) and OCC_BASE_DOMAIN, or pass --install-dir on the box"
     GT="${gitea_url%/}/api/v1"; push_url="${gitea_url%/}/$org/$SLUG.git"
   fi
   [ -n "$OWNER" ] || OWNER="$(git config user.email 2>/dev/null || true)"
@@ -119,7 +119,7 @@ cmd_new() {
 
   step "app repository $SLUG in $dir"
   mkdir -p "$dir"
-  tmpl="$HARNESS_ROOT/templates/app"
+  tmpl="$OCC_ROOT/templates/app"
   (cd "$tmpl" && tar cf - .) | (cd "$dir" && tar xf -)
   $PY - "$dir" "$SLUG" "$NAME" "$OWNER" "$SLUG.$domain" <<'PY'
 import os, sys
@@ -135,14 +135,14 @@ for d, dirs, files in os.walk(root):
         for k, v in subs.items(): t = t.replace(k, v)
         if t != s: open(p, "w").write(t)
 PY
-  $PY "$HARNESS_LIB/appmanifest.py" vars "$dir/company-app.yaml" "$SLUG" >/dev/null || die "generated manifest does not validate"
+  $PY "$OCC_LIB/appmanifest.py" vars "$dir/company-app.yaml" "$SLUG" >/dev/null || die "generated manifest does not validate"
   ! grep -rl '__APP_[A-Z]*__\|__OWNER_EMAIL__' "$dir" >/dev/null 2>&1 || die "template placeholders left in $dir: $(grep -rl '__APP_[A-Z]*__\|__OWNER_EMAIL__' "$dir" | head -n 3 | tr '\n' ' ')"
   ok "files from templates/app: company-app.yaml, docker-compose.yml, Dockerfile, .gitea/workflows/deploy.yml"
   (
     cd "$dir"
     git init -q -b main 2>/dev/null || { git init -q; git checkout -q -b main; }
     git add -A
-    git -c user.name="${GIT_AUTHOR_NAME:-$(git config user.name 2>/dev/null || echo "${OWNER%@*}")}" -c user.email="${GIT_AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo "$OWNER")}" commit -q -m "New app $SLUG from the harness template"
+    git -c user.name="${GIT_AUTHOR_NAME:-$(git config user.name 2>/dev/null || echo "${OWNER%@*}")}" -c user.email="${GIT_AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo "$OWNER")}" commit -q -m "New app $SLUG from the cloud template"
     git remote add origin "${gitea_url%/}/$org/$SLUG.git"
   )
   ok "git repository on main, origin ${gitea_url%/}/$org/$SLUG.git"
@@ -162,8 +162,8 @@ PY
   api_ok && ok "Actions enabled on $org/$SLUG" || warn "could not enable Actions on $org/$SLUG (HTTP $API_CODE): enable them in the repository settings"
 
   if [ "$PUSH" = true ]; then
-    ap="$(mktemp "${TMPDIR:-/tmp}/harness-askpass.XXXXXX")"; askpass "$ap" "harness"
-    HARNESS_GIT_TOKEN="$token" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$dir" push -q "$push_url" main:main || { rm -f "$ap"; die "push to $org/$SLUG failed"; }
+    ap="$(mktemp "${TMPDIR:-/tmp}/occ-askpass.XXXXXX")"; askpass "$ap" "occ"
+    OCC_GIT_TOKEN="$token" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$dir" push -q "$push_url" main:main || { rm -f "$ap"; die "push to $org/$SLUG failed"; }
     rm -f "$ap"
     ok "pushed main: the deploy workflow runs now ($gitea_url/$org/$SLUG/actions)"
   else
@@ -253,7 +253,7 @@ env_example_defaults() {
 }
 
 inventory_record() {
-  $PY - "$INVENTORY" "$SLUG" "$M_NAME" "$M_OWNER" "$APP_URL" "${GITHUB_REPOSITORY:-}" "${GITHUB_SHA:-}" "$APP_ENV" "$APP_DIR/compose.harness.yml" "$RESOURCES" <<'PY'
+  $PY - "$INVENTORY" "$SLUG" "$M_NAME" "$M_OWNER" "$APP_URL" "${GITHUB_REPOSITORY:-}" "${GITHUB_SHA:-}" "$APP_ENV" "$APP_DIR/compose.occ.yml" "$RESOURCES" <<'PY'
 import datetime, json, os, sys, tempfile
 path, slug, name, owner, url, repo, sha, envf, overlay, res = sys.argv[1:11]
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -279,25 +279,25 @@ PY
 }
 
 cmd_provision() {
-  [ -n "$SLUG" ] || die "usage: harness-app provision SLUG [--manifest FILE]"
+  [ -n "$SLUG" ] || die "usage: occ-app provision SLUG [--manifest FILE]"
   load_env; endpoints
   [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST (run from the app repository, or pass --manifest)"
   local mdir compose json vars errf owner_repo route_owner app_pk prov_pk group_pk
   mdir="$(cd "$(dirname "$MANIFEST")" && pwd)"
 
   step "manifest and compose file ($MANIFEST)"
-  vars="$($PY "$HARNESS_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || die "company-app.yaml is not deployable: fix the lines above"
+  vars="$($PY "$OCC_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || die "company-app.yaml is not deployable: fix the lines above"
   eval "$vars"
   if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${GITHUB_REPOSITORY##*/}" != "$SLUG" ]; then
     die "this job runs for $GITHUB_REPOSITORY but provisions $SLUG: the repository name must be the slug"
   fi
   compose="$mdir/$M_COMPOSE_FILE"
   [ -f "$compose" ] || die "compose file not found: $M_COMPOSE_FILE (runtime.compose_file)"
-  errf="$(mktemp "${TMPDIR:-/tmp}/harness-compose.XXXXXX")"
+  errf="$(mktemp "${TMPDIR:-/tmp}/occ-compose.XXXXXX")"
   json="$(COMPANY_ENV_FILE=/dev/null docker compose --project-directory "$mdir" -p "$SLUG" -f "$compose" config --format json 2>"$errf")" \
     || { fail "$(tail -n 3 "$errf")"; rm -f "$errf"; die "docker compose config failed on $M_COMPOSE_FILE"; }
   rm -f "$errf"
-  printf '%s' "$json" | $PY "$HARNESS_LIB/appmanifest.py" compose-check "$M_SERVICE" || die "the compose file brings services the cloud provides: fix the lines above"
+  printf '%s' "$json" | $PY "$OCC_LIB/appmanifest.py" compose-check "$M_SERVICE" || die "the compose file brings services the cloud provides: fix the lines above"
   if [ "$M_BUCKET" = true ]; then
     case ",$COMPOSE_PROFILES," in *,storage,*) ;; *) die "company-app.yaml asks for object storage but the storage profile is off: set install.profile.storage: true and re-run install.sh, or set object_storage.required: false" ;; esac
   fi
@@ -328,16 +328,16 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   [ "$M_BUCKET" = true ] && ensure_app_bucket
   env_example_defaults "$mdir/$M_ENV_EXAMPLE"
   chmod 600 "$APP_ENV"
-  printf '%s' "$json" | $PY "$HARNESS_LIB/appmanifest.py" overlay "$SLUG" "$M_SERVICE" "$APP_ENV" "$HARNESS_NETWORK" "$APP_DATA" > "$APP_DIR/compose.harness.yml"
-  chmod 644 "$APP_DIR/compose.harness.yml"
+  printf '%s' "$json" | $PY "$OCC_LIB/appmanifest.py" overlay "$SLUG" "$M_SERVICE" "$APP_ENV" "$OCC_NETWORK" "$APP_DATA" > "$APP_DIR/compose.occ.yml"
+  chmod 644 "$APP_DIR/compose.occ.yml"
   ok "env file $APP_ENV (0600: $(envfile keys "$APP_ENV" | tr '\n' ' '))"
-  ok "compose overlay $APP_DIR/compose.harness.yml (network $HARNESS_NETWORK, alias $SLUG, no host ports, $APP_DATA at /data)"
+  ok "compose overlay $APP_DIR/compose.occ.yml (network $OCC_NETWORK, alias $SLUG, no host ports, $APP_DATA at /data)"
 
   step "route and SSO for $APP_URL"
   npm_login
   route_owner="$(proxy_host_field "$SLUG.$BASE_DOMAIN" forward_host)"
   if [ -n "$route_owner" ] && [ "$route_owner" != "$SLUG" ]; then
-    die "the proxy already routes $SLUG.$BASE_DOMAIN to $route_owner: not touching a route the harness did not create for this app"
+    die "the proxy already routes $SLUG.$BASE_DOMAIN to $route_owner: not touching a route the cloud did not create for this app"
   fi
   if [ "$M_AUTH" = true ]; then
     api_init ak "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
@@ -358,18 +358,18 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   inventory_record
   ok "inventory.json: $SLUG, owner $M_OWNER${GITHUB_REPOSITORY:+, repository $GITHUB_REPOSITORY}"
   # The operator agent's map follows the inventory (agent profile only; never fails a deploy).
-  [ -d "$INSTALL_DIR/agent/reference" ] && { "$HARNESS_ROOT/scripts/harness-operator.sh" brief --install-dir "$INSTALL_DIR" --out "$INSTALL_DIR/agent/reference" >/dev/null 2>&1 || warn "operator brief not refreshed"; }
+  [ -d "$INSTALL_DIR/agent/reference" ] && { "$OCC_ROOT/scripts/occ-operator.sh" brief --install-dir "$INSTALL_DIR" --out "$INSTALL_DIR/agent/reference" >/dev/null 2>&1 || warn "operator brief not refreshed"; }
   if [ "$JSON_OUTPUT" = true ]; then
-    jsonq build slug="$SLUG" url="$APP_URL" env_file="$APP_ENV" overlay="$APP_DIR/compose.harness.yml" resources="${RESOURCES# }"
+    jsonq build slug="$SLUG" url="$APP_URL" env_file="$APP_ENV" overlay="$APP_DIR/compose.occ.yml" resources="${RESOURCES# }"
   fi
 }
 
 # =================================================================== checkout
 cmd_checkout() {
   [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_SHA:-}" ] || die "checkout runs inside a deploy job (GITHUB_REPOSITORY and GITHUB_SHA unset)"
-  [ -n "${HARNESS_GIT_TOKEN:-}" ] || die "HARNESS_GIT_TOKEN is empty: the workflow passes the job token (secrets.GITHUB_TOKEN)"
+  [ -n "${OCC_GIT_TOKEN:-}" ] || die "OCC_GIT_TOKEN is empty: the workflow passes the job token (secrets.GITHUB_TOKEN)"
   endpoints
-  local ap; ap="$(mktemp "${TMPDIR:-/tmp}/harness-askpass.XXXXXX")"; askpass "$ap" "x-access-token"
+  local ap; ap="$(mktemp "${TMPDIR:-/tmp}/occ-askpass.XXXXXX")"; askpass "$ap" "x-access-token"
   git init -q . 2>/dev/null
   git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
   GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git fetch -q --depth 1 "$GT_ROOT/$GITHUB_REPOSITORY.git" "$GITHUB_SHA" || { rm -f "$ap"; die "fetch of $GITHUB_REPOSITORY@$GITHUB_SHA from $GT_ROOT failed"; }
@@ -380,10 +380,10 @@ cmd_checkout() {
 
 # ======================================================================= wait
 cmd_wait() {
-  [ -n "$SLUG" ] || die "usage: harness-app wait SLUG [--timeout SECONDS]"
+  [ -n "$SLUG" ] || die "usage: occ-app wait SLUG [--timeout SECONDS]"
   load_env; endpoints
   local host="$SLUG.$BASE_DOMAIN" t0 code state loc vars
-  vars="$($PY "$HARNESS_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || exit 1
+  vars="$($PY "$OCC_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || exit 1
   eval "$vars"
   t0=$(date +%s)
   step "waiting for $M_HEALTH_PATH = $M_HEALTH_STATUS on $host (up to ${TIMEOUT}s)"
@@ -410,7 +410,7 @@ cmd_wait() {
       loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$host") "$(proxy_url "$host" /)" 2>/dev/null || echo 000)"
       case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) break ;; esac
       if [ $(( $(date +%s) - t0 )) -ge 60 ]; then
-        fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run harness-app provision $SLUG"; exit 1
+        fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run occ-app provision $SLUG"; exit 1
       fi
       sleep 3
     done
@@ -431,9 +431,9 @@ if not apps: print("no apps yet")' "$INVENTORY"
 }
 
 # shellcheck source=lib/sso.sh
-. "$HARNESS_LIB/sso.sh"
+. "$OCC_LIB/sso.sh"
 # shellcheck source=lib/garage.sh
-. "$HARNESS_LIB/garage.sh"
+. "$OCC_LIB/garage.sh"
 case "$CMD" in
   new) cmd_new ;;
   provision) cmd_provision ;;

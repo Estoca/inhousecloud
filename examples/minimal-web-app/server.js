@@ -27,7 +27,7 @@ const server = http.createServer((req, res) => {
   }
 
   res.writeHead(200, { "content-type": "text/plain" });
-  res.end("Open Company App Harness example\n");
+  res.end("Open Company Cloud example\n");
 });
 
 server.listen(port, () => {

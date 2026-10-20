@@ -1,21 +1,21 @@
 #!/usr/bin/env node
-// harness-ro: the reference agent's read-only view of the box (docs/operator-contract.md).
+// occ-ro: the reference agent's read-only view of the box (docs/operator-contract.md).
 // Runs inside the agent container with Node only; every call is a GET.
 //
-//   harness-ro ps                       containers: project, service, state, health, image
-//   harness-ro logs NAME [LINES]        last lines of a container (name, id or Compose service)
-//   harness-ro inspect NAME             container inspect (Env as names only)
-//   harness-ro df                       Docker disk usage: images, build cache, volumes
-//   harness-ro http URL [HOST]          status, redirect and first bytes; HOST sets the Host header
-//   harness-ro gitea PATH               GET on the Gitea API with the read-only token
-//   harness-ro backup                   the backup status file
-//   harness-ro docker PATH              any allowlisted GET on the read-only Docker API
+//   occ-ro ps                       containers: project, service, state, health, image
+//   occ-ro logs NAME [LINES]        last lines of a container (name, id or Compose service)
+//   occ-ro inspect NAME             container inspect (Env as names only)
+//   occ-ro df                       Docker disk usage: images, build cache, volumes
+//   occ-ro http URL [HOST]          status, redirect and first bytes; HOST sets the Host header
+//   occ-ro gitea PATH               GET on the Gitea API with the read-only token
+//   occ-ro backup                   the backup status file
+//   occ-ro docker PATH              any allowlisted GET on the read-only Docker API
 //
-// Environment: HARNESS_DOCKER_API (http://agent-docker-proxy:2375), HARNESS_GITEA_URL,
-// GITEA_READONLY_TOKEN, HARNESS_BACKUP_REPORTS (/harness/backup-reports).
+// Environment: OCC_DOCKER_API (http://agent-docker-proxy:2375), OCC_GITEA_URL,
+// GITEA_READONLY_TOKEN, OCC_BACKUP_REPORTS (/occ/backup-reports).
 import { readFileSync } from "node:fs";
 
-const DOCKER = process.env.HARNESS_DOCKER_API || "http://agent-docker-proxy:2375";
+const DOCKER = process.env.OCC_DOCKER_API || "http://agent-docker-proxy:2375";
 const [cmd, ...args] = process.argv.slice(2);
 
 async function dget(path) {
@@ -92,13 +92,13 @@ const commands = {
     });
   },
   async gitea(path) {
-    const base = process.env.HARNESS_GITEA_URL || "http://gitea:3000";
+    const base = process.env.OCC_GITEA_URL || "http://gitea:3000";
     const r = await fetch(`${base}/api/v1${path}`, { headers: { Authorization: `token ${process.env.GITEA_READONLY_TOKEN || ""}` } });
     console.log(r.status);
     console.log(JSON.stringify(await r.json().catch(() => null), null, 2));
   },
   async backup() {
-    const dir = process.env.HARNESS_BACKUP_REPORTS || "/harness/backup-reports";
+    const dir = process.env.OCC_BACKUP_REPORTS || "/occ/backup-reports";
     console.log(readFileSync(`${dir}/latest-status.json`, "utf8"));
   },
   async docker(path) {

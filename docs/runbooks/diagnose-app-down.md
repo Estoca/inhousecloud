@@ -2,7 +2,7 @@
 
 **Purpose.** Find which link of the chain fails, so that the fix goes to the right place: the app, the proxy, Authentik and its outpost, or the edge (DNS, tunnel).
 **Level.** 1: diagnosis needs no permission. The fix found at the end has its own level (a restart of the app is 2, anything on the proxy or Authentik is 3).
-**Preconditions.** The slug (`$H/scripts/harness-app.sh list --install-dir "$I"`) and what the person saw: the URL, the status or page, since when.
+**Preconditions.** The slug (`$H/scripts/occ-app.sh list --install-dir "$I"`) and what the person saw: the URL, the status or page, since when.
 
 The chain, from inside out:
 
@@ -20,7 +20,7 @@ docker inspect -f '{{.State.Status}} health={{if .State.Health}}{{.State.Health.
 docker logs --since 30m --tail 80 <slug>-app-1
 ```
 
-*(agent)* `harness-ro ps`, `harness-ro inspect <slug>-app-1`, `harness-ro logs <slug>-app-1 80`
+*(agent)* `occ-ro ps`, `occ-ro inspect <slug>-app-1`, `occ-ro logs <slug>-app-1 80`
 
 - `exited` or restarting: the cause is in the log (a crash on start, a migration against an empty database, a missing variable). Fix in the repository and push; a restart without a fix loops.
 - No container at all: the last deploy failed before `up`. Read the run (step 5 below).
@@ -28,10 +28,10 @@ docker logs --since 30m --tail 80 <slug>-app-1
 
 ## 2. App health, inside the network
 
-The health path and status are in the app's `company-app.yaml` (`healthcheck`). From any container on the `harness` network:
+The health path and status are in the app's `company-app.yaml` (`healthcheck`). From any container on the `occ` network:
 
 ```bash
-dc exec -T portal wget -S -q -O /dev/null http://<slug>:<port><health path> 2>&1 | head -n 1     # the portal sits on the harness network
+dc exec -T portal wget -S -q -O /dev/null http://<slug>:<port><health path> 2>&1 | head -n 1     # the portal sits on the occ network
 ```
 
 *(agent)* `curl -s -o /dev/null -w '%{http_code}\n' http://<slug>:<port><health path>`
@@ -45,19 +45,19 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "Host: <slug>.$BASE_DOMAIN" "http://
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -H "Host: <slug>.$BASE_DOMAIN" "http://127.0.0.1:$PROXY_HTTP_PORT/"
 ```
 
-*(agent)* `harness-ro http http://proxy<health path> <slug>.<BASE_DOMAIN>` and `harness-ro http http://proxy/ <slug>.<BASE_DOMAIN>`
+*(agent)* `occ-ro http http://proxy<health path> <slug>.<BASE_DOMAIN>` and `occ-ro http http://proxy/ <slug>.<BASE_DOMAIN>`
 
 | Health via proxy | Root via proxy | Where it is |
 |---|---|---|
 | expected status | `302` to `/outpost.goauthentik.io/...` | the chain is fine up to here: go to step 4 (edge) or to the person's browser |
-| `502` / `504` | anything | the proxy cannot reach the upstream: the container is not on `harness`, or not under the alias `<slug>`, or not listening on the manifest's port. `docker inspect <slug>-app-1` (networks, aliases) and the proxy host's forward host and port |
+| `502` / `504` | anything | the proxy cannot reach the upstream: the container is not on `occ`, or not under the alias `<slug>`, or not listening on the manifest's port. `docker inspect <slug>-app-1` (networks, aliases) and the proxy host's forward host and port |
 | expected status | **`500`** | **forward auth**: the outpost does not know this provider, or the provider is missing or misbound. Not the app. Go to [route-and-provider](route-and-provider.md), read mode |
 | `404` (the proxy's default page) | `404` | no proxy host for this name: never provisioned, or disabled on purpose (a retired app answers exactly this). Check the inventory before calling it an outage |
 | `200` with a page that is not the app | — | another site answers this name: a default page, a wrong route. A `200` is not health |
 
 The rule from the first box: **health 200 locally and root 500 through the proxy is the outpost or the provider.** It happened to an app that was healthy the whole time; the outpost answered 404 to the forward-auth call and the proxy turned it into 500.
 
-Right after a first deploy, forward auth can answer 500 for a few seconds while the outpost loads the new provider; `harness-app wait` retries for 60 seconds for that reason. Retry before escalating.
+Right after a first deploy, forward auth can answer 500 for a few seconds while the outpost loads the new provider; `occ-app wait` retries for 60 seconds for that reason. Retry before escalating.
 
 ## 4. Edge
 
@@ -77,7 +77,7 @@ set -a; . "$I/.env"; set +a
 curl -s -H "Authorization: token $GITEA_READONLY_TOKEN" "http://127.0.0.1:$GITEA_LOCAL_PORT/api/v1/repos/$GITEA_ORGANIZATION/<slug>/actions/tasks?limit=5" | python3 -m json.tool | grep -E '"(status|head_sha|display_title|id)"'
 ```
 
-*(agent)* `harness-ro gitea /repos/<org>/<slug>/actions/tasks?limit=5`
+*(agent)* `occ-ro gitea /repos/<org>/<slug>/actions/tasks?limit=5`
 
 The job log of a failed run says what to change ([`llm-bootstrap.md`](../llm-bootstrap.md), section 4).
 

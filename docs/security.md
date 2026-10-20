@@ -1,11 +1,11 @@
 # Security
 
-The harness is designed around a conservative trust boundary.
+The cloud is designed around a conservative trust boundary.
 
 ## Trust Boundary
 
 - Coding agents may edit files and open pull requests.
-- Pull requests run validation on the CI runner, without secrets, the Docker socket or the harness network.
+- Pull requests run validation on the CI runner, without secrets, the Docker socket or the occ network.
 - Real deploys happen only on a push to `main`: that push is the approval.
 - The deploy runner serves the organization's repositories only. Its jobs have the Docker socket and the install directory, so a deploy job is root on the box: write access in the organization is box access ([`gitops-flow.md`](gitops-flow.md)).
 - Credentials live on the box: the install `.env` and each app's `apps/<slug>/.env`, mode 0600, never in Git, never printed.
@@ -13,13 +13,13 @@ The harness is designed around a conservative trust boundary.
 
 ## Ops tools: admin access to the machine
 
-The `ops` profile (on by default in the interactive installer) adds four tools for `harness-admins`. Treat membership of that group as root on the box:
+The `ops` profile (on by default in the interactive installer) adds four tools for `occ-admins`. Treat membership of that group as root on the box:
 
-- **Web terminal (`terminal.<BASE_DOMAIN>`, Wetty) is a shell on the host** as the user that ran `install.sh`, who is in the `docker` group or runs rootless Docker: equivalent to root on the box. It signs in with a dedicated key, `<install-dir>/local/wetty/id_ed25519`, whose public half sits in that user's `~/.ssh/authorized_keys` (comment `harness-wetty@<host>`). To revoke it, delete that line; to rotate it, delete the line and the two key files and re-run `install.sh --apply --from optional_profiles`. The key is in the backup (the install directory is backed up), encrypted with the backup key.
+- **Web terminal (`terminal.<BASE_DOMAIN>`, Wetty) is a shell on the host** as the user that ran `install.sh`, who is in the `docker` group or runs rootless Docker: equivalent to root on the box. It signs in with a dedicated key, `<install-dir>/local/wetty/id_ed25519`, whose public half sits in that user's `~/.ssh/authorized_keys` (comment `occ-wetty@<host>`). To revoke it, delete that line; to rotate it, delete the line and the two key files and re-run `install.sh --apply --from optional_profiles`. The key is in the backup (the install directory is backed up), encrypted with the backup key.
 - **File browser (`files.<BASE_DOMAIN>`, FileBrowser) sees every app's data**, read and write, and the backup reports, read only. What it does **not** mount, on purpose: the install directory itself, `.env` (every platform secret), `apps/` (each app's `.env` with its database password), `local/` (the terminal key), `runner/`, `state.json`, `config.yaml`, the restic repository, home directories and system directories. App data lives in `<install-dir>/app-data/<slug>`, apart from `apps/<slug>/`, precisely so it can be shown without the secrets next to it. The installer refuses a configured path that breaks this rule, and `scripts/tests/ops-mounts.sh` fails if the compose file ever mounts the install directory or an env file into it.
-- **Portainer** has the Docker socket (root on the box) and **Glances** sees every process: both were already admin tools; they now require `harness-admins` too.
-- **No way around the SSO.** The four run on the `harness-ops` network, which only the proxy joins; apps on the `harness` network cannot reach them directly. They publish no host port and their routes leave no path public. FileBrowser trusts the `X-authentik-username` header only because nothing but the proxy can reach it.
-- **The smoke user.** With `ops`, first-run keeps `harness-smoke-user` in `harness-users` (no admin rights; password only in `.env`, 0600) so smoke test 18 can prove the denial with a real sign-in. It can open Gitea and the apps like any user; deactivate it in Authentik if you do not want it, and test 18 will then fail at the sign-in rather than at the denial.
+- **Portainer** has the Docker socket (root on the box) and **Glances** sees every process: both were already admin tools; they now require `occ-admins` too.
+- **No way around the SSO.** The four run on the `occ-ops` network, which only the proxy joins; apps on the `occ` network cannot reach them directly. They publish no host port and their routes leave no path public. FileBrowser trusts the `X-authentik-username` header only because nothing but the proxy can reach it.
+- **The smoke user.** With `ops`, first-run keeps `occ-smoke-user` in `occ-users` (no admin rights; password only in `.env`, 0600) so smoke test 18 can prove the denial with a real sign-in. It can open Gitea and the apps like any user; deactivate it in Authentik if you do not want it, and test 18 will then fail at the sign-in rather than at the denial.
 
 ## Private ingress: the tailnet and the CA
 
@@ -27,7 +27,7 @@ The `ops` profile (on by default in the interactive installer) adds four tools f
 
 - **What the tailnet reaches.** Ports 80 and 443 (the proxy, so every route with its SSO), the Gitea SSH port (Gitea's SSH, keys only) and 53 (the split-DNS server, which answers only for `BASE_DOMAIN`). Nothing else: the Tailscale node runs in its own network namespace, so the proxy admin (81), the control ports and every container stay off the tailnet. Smoke test 21 proves the admin port is refused on the tailnet address. Who on the tailnet may reach the node at all is the tailnet's access policy (ACLs or grants): restrict it to the people who should see the apps.
 - **What the LAN reaches.** Nothing: in `private` the proxy and Gitea SSH are published on 127.0.0.1 only (smoke test 21 checks the bindings and that the box's other addresses refuse 80 and 443).
-- **The auth key** (`HARNESS_TAILSCALE_AUTHKEY`) is used once, from the installer's environment: it is not in `.env`, not in the compose file and not in the running container. The node's identity is the state in the volume `tailscale-state` (in the backup, encrypted with the backup key); whoever has that volume can impersonate the node, so treat it like a key. To revoke: remove the node in the Tailscale admin console. Prefer a pre-approved, tagged, reusable or one-off key; an ephemeral key's node disappears from the tailnet some time after the box goes offline and a new key is then needed.
+- **The auth key** (`OCC_TAILSCALE_AUTHKEY`) is used once, from the installer's environment: it is not in `.env`, not in the compose file and not in the running container. The node's identity is the state in the volume `tailscale-state` (in the backup, encrypted with the backup key); whoever has that volume can impersonate the node, so treat it like a key. To revoke: remove the node in the Tailscale admin console. Prefer a pre-approved, tagged, reusable or one-off key; an ephemeral key's node disappears from the tailnet some time after the box goes offline and a new key is then needed.
 - **The CA.** `<install-dir>/local/ca/ca.key` (0600) can sign certificates that every device with the CA installed accepts. Its name constraint limits that to `BASE_DOMAIN` and its subdomains (no other domain, no IP address), so a stolen key cannot impersonate a bank or a public site to those devices. It never leaves the box except in the encrypted backup. `ca.crt` is public. The wildcard key also lives in the proxy's data volume (it serves it).
 - **Client addresses.** The proxy sees the Tailscale node as the client of every tailnet request (`X-Forwarded-For` holds the node's container address), not the person's tailnet address: per-person attribution comes from the SSO, not from the network.
 
@@ -38,7 +38,7 @@ The `agent` profile (off by default) runs an LLM agent on the box that reads cha
 | It sees | How |
 |---|---|
 | Containers, images, networks, volumes, disk usage, logs, process lists, stats | `agent-docker-proxy`, a read-only filter in front of the Docker socket (`docker/agent/docker-ro-proxy.py`): GET on an allowlist only; logs and stats never stream. **Every `Env` in a container or image inspect comes back as names only**: a plain socket proxy that allows `GET /containers/<id>/json` hands out every service's passwords, the backup key included |
-| Every service on the `harness` network, by name | it joins `harness` to run HTTP checks the way the proxy does (`http://proxy/` with a `Host` header, health endpoints). It holds no database or admin credential for any of them |
+| Every service on the `occ` network, by name | it joins `occ` to run HTTP checks the way the proxy does (`http://proxy/` with a `Host` header, health endpoints). It holds no database or admin credential for any of them |
 | Gitea, read only | `GITEA_READONLY_TOKEN` (read:misc, read:repository, read:organization, read:user) |
 | The backup status | `<BACKUP_DESTINATION>/reports`, mounted read only |
 | The map of the box | `<install-dir>/agent/reference/` (read only): the contract, the runbooks, the generated brief (names and places of credentials, never values; the generator refuses to write one that contains a value) |
@@ -46,18 +46,18 @@ The `agent` profile (off by default) runs an LLM agent on the box that reads cha
 
 | It does not see | Why |
 |---|---|
-| The Docker socket | only the filter has it; the filter's network (`harness-agent`) is internal |
+| The Docker socket | only the filter has it; the filter's network (`occ-agent`) is internal |
 | The install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), `state.json`'s directory | not mounted; smoke test 20 checks every mount source |
-| Any harness secret in its environment | only `GITEA_READONLY_TOKEN` and `AGENT_*`; smoke test 20 compares its environment with `.env` |
-| The ops tools | not on `harness-ops` |
+| Any cloud secret in its environment | only `GITEA_READONLY_TOKEN` and `AGENT_*`; smoke test 20 compares its environment with `.env` |
+| The ops tools | not on `occ-ops` |
 | A shell on the host | none; what needs the host, it asks a human to run |
 | A port or route | the gateway listens on the container's loopback; people reach it through the chat channel only |
 
-Writes. By default none: every POST, PUT, DELETE through the filter answers 403, and the agent cannot restart even an app. `ops.agent.allow_write: true` adds exactly two: `POST /containers/<id>/restart` for a container of an app's Compose project (never one of the `harness` project) and `POST /build/prune` (the build cache, never images or volumes). Nothing else is ever on the list: no exec (exec is a shell), no create, no image or volume removal. Re-running a deploy needs a Gitea token that a human creates for it (`AGENT_GITEA_TOKEN`). Each request through the filter is logged (`docker compose logs agent-docker-proxy`).
+Writes. By default none: every POST, PUT, DELETE through the filter answers 403, and the agent cannot restart even an app. `ops.agent.allow_write: true` adds exactly two: `POST /containers/<id>/restart` for a container of an app's Compose project (never one of the `occ` project) and `POST /build/prune` (the build cache, never images or volumes). Nothing else is ever on the list: no exec (exec is a shell), no create, no image or volume removal. Re-running a deploy needs a Gitea token that a human creates for it (`AGENT_GITEA_TOKEN`). Each request through the filter is logged (`docker compose logs agent-docker-proxy`).
 
 Who can talk to it. `ops.agent.allow_from` lists chat user ids; empty means pairing, and the admin approves each first DM (`docker compose exec agent node dist/index.js pairing approve <channel> <code>`). Anyone who can talk to it can make it read anything above and repeat it in the chat, logs included: keep the allow list to people who could read the logs anyway. Its LLM provider receives what it reads.
 
-What remains. On the `harness` network it can open a TCP connection to any service: the shared Redis's default user is still open to every container on that network (apps included; a known gap, to be closed), and a vulnerable service there is reachable from it as from any app. Logs can contain whatever an app chose to log. The OpenClaw image downloads channel plugins at first start, so it needs egress.
+What remains. On the `occ` network it can open a TCP connection to any service: the shared Redis's default user is still open to every container on that network (apps included; a known gap, to be closed), and a vulnerable service there is reachable from it as from any app. Logs can contain whatever an app chose to log. The OpenClaw image downloads channel plugins at first start, so it needs egress.
 
 ## Rules
 
@@ -72,7 +72,7 @@ What remains. On the `harness` network it can open a TCP connection to any servi
 
 ## Required Validations
 
-Checked by `harness-app provision` on every deploy:
+Checked by `occ-app provision` on every deploy:
 
 - The repository belongs to the organization (the deploy runner serves nothing else) and its name is the app's slug.
 - The slug is not one the platform uses and is not registered to another repository.
