@@ -1,37 +1,64 @@
 # Try It in 10 Minutes
 
-The shortest path for a person (not an agent) to see the cloud working on their own laptop: a throwaway Ubuntu VM, one install command, the portal behind the sign-in, and a first app on the air.
+The shortest path for a person (not an agent) to see the cloud working on their own computer: one install command, the portal behind the sign-in, and a first app on the air. Two paths, both tested:
 
-Everything below was run as written on 2026-10-20, on a MacBook (Apple Silicon) with Lima 2.2 and a home connection. The times are from that run.
+| | Mac with Docker Desktop | Lima VM (macOS) |
+|---|---|---|
+| For | a Mac that already runs Docker Desktop | a Mac without Docker, or when you want a throwaway VM |
+| Where it runs | on the Mac, in `~/open-company-cloud` | in an Ubuntu VM with Docker rootless |
+| Steps | [below](#mac-with-docker-desktop), then 4 and 5 | 1 to 5 |
+| Undo | `install.sh remove` ([`cleanup.md`](cleanup.md)) | `limactl delete -f occ` |
+| Tested | Mac mini (Apple Silicon), 2026-10-20: 17 smoke tests, first app in 16 s | MacBook (Apple Silicon), 2026-10-20: times below |
+
+**Linux laptop, a VM or a VPS:** Ubuntu (tested: 26.04) with 2 CPUs, 4 GiB of memory, 10 GiB free disk, Docker Engine usable without `sudo` (rootless, or your user in the `docker` group) with Docker Compose v2, `git`, `curl` and `python3`, and `sudo` for one command. Follow the Lima path from step 2, on that machine.
+
+Times of the Lima path, run as written on a clean VM:
 
 | Step | Time |
 |---|---|
 | 1. VM created and started (Ubuntu 26.04, Docker rootless) | 62 s |
 | 2. Clone the repository | 1 s |
-| 3. Install, all stages and 16 smoke tests | 313 s |
+| 3. Install, all stages and the smoke tests | about 5 min |
 | 4. Portal in the browser, sign in | about 1 min, by hand |
 | 5. First app: `occ-app new --push` until it answers behind the sign-in | about 30 s |
 
-About 8 minutes, most of it waiting for the install. Step 3 downloads the container images (5.4 GB once unpacked), so a slow connection adds to it.
+Step 3 downloads the container images (5.4 GB once unpacked), so a slow connection adds to it.
 
-## What you need
+## Mac with Docker Desktop
 
-**macOS with Docker Desktop:** nothing else. The cloud installs directly on the Mac, with no VM: see [Mac with Docker Desktop](#mac-with-docker-desktop-no-vm) below, then continue at step 4.
+What the Mac needs:
 
-**macOS without Docker, or if you want a throwaway VM:** [Homebrew](https://brew.sh), and port 80 of the Mac free (nothing else listening on it, no other VM forwarding it). Lima runs the VM; Docker Desktop is not needed. Steps 1 to 5 below.
-
-**Linux laptop, a VM or a VPS:** Ubuntu (tested: 26.04) with 2 CPUs, 4 GiB of memory, 10 GiB free disk, Docker Engine usable without `sudo` (rootless, or your user in the `docker` group) with Docker Compose v2, `git`, `curl` and `python3`, and `sudo` for one command. Skip step 1 and run the rest on that machine.
-
-## Mac with Docker Desktop (no VM)
-
-Docker Desktop running, with Compose v2, port 80 of the Mac free and about 10 GiB of free disk (the images take about 5.4 GiB). In a terminal on the Mac, no `sudo`, the install directory in your home (any path you own; `~/occ-install` here):
+- **Docker Desktop running**, with Compose v2 (it ships with it). No `sudo` anywhere below.
+- **The install directory shared with Docker Desktop.** The cloud's containers mount files from it. Docker Desktop shares `/Users` by default, so `~/open-company-cloud` works as is; a directory outside it (such as `/opt/...`) must be added in Docker Desktop > Settings > Resources > File sharing first.
+- **Disk: 15 to 20 GiB free.** The images and volumes take about 5.4 GiB inside Docker Desktop's disk image, and that file does not give space back to the Mac by itself ([`cleanup.md`](cleanup.md#docker-desktop-macos-keeps-the-space)). The installer warns below 15 GiB and stops below 10.
+- **Port 80 free** on the Mac (no other web server, no VM forwarding it).
+- **Names under `cloud.localhost` resolving to the Mac.** Check before installing:
 
 ```bash
-cd ~ && git clone https://github.com/Estoca/open-company-cloud.git && cd open-company-cloud
-./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/occ-install
+ping -c 1 portal.cloud.localhost
 ```
 
-Then follow steps 4 and 5 on the Mac itself, with `~/occ-install` wherever they say `/opt/open-company-cloud`. Tested on 2026-10-20 on a Mac mini (Apple Silicon, macOS 26.7, Docker Desktop with Docker 29.8 and Compose v5.5): core and backup, 17 smoke tests passed and 4 skipped (the profiles left off), a first app deployed by push in 16 s ([`first-run.md`](first-run.md#macos-run-docker-desktop)).
+It should print `127.0.0.1` (macOS 26 does; so do Chrome, Firefox, Edge and `curl` on their own). If it says it cannot resolve the name, add this line to `/etc/hosts` (with `sudo`), plus one name per app you create later:
+
+```text
+127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost
+```
+
+Then, in a terminal on the Mac: the repository in `~/src`, the cloud in `~/open-company-cloud`.
+
+```bash
+git clone https://github.com/Estoca/open-company-cloud.git ~/src/open-company-cloud && cd ~/src/open-company-cloud
+```
+
+```bash
+./install.sh --plan --config bootstrap/config.example.yaml --install-dir ~/open-company-cloud
+```
+
+```bash
+./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/open-company-cloud
+```
+
+`--plan` is optional: it checks the Mac and prints what would be created, and creates nothing (not even the directory). The install ends with the seven day-zero steps shown in step 3 below, with the commands for these paths. Continue at step 4; wherever it says `/opt/open-company-cloud`, use `~/open-company-cloud`, and `~/src/open-company-cloud` for the repository.
 
 ## 1. A clean VM (macOS)
 
@@ -69,19 +96,33 @@ sudo install -d -o $(id -un) -g $(id -gn) /opt/open-company-cloud
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-Without the first command the installer stops in one second and prints that same command. The example config means: everything on this machine only (`local` ingress, names under `cloud.localhost`), admin `admin@example.com`, Gitea organization `company`, backup on the same disk, no optional profiles. The installer generates every password into `/opt/open-company-cloud/.env` (mode 0600) and never prints one. It ends with:
+Without the first command the installer stops in one second and prints that same command. The example config means: everything on this machine only (`local` ingress, names under `cloud.localhost`), admin `admin@example.com`, Gitea organization `company`, backup on the same disk, no optional profiles. The installer generates every password into `/opt/open-company-cloud/.env` (mode 0600) and never prints one. Add `--plan` first to see what it would do; it creates nothing. The install ends with the URLs and seven day-zero steps (from the run of 2026-10-20; `~` is the VM user's home):
 
 ```text
-smoke tests: 16 passed, 0 failed, 4 skipped
-==> handoff
-
-Installed. URLs:
-  portal     http://portal.cloud.localhost   (forward auth through Authentik)
-  authentik  http://auth.cloud.localhost   (user akadmin)
-  gitea      http://git.cloud.localhost   (user admin; SSH port 2222; sign in with Authentik)
+smoke tests: 17 passed, 0 failed, 4 skipped
+...
+Day zero, in this order:
+1. Open the portal: http://portal.cloud.localhost
+   It is a placeholder: it proves the SSO. To operate, use Gitea and occ-operator brief (step 6).
+2. Read the first password here, in your own terminal (never paste it into a chat):
+     python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD
+3. Sign in at http://auth.cloud.localhost/if/user/ as akadmin. Settings > MFA Devices > Enroll: an authenticator app,
+   then Static tokens (keep those recovery codes off this machine). Then Settings > Change password.
+   Gitea (http://git.cloud.localhost): use "Sign in with authentik". Its local admin 'admin' (GITEA_ADMIN_PASSWORD in .env) is break-glass only.
+4. Copy the backup key off this machine (a password manager): without it no backup can be read.
+     python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/.env BACKUP_ENCRYPTION_KEY
+5. Your first app: a folder here, a repository in Gitea, deployed by the push:
+     ~/open-company-cloud/scripts/occ-app.sh new my-first-app --owner admin@example.com --push --install-dir /opt/open-company-cloud
+6. Operate: the map of services, apps, owners and commands:
+     ~/open-company-cloud/scripts/occ-operator.sh brief --install-dir /opt/open-company-cloud
+   Short state: ~/open-company-cloud/install.sh status --install-dir /opt/open-company-cloud
+7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):
+     ~/open-company-cloud/install.sh stop --install-dir /opt/open-company-cloud
+     ~/open-company-cloud/install.sh remove --install-dir /opt/open-company-cloud
+People: docs/first-user.md (groups occ-users and occ-admins; mail, password recovery and invitations are off).
 ```
 
-The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`). Run `./install.sh` without arguments instead to answer the questions yourself; [`../README.md`](../README.md#install) has the options.
+`./install.sh handoff` prints these steps again. The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`) and to `private` ingress. Smoke test 16 deploys a test app (`smoke-app`) and removes it afterwards, so `occ-app list` starts empty. Run `./install.sh` without arguments instead to answer the questions yourself; [`../README.md`](../README.md#install) has the options.
 
 ## 4. Open the portal
 
@@ -91,7 +132,7 @@ On the Mac, in Chrome, Edge or Firefox: <http://portal.cloud.localhost>. It send
 python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD
 ```
 
-The portal is a placeholder today (it says it is running); the point is the sign-in in front of it. <http://git.cloud.localhost> is Gitea, with "Sign in with authentik".
+The portal is a placeholder today: it proves the SSO. To operate, use Gitea (<http://git.cloud.localhost>, "Sign in with authentik") and `occ-operator brief` (step 6 of the day-zero list). Before anything else, do steps 3 and 4 of that list: MFA and a new password for `akadmin`, and the backup key off the machine.
 
 - `*.cloud.localhost` names resolve to `127.0.0.1` on their own in Chrome, Edge, Firefox and `curl` (tested on macOS 26.7). If one does not resolve (Safari, some older systems), add `127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost` (and each app's name) to `/etc/hosts` on the Mac, or use another browser.
 - On a VPS or a VM with no port forwarding, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open on your laptop first. It must be port 80: the sign-in redirect drops any other port.
@@ -136,13 +177,24 @@ Then ask the agent in your own words, with that `ssh` command, for example: "Cha
 
 ## Clean up
 
+Lima: the VM and its disk go at once.
+
 ```bash
 limactl delete -f occ
 ```
 
+Mac with Docker Desktop, or any box: stop it and keep the data, or remove it. `remove` lists what goes and asks you to type the project name (`occ`); `--images` also removes the pulled images (about 5 GiB) and `--dir` the install directory with `.env` and the backups. Docker Desktop then still holds the space in its disk image until you purge it ([`cleanup.md`](cleanup.md)).
+
+```bash
+./install.sh stop --install-dir ~/open-company-cloud
+```
+
+```bash
+./install.sh remove --images --dir --install-dir ~/open-company-cloud
+```
+
 ## What this does not show yet
 
-- **macOS natively.** The cloud runs on Linux; on a Mac it runs in a VM, as above.
 - **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (Cloudflare tunnel or DNS) exists in the installer and is not tested end to end. `local`, used here, answers on the box (and on the Mac through Lima's forward).
 - **The portal.** A placeholder answers today; the read-only portal with inventory, deploy runs, health and backups is next ([`../README.md`](../README.md#roadmap)).
-- Mail (Authentik and Gitea are installed with SMTP off), MFA and replacing the bootstrap password are yours: [`first-run.md`](first-run.md#human).
+- **Mail.** Authentik and Gitea are installed with SMTP off: no password recovery and no invitations; an admin creates each person and sets the first password ([`first-user.md`](first-user.md)).

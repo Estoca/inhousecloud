@@ -104,4 +104,4 @@ The first box started with a deploy-request repository: a pull request with `req
 
 ## Proving it
 
-Smoke test 16 ([`smoke-tests.md`](smoke-tests.md)) does the whole loop with the template app `smoke-app`: creates it (or clones it when it exists), pushes a commit to `main`, waits for the run, checks `/health` through the proxy, the redirect of `/` to Authentik, and the database and role on the shared Postgres. Times from a clean VM are in [`first-run.md`](first-run.md).
+Smoke test 16 ([`smoke-tests.md`](smoke-tests.md)) does the whole loop with the template app `smoke-app`: creates it (or clones it when it exists), pushes a commit to `main`, waits for the run, checks `/health` through the proxy, the redirect of `/` to Authentik, and the database and role on the shared Postgres, redeploys it, then removes it with `occ-app remove` (it is the test's own: `kind: system-test`). Times from a clean VM are in [`first-run.md`](first-run.md).

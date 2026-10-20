@@ -99,11 +99,12 @@ Completed stages are skipped; every action probes before it creates. Never delet
 ### 1.6 Report the install
 
 ```bash
-./install.sh status --install-dir "$DIR"           # URLs, users, smoke test results
+./install.sh status --install-dir "$DIR"           # state, URLs, service health, backup age, apps
+./install.sh handoff --install-dir "$DIR"          # the seven day-zero steps, with the commands
 python3 scripts/lib/envfile.py keys "$DIR/.env"    # names of the credentials, never the values
 ```
 
-Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), section "Human": first sign-in to Authentik as `akadmin` with the password in `AUTHENTIK_BOOTSTRAP_PASSWORD`; MFA; copying `BACKUP_ENCRYPTION_KEY` off the box; SMTP; DNS or tunnel for non-local ingress).
+Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the day-zero steps that `handoff` prints, which only they can do: open the portal (a placeholder that proves the SSO; to operate, Gitea + `occ-operator brief`), read the first password on their own screen, sign in as `akadmin` and enroll MFA and change the password, copy `BACKUP_ENCRYPTION_KEY` off the box, the first app, the operator brief, and how to stop or remove a test install ([`cleanup.md`](cleanup.md)). Adding people: [`first-user.md`](first-user.md). DNS or tunnel for non-local ingress.
 
 **Passwords stay off the chat.** Do not read them, and do not paste them. Give the human the command that prints one on their own screen, for example `ssh <box> 'python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD'`, and say it is theirs to run.
 

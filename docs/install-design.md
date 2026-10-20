@@ -137,7 +137,8 @@ Preflight → plan → apply → verify → handoff. Copied from how agent frame
 - Every stage writes to `state.json` (status, attempts, timestamps, config hash, probe result, resources created, error code, resume command). Re-running resumes the first incomplete stage.
 - Every action probes before it creates: does it exist, is it healthy, does the configuration match. Creation is the exception path.
 - `first-run` is a separate, repeatable stage, safe against duplication.
-- Modes: `--plan` (print what would happen), `--apply`, `--non-interactive --config <file>`, `--json`.
+- Modes: `--plan` (print what would happen; a dry run that creates nothing: no install directory, `state.json`, `config.yaml` or backup directory, its record in a temporary file deleted on exit; the plan shown before "Apply this plan now?" is the same dry run), `--apply`, `--non-interactive --config <file>`, `--json`.
+- After the install: `handoff` (the seven day-zero steps again), `status` (short: state, URLs, core health, backup age, apps with owners; `--verbose` adds every stage and the operator brief; `--json` is the state file), `stop` / `start` (the cloud and its apps, data kept) and `remove` (a test install, after typing the project name; `--images`, `--dir`): [`cleanup.md`](cleanup.md).
 - Output: paths, ids, status, URLs. Never secrets.
 
 ## The Sequence

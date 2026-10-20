@@ -6,7 +6,11 @@
 #   ./install.sh --apply [--config FILE]          apply without the confirmation prompt
 #   ./install.sh --non-interactive --config FILE  for agents and CI: no prompts at all
 #   ./install.sh --apply --from STAGE             resume (re-run) from STAGE
-#   ./install.sh status [--json]                  state of an installation
+#   ./install.sh status [--verbose] [--json]      short state: URLs, health, backup age, apps
+#   ./install.sh handoff                          the day-zero steps again
+#   ./install.sh stop | start                     stop the cloud and its apps (data kept), start again
+#   ./install.sh remove [--images] [--dir]        remove a test install (docs/cleanup.md); asks
+#                                                 for the project name, or --confirm NAME
 #
 # Options: --install-dir DIR  --json  --yes
 # Every stage records itself in <install-dir>/state.json (bootstrap/state.example.json).
@@ -32,8 +36,9 @@ FROM_STAGE=""
 INSTALL_DIR="${OCC_INSTALL_DIR:-}"
 ASSUME_YES=false
 SUBCOMMAND=""
+VERBOSE=false; CONFIRM_ARG=""; REMOVE_IMAGES=false; REMOVE_DIR=false
 
-usage() { sed -n '2,16p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,19p' "$SELF" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,7 +53,12 @@ while [ $# -gt 0 ]; do
     --install-dir=*) INSTALL_DIR="${1#*=}" ;;
     --json) JSON_OUTPUT=true ;;
     --yes|-y) ASSUME_YES=true ;;
-    status) SUBCOMMAND=status ;;
+    status|handoff|stop|start|remove) SUBCOMMAND="$1" ;;
+    --verbose|-v) VERBOSE=true ;;
+    --confirm) CONFIRM_ARG="$2"; shift ;;
+    --confirm=*) CONFIRM_ARG="${1#*=}" ;;
+    --images) REMOVE_IMAGES=true ;;
+    --dir) REMOVE_DIR=true ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
@@ -630,13 +640,21 @@ stage_preflight() {
   # Install directory: must exist and be writable, or be creatable without root.
   if [ -d "$INSTALL_DIR" ]; then
     [ -w "$INSTALL_DIR" ] && ok "install dir writable: $INSTALL_DIR" || { fail "install dir not writable: $INSTALL_DIR"; errors=$((errors+1)); }
+  elif [ "$DRY_RUN" = true ]; then
+    # Planning creates nothing: only check that apply could create it.
+    [ -w "$(existing_parent "$INSTALL_DIR")" ] && ok "install dir: $INSTALL_DIR (created on apply)" \
+      || { fail "cannot create $INSTALL_DIR. Create it once with: sudo install -d -o $(id -un) -g $(id -gn) $INSTALL_DIR"; errors=$((errors+1)); }
   else
     if mkdir -p "$INSTALL_DIR" 2>/dev/null; then ok "install dir created: $INSTALL_DIR"
     else fail "cannot create $INSTALL_DIR. Create it once with: sudo install -d -o $(id -un) -g $(id -gn) $INSTALL_DIR"; errors=$((errors+1)); fi
   fi
   # Disk (10 GiB free where the install dir lives) and memory (3.5 GiB).
-  disk_kb="$(df -Pk "$(dirname "$INSTALL_DIR")" 2>/dev/null | awk 'NR==2{print $4}')"
+  disk_kb="$(df -Pk "$(existing_parent "$(dirname "$INSTALL_DIR")")" 2>/dev/null | awk 'NR==2{print $4}')"
   [ -n "$disk_kb" ] && { [ "$disk_kb" -ge 10485760 ] && ok "disk free: $((disk_kb/1048576)) GiB" || { fail "disk free: $((disk_kb/1048576)) GiB (need 10)"; errors=$((errors+1)); }; }
+  # macOS: Docker Desktop's disk image grows into the host disk (about 5.4 GiB for core and
+  # backup) and does not give the space back by itself. A warning, not a stop.
+  [ "$os" = Darwin ] && [ -n "$disk_kb" ] && [ "$disk_kb" -ge 10485760 ] && [ "$disk_kb" -lt 15728640 ] \
+    && warn "disk free: $((disk_kb/1048576)) GiB on this Mac; 15 to 20 GiB is recommended (the images take about 5.4 GiB in Docker Desktop's disk image, which does not shrink on its own: docs/cleanup.md)"
   if [ "$os" = Linux ]; then mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo); else mem_mb=$(( $(sysctl -n hw.memsize) / 1048576 )); fi
   [ "$mem_mb" -ge 3500 ] && ok "memory: ${mem_mb} MiB" || { fail "memory: ${mem_mb} MiB (need 3.5 GiB)"; errors=$((errors+1)); }
   # Ports: only on a first install; on a re-run our own containers hold them.
@@ -679,7 +697,7 @@ stage_preflight() {
       fail "backup destination must be an absolute path: $BACKUP_DEST ($BACKUP_DEST_ENV)"; errors=$((errors+1))
     elif [ -d "$BACKUP_DEST" ]; then
       [ -w "$BACKUP_DEST" ] && ok "backup destination writable: $BACKUP_DEST" || warn "backup destination not writable by $(id -un): $BACKUP_DEST. Fix with: sudo chown $(id -un) $BACKUP_DEST (or set $BACKUP_DEST_ENV to another path); the backup stage will fail until then"
-    elif [ "$MODE" = plan ]; then
+    elif [ "$DRY_RUN" = true ]; then
       [ -w "$(existing_parent "$BACKUP_DEST")" ] && ok "backup destination: $BACKUP_DEST (created on apply)" || warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"
     elif mkdir -p "$BACKUP_DEST" 2>/dev/null; then ok "backup destination created: $BACKUP_DEST"
     else warn "cannot create the backup destination $BACKUP_DEST: create it, writable by $(id -un), or set $BACKUP_DEST_ENV; the backup stage will fail until then"; fi
@@ -730,8 +748,8 @@ stage_plan() {
   log "portal            : $PORTAL_BASE_URL (forward auth)"
   log "authentik         : $AUTHENTIK_BASE_URL"
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
-  log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, $STATE_FILE, $CONFIG_FILE"
-  log "volumes           : named volumes of project $(basename "$INSTALL_DIR" | tr -c 'a-z0-9\n' '-' ), network occ"
+  log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, ${REAL_STATE_FILE:-$STATE_FILE}, $CONFIG_FILE"
+  log "volumes           : named volumes of project $( [ -f "$ENV_FILE" ] && env_get COMPOSE_PROJECT_NAME || echo occ), network occ"
   if [ "$BACKUP_ENABLED" = true ]; then
     log "backup            : sidecar crond '${CFG_backup__schedule:-0 2 * * *}' ${CFG_backup__timezone:-UTC}, restic in $BACKUP_DEST/restic, status $BACKUP_DEST/reports/latest-status.json"
   else
@@ -748,7 +766,7 @@ stage_plan() {
   [ "$AGENT_ON" = true ] && log "operator agent    : $(envfile get "$OCC_ROOT/docker/.env.example" OPENCLAW_IMAGE) in $INSTALL_DIR/agent, Docker API read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo " + restart of app containers and build cache prune (ops.agent.allow_write)"); LLM key and chat channel from AGENT_* in .env (docs/operator-contract.md)"
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
   log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label occ-deploy, image $INSTALL_DIR/deployer)"
-  log "human afterwards  : DNS/tunnel, MFA for the admin, replace bootstrap password, SMTP (docs/first-run.md)"
+  log "human afterwards  : seven day-zero steps printed at the end (install.sh handoff): portal, first password, MFA, backup key, first app, operator brief, stop/remove; DNS/tunnel for private/public"
   state stage plan set probe "$(jsonq build services="$services" profiles="core${PROFILES:+,$PROFILES}" portal_url="$PORTAL_BASE_URL" authentik_url="$AUTHENTIK_BASE_URL" gitea_url="$GITEA_BASE_URL" install_dir="$INSTALL_DIR")"
 }
 
@@ -1294,7 +1312,7 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   state finish >/dev/null || true
   _out ""
   _out "Installed. URLs:"
-  _out "  portal     $PORTAL_BASE_URL   (forward auth through Authentik)"
+  _out "  portal     $PORTAL_BASE_URL   (a placeholder: it proves the SSO; to operate, Gitea + occ-operator brief)"
   _out "  authentik  $AUTHENTIK_BASE_URL   (user akadmin)"
   _out "  gitea      $GITEA_BASE_URL   (user $(env_get GITEA_ADMIN_USERNAME); SSH port $(env_get GITEA_SSH_PORT); sign in with Authentik)"
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
@@ -1321,10 +1339,9 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   _out "Generated credentials live in $ENV_FILE (mode 0600): AUTHENTIK_BOOTSTRAP_PASSWORD, GITEA_ADMIN_PASSWORD, PROXY_ADMIN_PASSWORD."
   if [ "$(env_get BACKUP_ENABLED)" = true ]; then
     _out "Backup: '$(env_get BACKUP_SCHEDULE)' ($(env_get BACKUP_TZ)) into $(env_get BACKUP_DESTINATION)/restic; status file $(env_get BACKUP_DESTINATION)/reports/latest-status.json."
-    _out "  Copy BACKUP_ENCRYPTION_KEY from $ENV_FILE to a password manager now: without it the repository cannot be read."
   fi
-  _out "Human next steps (docs/first-run.md): sign in to Authentik, enrol MFA, replace the bootstrap password, set SMTP;"
-  _out "  for private/public ingress: DNS and tunnel. Status: $SELF status --install-dir $INSTALL_DIR"
+  [ "$INGRESS" = public ] && _out "Public ingress: DNS (or the tunnel's routes) for *.$BASE_DOMAIN is yours (docs/first-run.md)."
+  day0_handoff
 }
 
 run_stage() {
@@ -1342,6 +1359,7 @@ run_stage() {
     state stage "$name" complete
   else
     state stage "$name" fail --error-code "E_$(printf '%s' "$name" | tr 'a-z' 'A-Z')"
+    [ "${DRY_RUN:-false}" = true ] && die "the plan stopped at $name; nothing was created. Fix the cause above and plan again."
     fail "stage $name failed. Fix the cause and resume with:"
     fail "  $RESUME_PREFIX --from $name"
     [ "$JSON_OUTPUT" = true ] && state status --json
@@ -1349,25 +1367,260 @@ run_stage() {
   fi
 }
 
-# -------------------------------------------------------------------- main
-if [ "$SUBCOMMAND" = status ]; then
+# --------------------------------------------------------------- onboarding
+# After the install: the day-zero steps (also `install.sh handoff`), the short status,
+# and stop, start and remove for a test install (docs/cleanup.md). They read .env and
+# inventory.json; none of them needs the config or changes a stage of state.json.
+
+# day0_handoff: seven steps a person does once, in order, with the literal commands.
+day0_handoff() {
+  local envpy="python3 $OCC_ROOT/scripts/lib/envfile.py" d="--install-dir $INSTALL_DIR"
+  _out ""
+  _out "Day zero, in this order:"
+  _out "1. Open the portal: $(env_get PORTAL_BASE_URL)"
+  _out "   It is a placeholder: it proves the SSO. To operate, use Gitea and occ-operator brief (step 6)."
+  _out "2. Read the first password here, in your own terminal (never paste it into a chat):"
+  _out "     $envpy get $ENV_FILE AUTHENTIK_BOOTSTRAP_PASSWORD"
+  [ "$(uname -s)" = Darwin ] && _out "   To copy it instead of showing it, add:  | pbcopy"
+  _out "3. Sign in at $(env_get AUTHENTIK_BASE_URL)/if/user/ as akadmin. Settings > MFA Devices > Enroll: an authenticator app,"
+  _out "   then Static tokens (keep those recovery codes off this machine). Then Settings > Change password."
+  _out "   Gitea ($(env_get GITEA_BASE_URL)): use \"Sign in with $(env_get GITEA_OIDC_SOURCE_NAME)\". Its local admin '$(env_get GITEA_ADMIN_USERNAME)' (GITEA_ADMIN_PASSWORD in .env) is break-glass only."
+  if [ "$(env_get BACKUP_ENABLED)" = true ]; then
+    _out "4. Copy the backup key off this machine (a password manager): without it no backup can be read."
+    _out "     $envpy get $ENV_FILE BACKUP_ENCRYPTION_KEY"
+  else
+    _out "4. Backup is off (backup.enabled: false): turn it on before anything here matters (docs/backup.md)."
+  fi
+  _out "5. Your first app: a folder here, a repository in Gitea, deployed by the push:"
+  _out "     $OCC_ROOT/scripts/occ-app.sh new my-first-app --owner $(env_get GITEA_ADMIN_EMAIL) --push $d"
+  _out "6. Operate: the map of services, apps, owners and commands:"
+  _out "     $OCC_ROOT/scripts/occ-operator.sh brief $d"
+  _out "   Short state: $SELF status $d"
+  _out "7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):"
+  _out "     $SELF stop $d"
+  _out "     $SELF remove $d"
+  _out "People: docs/first-user.md (groups $(env_get AUTHENTIK_APP_GROUP) and $(env_get AUTHENTIK_PORTAL_GROUP); mail, password recovery and invitations are off)."
+  _out "These steps again: $SELF handoff $d"
+}
+
+# inventory_apps [--all]: "slug<TAB>owner<TAB>kind" per app of inventory.json. Without
+# --all, apps a system test created (kind system-test) are left out.
+inventory_apps() {
+  [ -f "$INSTALL_DIR/inventory.json" ] || return 0
+  $PY -c 'import json,sys
+apps=(json.load(open(sys.argv[1])).get("apps") or {})
+for s,a in sorted(apps.items()):
+    k=a.get("kind","app")
+    if k=="system-test" and sys.argv[2]!="--all": continue
+    print("%s\t%s\t%s"%(s,a.get("owner_email",""),k))' "$INSTALL_DIR/inventory.json" "${1:-}"
+}
+
+# core_services: the cloud's own services for the profiles in .env.
+core_services() {
+  local s="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer" p
+  p=",$(env_get COMPOSE_PROFILES),"
+  case "$p" in *,storage,*) s="$s garage" ;; esac
+  case "$p" in *,ops,*) s="$s portainer glances filebrowser" ;; esac
+  [ "$(env_get OPS_TERMINAL)" = true ] && case "$p" in *,ops,*) s="$s wetty" ;; esac
+  case "$p" in *,backup,*) s="$s backup" ;; esac
+  case "$p" in *,cloudflared,*) s="$s cloudflared" ;; esac
+  case "$p" in *,tailscale,*) s="$s tailscale tailnet-dns" ;; esac
+  case "$p" in *,agent,*) s="$s agent-docker-proxy agent" ;; esac
+  printf '%s' "$s"
+}
+
+# status_short: one screen. Exit status as before: 0 only when every stage completed.
+status_short() {
+  local st rc=0 svc h total=0 good=0 bad="" stopped=0 apps n line scheme
+  st="$(state status --json 2>/dev/null)" || rc=$?
+  line="$(printf '%s' "$st" | $PY -c 'import json,sys
+d=json.load(sys.stdin); s=d.get("summary",{})
+out=d.get("status","unknown")
+if s.get("failed"): out+=", failed at "+",".join(s["failed"])
+elif s.get("pending") and d.get("status")!="completed": out+=", next stage "+s["pending"][0]
+print("%s (installation %s)"%(out,d.get("installation_id","?")))')"
+  _out "Open Company Cloud at $INSTALL_DIR: $line"
+  if [ ! -r "$ENV_FILE" ]; then _out "  (no readable $ENV_FILE: run as the user who installed it for URLs, health, backup and apps)"; return "$rc"; fi
+  _out "  portal     $(env_get PORTAL_BASE_URL)   (placeholder: proves the SSO)"
+  _out "  sign-in    $(env_get AUTHENTIK_BASE_URL)"
+  _out "  gitea      $(env_get GITEA_BASE_URL)"
+  scheme="$(env_get PORTAL_BASE_URL)"; scheme="${scheme%%://*}"
+  case ",$(env_get COMPOSE_PROFILES)," in *,ops,*) _out "  ops        $scheme://files.$(env_get BASE_DOMAIN)  $scheme://portainer.$(env_get BASE_DOMAIN)  $scheme://glances.$(env_get BASE_DOMAIN)$( [ "$(env_get OPS_TERMINAL)" = true ] && echo "  $scheme://terminal.$(env_get BASE_DOMAIN)")" ;; esac
+  if [ -f "$INSTALL_DIR/compose.yml" ]; then
+    for svc in $(core_services); do
+      total=$((total+1)); h="$(container_health "$svc")"
+      case "$h" in healthy|none) good=$((good+1)) ;; missing) stopped=$((stopped+1)); bad="$bad $svc(not running)" ;; *) bad="$bad $svc($h)" ;; esac
+    done
+    if [ "$stopped" -eq "$total" ]; then _out "  services   stopped (start: $SELF start --install-dir $INSTALL_DIR)"
+    else _out "  services   $good of $total healthy${bad:+; not:$bad}"; fi
+  fi
+  if [ "$(env_get BACKUP_ENABLED)" = true ]; then
+    _out "  backup     $($PY -c 'import json,sys,datetime as d
+try: ok=json.load(open(sys.argv[1]))
+except Exception: print("no successful run yet"); sys.exit()
+f=d.datetime.strptime(ok["finished_at"],"%Y-%m-%dT%H:%M:%SZ")
+age=(d.datetime.now(d.timezone.utc).replace(tzinfo=None)-f).total_seconds()/3600
+print("last success %.1f h ago%s (max %s h)"%(age," STALE" if age>float(sys.argv[2]) else "",sys.argv[2]))' "$(env_get BACKUP_DESTINATION)/reports/latest-success.json" "$(env_get BACKUP_MAX_AGE_HOURS)")"
+  else
+    _out "  backup     off (backup.enabled: false)"
+  fi
+  apps="$(inventory_apps)"; n="$(printf '%s' "$apps" | grep -c . || true)"
+  if [ "$n" -eq 0 ]; then _out "  apps       none yet"
+  else _out "  apps       $n: $(printf '%s\n' "$apps" | awk -F'\t' '{printf "%s%s (%s)", (NR>1?", ":""), $1, $2}')"; fi
+  _out "  more       $SELF status --verbose --install-dir $INSTALL_DIR   (stages and the full operator brief)"
+  return "$rc"
+}
+
+# app_projects: the Compose projects of the apps in the inventory, system tests included.
+app_projects() { inventory_apps --all | cut -f1; }
+project_containers() { docker ps -aq --filter "label=com.docker.compose.project=$1"; }
+
+cloud_stop() {
+  local p ids
+  for p in $(app_projects); do
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=$p")"
+    [ -n "$ids" ] && { docker stop $ids >/dev/null; ok "app $p stopped"; }
+  done
+  dc stop >&2 || return 1
+  ok "the cloud is stopped. Nothing was deleted: containers, volumes, images and $INSTALL_DIR are kept."
+  _out "Start again: $SELF start --install-dir $INSTALL_DIR"
+}
+
+cloud_start() {
+  local p ids
+  dc start >&2 || return 1
+  for p in $(app_projects); do
+    ids="$(project_containers "$p")"
+    [ -n "$ids" ] && { docker start $ids >/dev/null; ok "app $p started"; }
+  done
+  ok "started; health in a minute: $SELF status --install-dir $INSTALL_DIR"
+}
+
+# rm_tree DIR: empty DIR, then remove it. Files written by containers (other uids under
+# rootless Docker) are removed from a container of an image that is still here. A DIR whose
+# parent is not writable (/opt, made with sudo) stays, empty: RM_TREE_KEPT says so.
+rm_tree() {
+  local d="${1%/}" img
+  RM_TREE_KEPT=false
+  [ -e "$d" ] || return 0
+  find "$d" -mindepth 1 -delete 2>/dev/null || true
+  if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then
+    img="$(env_get POSTGRES_IMAGE)"
+    docker run --rm -v "$d:/d" --entrypoint sh "$img" -c 'rm -rf /d/* /d/.[!.]* /d/..?*' >/dev/null 2>&1 || true
+  fi
+  [ -z "$(ls -A "$d" 2>/dev/null)" ] || return 1
+  rmdir "$d" 2>/dev/null || RM_TREE_KEPT=true
+}
+
+cloud_remove() {
+  local project typed p ids img imgs="" k dest pub inside=false
+  project="$(env_get COMPOSE_PROJECT_NAME)"; dest="$(env_get BACKUP_DESTINATION)"
+  case "$dest/" in "$INSTALL_DIR"/*) inside=true ;; esac
+  _out "This removes the installation at $INSTALL_DIR (Compose project '$project'):"
+  _out "  containers  every container of the cloud and of its apps ($(app_projects | tr '\n' ' ' | sed 's/ $//;s/^$/no apps/'))"
+  _out "  volumes     every named volume: Authentik's users, Gitea's repositories, every database. Gone for good."
+  _out "  networks    the project's networks"
+  _out "  images      the images built here ($project-portal, $project-backup, $project-deployer, the apps');"
+  if [ "$REMOVE_IMAGES" = true ]; then _out "              and the pulled images of .env (--images; another project that uses the same image pulls it again)"
+  else _out "              the pulled images (Authentik, Gitea, Postgres...) are kept: add --images to remove them too"; fi
+  if [ "$REMOVE_DIR" = true ]; then
+    _out "  directory   $INSTALL_DIR: .env (every password), apps/, app-data/$( [ "$inside" = true ] && echo ", and the backups in $dest")"
+  else
+    _out "  directory   kept: $INSTALL_DIR (.env, app-data/$( [ "$inside" = true ] && echo ", backups")); add --dir to remove it too"
+  fi
+  [ "$inside" = true ] || _out "  backups     never touched: $dest (outside the install directory)"
+  if [ "$CONFIRM_ARG" != "$project" ]; then
+    [ -n "$CONFIRM_ARG" ] && die "--confirm $CONFIRM_ARG is not the project name '$project': nothing removed"
+    [ -t 0 ] || die "no terminal: pass --confirm $project to remove without the question. Nothing removed."
+    printf 'Type the project name (%s) to remove it: ' "$project" >&2
+    read -r typed || typed=""
+    [ "$typed" = "$project" ] || die "'$typed' is not '$project': nothing removed"
+  fi
+  for k in $(envfile keys "$ENV_FILE" | grep '_IMAGE$'); do imgs="$imgs $(env_get "$k")"; done
+  for p in $(app_projects); do
+    ids="$(project_containers "$p")"; [ -n "$ids" ] && docker rm -f $ids >/dev/null
+    docker volume ls -q --filter "label=com.docker.compose.project=$p" | xargs docker volume rm >/dev/null 2>&1 || true
+    docker network ls -q --filter "label=com.docker.compose.project=$p" | xargs docker network rm >/dev/null 2>&1 || true
+    { docker images -q --filter "label=com.docker.compose.project=$p"; docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$p-" || true; } \
+      | sort -u | xargs docker image rm -f >/dev/null 2>&1 || true
+    ok "app $p: containers, volumes, networks and built images removed"
+  done
+  dc down -v --remove-orphans >&2 || return 1
+  ok "cloud containers, volumes and networks removed"
+  # act_runner keeps the job tool cache in a volume of its own, outside the project's labels.
+  docker volume rm act-toolcache >/dev/null 2>&1 && ok "volume act-toolcache (the runners' job tool cache) removed"
+  for img in "$project-portal:placeholder" "$project-backup:local" "$project-deployer:local"; do
+    docker image rm -f "$img" >/dev/null 2>&1 && ok "image $img removed"
+  done
+  pub="$INSTALL_DIR/local/wetty/id_ed25519.pub"
+  if [ -s "$pub" ] && [ -f "$HOME/.ssh/authorized_keys" ] && grep -qF "$(awk '{print $2}' "$pub")" "$HOME/.ssh/authorized_keys"; then
+    grep -vF "$(awk '{print $2}' "$pub")" "$HOME/.ssh/authorized_keys" > "$HOME/.ssh/authorized_keys.occ" || true
+    chmod 600 "$HOME/.ssh/authorized_keys.occ"; mv "$HOME/.ssh/authorized_keys.occ" "$HOME/.ssh/authorized_keys"
+    ok "the web terminal's key was taken out of $HOME/.ssh/authorized_keys (that line only)"
+  fi
+  if [ "$REMOVE_DIR" = true ]; then
+    if ! rm_tree "$INSTALL_DIR"; then warn "$INSTALL_DIR could not be emptied completely: sudo rm -rf $INSTALL_DIR"
+    elif [ "$RM_TREE_KEPT" = true ]; then ok "$INSTALL_DIR emptied; the empty directory stays (its parent is not yours: sudo rmdir $INSTALL_DIR)"
+    else ok "$INSTALL_DIR removed"; fi
+  fi
+  if [ "$REMOVE_IMAGES" = true ]; then
+    for img in $(printf '%s\n' $imgs | sort -u); do
+      docker image inspect "$img" >/dev/null 2>&1 || continue
+      docker image rm "$img" >/dev/null 2>&1 && ok "image $img removed" || log "image $img kept: another container uses it"
+    done
+  fi
+  _out ""
+  _out "Removed. Left on purpose:$( [ "$REMOVE_DIR" = true ] || echo " $INSTALL_DIR;")$( [ "$REMOVE_IMAGES" = true ] || echo " the pulled images (docker image ls);")$( [ "$inside" = true ] || echo " the backups in $dest;") the repository checkout $OCC_ROOT."
+  [ "$(uname -s)" = Darwin ] && _out "Docker Desktop keeps the space in its disk image: Settings > Resources > Disk usage limit, or Troubleshoot > Clean / Purge data (docs/cleanup.md)."
+  return 0
+}
+
+onboarding_main() {
   [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$DEFAULT_INSTALL_DIR"
-  STATE_FILE="$INSTALL_DIR/state.json"
-  [ -f "$STATE_FILE" ] || die "no state.json in $INSTALL_DIR"
-  if [ "$JSON_OUTPUT" = true ]; then state status --json; else state status; fi
-  exit $?
-fi
+  INSTALL_DIR="${INSTALL_DIR%/}"
+  STATE_FILE="$INSTALL_DIR/state.json"; ENV_FILE="$INSTALL_DIR/.env"
+  case "$1" in
+    status)
+      [ -f "$STATE_FILE" ] || die "no state.json in $INSTALL_DIR"
+      if [ "$JSON_OUTPUT" = true ]; then state status --json; return $?; fi
+      if [ "$VERBOSE" = true ]; then
+        local rc=0; state status || rc=$?
+        if [ -r "$ENV_FILE" ]; then _out ""; "$OCC_ROOT/scripts/occ-operator.sh" brief --install-dir "$INSTALL_DIR"; fi
+        return "$rc"
+      fi
+      status_short ;;
+    *)
+      [ -r "$ENV_FILE" ] || die "no readable $ENV_FILE: no installation at $INSTALL_DIR, or run this as the user who installed it"
+      case "$1" in
+        handoff) day0_handoff ;;
+        stop) cloud_stop ;;
+        start) cloud_start ;;
+        remove) cloud_remove ;;
+      esac ;;
+  esac
+}
+
+# -------------------------------------------------------------------- main
+case "$SUBCOMMAND" in
+  status|handoff|stop|start|remove) onboarding_main "$SUBCOMMAND"; exit $? ;;
+esac
 
 resolve_config
 derive
 
-if [ ! -d "$INSTALL_DIR" ] && ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
-  if [ "$MODE" = plan ]; then
-    STATE_FILE="$(mktemp "${TMPDIR:-/tmp}/occ-state.XXXXXX")"; rm -f "$STATE_FILE"
-    warn "cannot create $INSTALL_DIR; plan state kept in a temporary file"
-  else
-    die "cannot create $INSTALL_DIR. Create it once with: sudo install -d -o $(id -un) -g $(id -gn) $INSTALL_DIR"
-  fi
+# Dry run: --plan, and the plan shown before "Apply this plan now?". It creates nothing:
+# no install directory, state.json, config.yaml or backup directory. Its state lives in a
+# temporary directory (a copy of state.json on an existing install), deleted on exit.
+DRY_RUN=false
+if [ "$MODE" = plan ] || { [ -z "$MODE" ] && [ "$ASSUME_YES" != true ]; }; then DRY_RUN=true; fi
+REAL_STATE_FILE="$STATE_FILE"
+if [ "$DRY_RUN" = true ]; then
+  PLAN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/occ-plan.XXXXXX")"
+  trap 'rm -rf "$PLAN_TMP"' EXIT
+  STATE_FILE="$PLAN_TMP/state.json"
+  [ -f "$REAL_STATE_FILE" ] && cp "$REAL_STATE_FILE" "$STATE_FILE"
+elif [ ! -d "$INSTALL_DIR" ] && ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+  die "cannot create $INSTALL_DIR. Create it once with: sudo install -d -o $(id -un) -g $(id -gn) $INSTALL_DIR"
 fi
 state init --install-dir "$INSTALL_DIR" --config-sha "$CONFIG_SHA" --env-file .env --compose-file compose.yml >/dev/null
 
@@ -1377,19 +1630,21 @@ fi
 
 run_stage preflight
 run_stage plan
-# Keep the answers next to the state so a re-run needs no --config.
-[ -d "$INSTALL_DIR" ] && [ ! "$SOURCE_CONFIG" -ef "$CONFIG_FILE" ] && cp "$SOURCE_CONFIG" "$CONFIG_FILE"
 
 if [ "$MODE" = plan ]; then
-  # The plan writes only its own record: state.json and config.yaml in the install directory.
-  ok "plan only: no service, secret, Docker object or backup directory was created (the plan wrote state.json and config.yaml in $INSTALL_DIR). Apply with: $SELF --apply --install-dir $INSTALL_DIR${CONFIG_ARG:+ --config $CONFIG_ARG}"
+  ok "plan only: nothing was created or changed (no install directory, state.json, config.yaml, secret, Docker object or backup directory; the plan's record was a temporary file, now deleted). Apply with: $SELF --apply --install-dir $INSTALL_DIR${CONFIG_ARG:+ --config $CONFIG_ARG}"
   [ "$JSON_OUTPUT" = true ] && state status --json
   exit 0
 fi
 
-if [ -z "$MODE" ] && [ "$ASSUME_YES" != true ]; then
-  [ "$(ask_yn "Apply this plan now?" n)" = true ] || { log "not applied. Re-run with --apply when ready."; exit 0; }
+if [ "$DRY_RUN" = true ]; then
+  [ "$(ask_yn "Apply this plan now?" n)" = true ] || { log "not applied; nothing was created. Re-run with --apply when ready."; exit 0; }
+  [ -d "$INSTALL_DIR" ] || mkdir -p "$INSTALL_DIR" 2>/dev/null || die "cannot create $INSTALL_DIR. Create it once with: sudo install -d -o $(id -un) -g $(id -gn) $INSTALL_DIR"
+  cp "$STATE_FILE" "$REAL_STATE_FILE"; STATE_FILE="$REAL_STATE_FILE"
+  rm -rf "$PLAN_TMP"; trap - EXIT
 fi
+# Keep the answers next to the state so a re-run needs no --config.
+[ "$SOURCE_CONFIG" -ef "$CONFIG_FILE" ] || cp "$SOURCE_CONFIG" "$CONFIG_FILE"
 
 for s in secrets foundation authentik shared_data proxy_ingress gitea portal first_run backup optional_profiles smoke_tests handoff; do
   run_stage "$s"
