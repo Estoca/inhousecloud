@@ -362,7 +362,7 @@ Next:
 
 **Asking a coding agent to install it.** Give the agent this repository and `ssh` access to the box, and ask in your own words ("set up our company cloud on this server"). It reads [`AGENTS.md`](AGENTS.md), copies the repository to the box, asks you a handful of plain questions (your email, the company name, who reaches the apps, backups), shows the plan and installs after your yes. What the box must have before that, none of which the agent installs:
 
-- Linux (tested: Ubuntu 26.04), 2 CPUs, 4 GiB of memory, 10 GiB free disk;
+- Linux (tested: Ubuntu 26.04), 2 CPUs, 4 GiB of memory (6 GiB with the operator agent), 10 GiB free disk;
 - Docker Engine usable by the `ssh` user without `sudo` (rootless, or the user in the `docker` group) and Docker Compose v2;
 - `git`, `curl`, `python3`; `sshd` for the web terminal of the admin tools;
 - `sudo` for one command if the install directory is under `/opt` (or answer with a folder the user owns).

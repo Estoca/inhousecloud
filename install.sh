@@ -385,6 +385,11 @@ agent_preflight() {
   [ -n "$(agent_var AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan, }telegram"
   [ "$llm" = true ] && ok "agent: LLM API key present" || warn "agent: no LLM API key (AGENT_ANTHROPIC_API_KEY or AGENT_OPENAI_API_KEY): it comes up, reads the box, and cannot answer until one is set"
   [ -n "$chan" ] && ok "agent: chat channel $chan" || warn "agent: no chat channel (AGENT_SLACK_BOT_TOKEN + AGENT_SLACK_APP_TOKEN, or AGENT_TELEGRAM_BOT_TOKEN): only the admin can talk to it, through docker compose exec"
+  # A turn takes the gateway to ~1.3 GiB; on a 4 GiB box with every profile the kernel
+  # killed it mid-answer (docs/first-run.md, "Operator conversation run").
+  local mem_mb=0
+  [ -r /proc/meminfo ] && mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+  [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 5800 ] && warn "agent: ${mem_mb} MiB of memory; the agent needs 6 GiB on the box (it uses up to AGENT_MEM_LIMIT=3g while it answers, and is killed past that)"
   [ "$AGENT_ALLOW_WRITE" = true ] && warn "agent: ops.agent.allow_write is true: it may restart app containers and prune the build cache (docs/security.md)"
   return 0
 }
@@ -395,11 +400,14 @@ agent_env() {
     v="$(envfile get "$OCC_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
   done
   env_default OCC_AGENT_NETWORK occ-agent
+  env_default AGENT_MEM_LIMIT 3g
   env_set AGENT_DIR "$AGENT_DIR"
   env_set AGENT_ALLOW_WRITE "$AGENT_ALLOW_WRITE"
   env_set AGENT_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
   env_set AGENT_MODEL "${CFG_ops__agent__model:-}"
   env_set AGENT_ALLOW_FROM "${CFG_ops__agent__allow_from:-}"
+  env_set AGENT_GROUPS "${CFG_ops__agent__groups:-}"
+  env_set AGENT_GROUP_ALLOW_FROM "${CFG_ops__agent__group_allow_from:-${CFG_ops__agent__allow_from:-}}"
   env_set AGENT_TZ "${CFG_ops__agent__timezone:-${CFG_backup__timezone:-UTC}}"
   # Rootless Docker: container root is this user. Rootful: run as this user, not root.
   if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then env_set AGENT_USER "0:0"
@@ -412,9 +420,10 @@ agent_env() {
 render_agent_config() {
   $PY - "$AGENT_DIR/state/openclaw.json" "$(env_get AGENT_MODEL)" "$(env_get AGENT_ALLOW_FROM)" \
     "$( [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && [ -n "$(env_get AGENT_SLACK_APP_TOKEN)" ] && echo true || echo false)" \
-    "$( [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && echo true || echo false)" <<'PY'
+    "$( [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && echo true || echo false)" \
+    "$(env_get AGENT_GROUPS)" "$(env_get AGENT_GROUP_ALLOW_FROM)" <<'PY'
 import json, os, sys
-path, model, allow, slack, telegram = sys.argv[1:6]
+path, model, allow, slack, telegram, groups, group_allow = sys.argv[1:8]
 try:
     c = json.load(open(path))
 except (OSError, ValueError):
@@ -434,9 +443,19 @@ if slack == "true":
               "appToken": {"source": "env", "provider": "default", "id": "SLACK_APP_TOKEN"}}, **access)
 elif "slack" in ch:
     ch["slack"]["enabled"] = False
+# Telegram groups: only the listed chat ids, only on a mention of the bot, only from the
+# listed senders (DM pairing never authorizes anyone in a group). No list: no group.
+groups = [g.strip() for g in groups.split(",") if g.strip()]
+group_allow = [a.strip() for a in group_allow.split(",") if a.strip()]
 if telegram == "true":
     t = ch.setdefault("telegram", {})
     t.update({"enabled": True}, **access)
+    t["groupPolicy"] = "allowlist"
+    t["groupAllowFrom"] = group_allow
+    if groups and group_allow:
+        t["groups"] = {g: {"requireMention": True} for g in groups}
+    else:
+        t.pop("groups", None)
 elif "telegram" in ch:
     ch["telegram"]["enabled"] = False
 fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -461,6 +480,13 @@ agent_up() {
   [ "$out" = OK ] && ok "agent reads the Docker API through agent-docker-proxy" || { fail "agent cannot reach agent-docker-proxy: $out"; return 1; }
   llm=false; [ -n "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ] && llm=true
   chan=""; [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && chan=slack; [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan,}telegram"
+  # After a few restarts in a row (an OOM kill, say) OpenClaw's crash-loop breaker stops
+  # starting the channel on boot and the bot goes silent while the container looks healthy.
+  # Starting it explicitly is a no-op when it already runs.
+  for c in ${chan//,/ }; do
+    dc exec -T agent node dist/index.js gateway call channels.start --params "{\"channel\":\"$c\"}" >/dev/null 2>&1 \
+      && ok "agent: channel $c started" || warn "agent: could not start channel $c (dc logs agent)"
+  done
   probe="$(jsonq build enabled:=true image="$(env_get OPENCLAW_IMAGE)" workspace="$AGENT_DIR/workspace" brief="$AGENT_DIR/reference/brief.md" docker_api="read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo ' + app restart, build cache prune')" llm_key:="$llm" channel="${chan:-none}")"
   state stage optional_profiles set probe "{\"agent\":$probe}"
   state stage optional_profiles set resources "[\"dir:$AGENT_DIR\",\"container:agent\",\"container:agent-docker-proxy\"]"

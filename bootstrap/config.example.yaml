@@ -98,6 +98,10 @@ ops:                             # the ops profile: occ-admins only, through the
     allow_write: false           # true: it may restart app containers and prune the Docker build
                                  # cache, nothing else (docs/security.md). Default: read only
     allow_from:                  # chat user ids allowed to talk to it, one "- id" per line; empty: pairing
+    groups:                      # Telegram group chat ids (negative) where it answers when mentioned,
+                                 # one "- id" per line; empty: no group
+    group_allow_from:            # user ids (people or bots) it answers in those groups; empty: allow_from.
+                                 # A DM pairing never counts here
     model:                       # e.g. anthropic/<model>; empty: OpenClaw's default for the key given
   portainer: false
   glances: false

@@ -31,7 +31,7 @@ docker image ls --filter dangling=true                    # show first
 docker image rm <id> <id>                                 # only ids from the list shown, never -f
 ```
 
-*(agent)* with `ops.agent.allow_write`: `POST /build/prune` through its Docker API; image removal is not on its allowlist: it shows the list and the human runs it.
+*(agent)* with `ops.agent.allow_write`: `occ-ro prune-build-cache` (`POST /build/prune` through its Docker API); image removal is not on its allowlist: it shows the list and the human runs it.
 
 Never by reflex: `docker system prune`, `docker image prune -a`, `docker volume prune`. Each removes things that look unused and are not (a stopped app's image, a volume of a service under a profile that is off).
 

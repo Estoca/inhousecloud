@@ -20,7 +20,7 @@ Write down before acting: image id, ports, mounts, health, the last log lines, a
 
 ## Act
 
-- **One app**: `docker compose -p <slug> restart app`. *(agent)* with `ops.agent.allow_write`: `POST /containers/<id>/restart` through its Docker API, which refuses any container of the `occ` project.
+- **One app**: `docker compose -p <slug> restart app`. *(agent)* with `ops.agent.allow_write` (`occ-ro writes` says): `occ-ro restart <slug>-app-1`, a `POST /containers/<id>/restart` through its Docker API, which refuses any container of the `occ` project.
 - **A core service** (level 3, after the human's ok for that service): `dc restart <service>`, or `dc up -d <service>` when the configuration changed and the container must be recreated. Never `dc down`, never `dc up -d` without a service name: both touch everything.
 - **Not a restart**: a container `unhealthy` while it serves correctly is often a wrong healthcheck, not a sick service. Read the healthcheck (`docker inspect -f '{{json .Config.Healthcheck}}'`) and run it by hand inside the container first.
 

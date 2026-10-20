@@ -104,7 +104,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stdout.write("%s\n" % (fmt % args))
+        # Smoke test 20 tries writes on purpose; it says so in X-OCC-Probe so that the
+        # audit trail does not read as an attack (a label the caller claims, nothing more).
+        probe = re.sub(r"[^A-Za-z0-9_.-]", "", (self.headers or {}).get("X-OCC-Probe", "") or "")[:40] if hasattr(self, "headers") else ""
+        sys.stdout.write("%s%s\n" % (fmt % args, " probe=%s" % probe if probe else ""))
         sys.stdout.flush()
 
     def send(self, status, body, ctype="application/json"):

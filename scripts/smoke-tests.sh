@@ -400,7 +400,7 @@ PY
   # The Docker API as the agent sees it.
   out="$(docker exec -i "$acid" node - "$pgid" <<'JS' 2>&1
 const api = process.env.OCC_DOCKER_API, pg = process.argv[2];
-const r = async (m, p) => (await fetch(api + p, { method: m })).status;
+const r = async (m, p) => (await fetch(api + p, { method: m, headers: { "X-OCC-Probe": "smoke-test-20" } })).status;
 (async () => {
   const restart = await r("POST", `/containers/${pg}/restart`);
   const create = await r("POST", "/containers/create");

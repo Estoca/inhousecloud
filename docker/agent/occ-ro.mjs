@@ -10,9 +10,13 @@
 //   occ-ro gitea PATH               GET on the Gitea API with the read-only token
 //   occ-ro backup                   the backup status file
 //   occ-ro docker PATH              any allowlisted GET on the read-only Docker API
+//   occ-ro writes                   whether ops.agent.allow_write is on, and what it allows
+//   occ-ro restart NAME             restart one app container (allow_write; never a core one)
+//   occ-ro prune-build-cache        prune the Docker build cache (allow_write)
 //
 // Environment: OCC_DOCKER_API (http://agent-docker-proxy:2375), OCC_GITEA_URL,
-// GITEA_READONLY_TOKEN, OCC_BACKUP_REPORTS (/occ/backup-reports).
+// GITEA_READONLY_TOKEN, OCC_BACKUP_REPORTS (/occ/backup-reports),
+// OCC_AGENT_ALLOW_WRITE (true|false). The proxy enforces the writes, not this script.
 import { readFileSync } from "node:fs";
 
 const DOCKER = process.env.OCC_DOCKER_API || "http://agent-docker-proxy:2375";
@@ -45,6 +49,13 @@ function demux(buf) {
     i += 8 + n;
   }
   return out;
+}
+
+const WRITES = (process.env.OCC_AGENT_ALLOW_WRITE || "false") === "true";
+async function dpost(path) {
+  const r = await fetch(DOCKER + path, { method: "POST" });
+  const body = (await r.text()).slice(0, 300);
+  return { status: r.status, body };
 }
 
 const gib = (b) => (b / 1073741824).toFixed(2) + " GiB";
@@ -104,10 +115,34 @@ const commands = {
   async docker(path) {
     process.stdout.write((await dget(path)).toString() + "\n");
   },
+  async writes() {
+    console.log(WRITES
+      ? "allow_write: on. Allowed: restart of one app container (occ-ro restart NAME) and build cache prune (occ-ro prune-build-cache). Never a core container, never anything else."
+      : "allow_write: off. Every Docker write is refused; give the human the command instead.");
+  },
+  // Level 2 of the contract: only on an explicit instruction naming the app. Record the
+  // state before (occ-ro inspect) and prove health after (runbooks/restart-service.md).
+  async restart(name) {
+    if (!name) throw new Error("usage: occ-ro restart NAME");
+    const c = await resolve(name);
+    const project = c.Labels["com.docker.compose.project"] || "-";
+    const before = `${c.Names[0].slice(1)} project=${project} state=${c.State} (${c.Status})`;
+    const r = await dpost(`/containers/${c.Id}/restart?t=10`);
+    console.log(`before: ${before}`);
+    console.log(r.status === 204 ? "restart: 204 accepted" : `restart: ${r.status} ${r.body}`);
+    if (r.status !== 204) process.exit(1);
+    const after = (await djson("/containers/json?all=1")).find((x) => x.Id === c.Id);
+    console.log(`after: state=${after ? after.State : "?"} (${after ? after.Status : "?"}); now prove health along the chain`);
+  },
+  async "prune-build-cache"() {
+    const r = await dpost("/build/prune");
+    console.log(r.status === 200 ? `build cache pruned: ${r.body}` : `prune: ${r.status} ${r.body}`);
+    if (r.status !== 200) process.exit(1);
+  },
 };
 
 if (!commands[cmd]) {
-  console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").filter((l) => l.startsWith("//")).slice(1, 13).map((l) => l.slice(3)).join("\n"));
+  console.log(readFileSync(new URL(import.meta.url), "utf8").split("\n").filter((l) => l.startsWith("//")).slice(1, 16).map((l) => l.slice(3)).join("\n"));
   process.exit(cmd ? 1 : 0);
 }
 commands[cmd](...args).catch((e) => { console.error(String(e.message || e)); process.exit(1); });
