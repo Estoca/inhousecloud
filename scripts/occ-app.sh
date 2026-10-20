@@ -15,11 +15,14 @@
 #       forward auth, and the app's record in inventory.json.
 #   occ-app checkout                   inside a deploy job: fetch the pushed commit
 #   occ-app wait SLUG [--timeout S]    wait for the manifest healthcheck behind the proxy
-#   occ-app list [--json]              the apps in inventory.json
+#   occ-app list [--all] [--json]      the apps in inventory.json; --all includes the ones a
+#                                      system test created (kind: system-test), hidden otherwise
+#   occ-app remove SLUG [--yes]        remove an app a system test created, and only what its
+#                                      deploy recorded (docs/cleanup.md); asks for the slug
 #
 # Options: --install-dir DIR (default $OCC_INSTALL_DIR, else /opt/open-company-cloud).
-# Idempotent: every step probes first; a second run keeps every password. It never deletes
-# a database, role, bucket, route or Authentik object. Secrets go to the app's env file
+# Idempotent: every step probes first; a second run keeps every password. Only `remove`
+# deletes a database, role, bucket, route or Authentik object, and only for a system test. Secrets go to the app's env file
 # and travel on stdin or in the environment, never on a command line or in the output.
 # `new` away from the box reads OCC_GITEA_URL, OCC_GITEA_TOKEN, OCC_GITEA_ORG
 # and OCC_BASE_DOMAIN from the environment when there is no readable install .env.
@@ -35,7 +38,7 @@ usage() { sed -n '2,/^set -eu/p' "$OCC_ROOT/scripts/occ-app.sh" | sed '$d' | sed
 
 INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
 CMD="${1:-}"; [ $# -gt 0 ] && shift
-SLUG=""; DIR=""; NAME=""; OWNER=""; PUSH=false; MANIFEST="company-app.yaml"; TIMEOUT=240
+SLUG=""; DIR=""; NAME=""; OWNER=""; PUSH=false; MANIFEST="company-app.yaml"; TIMEOUT=240; ALL=false; YES=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -47,6 +50,8 @@ while [ $# -gt 0 ]; do
     --manifest) MANIFEST="$2"; shift ;;
     --timeout) TIMEOUT="$2"; shift ;;
     --json) JSON_OUTPUT=true ;;
+    --all) ALL=true ;;
+    --yes|-y) YES=true ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1 (see --help)" ;;
     *) [ -z "$SLUG" ] && SLUG="$1" || die "unexpected argument: $1" ;;
@@ -422,12 +427,116 @@ cmd_wait() {
 # ======================================================================= list
 cmd_list() {
   [ -f "$INVENTORY" ] || die "no inventory.json in $INSTALL_DIR"
-  if [ "$JSON_OUTPUT" = true ]; then $PY -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1])).get("apps",{}),indent=2))' "$INVENTORY"; return; fi
   $PY -c 'import json,sys
 apps=json.load(open(sys.argv[1])).get("apps",{})
+hidden=[s for s,a in apps.items() if a.get("kind")=="system-test" and sys.argv[2]!="true"]
+apps={s:a for s,a in apps.items() if s not in hidden}
+if sys.argv[3]=="true":
+    print(json.dumps(apps,indent=2)); sys.exit()
 for s,a in sorted(apps.items()):
-    print("%-24s %-40s %-28s %s"%(s,a.get("url",""),a.get("owner_email",""),a.get("provisioned_at","")))
-if not apps: print("no apps yet")' "$INVENTORY"
+    print("%-24s %-40s %-28s %s%s"%(s,a.get("url",""),a.get("owner_email",""),a.get("provisioned_at",""),"  [system test]" if a.get("kind")=="system-test" else ""))
+if not apps: print("no apps yet")
+if hidden: print("(%d app(s) left by a system test hidden: %s; occ-app list --all, occ-app remove SLUG)"%(len(hidden)," ".join(sorted(hidden))))' "$INVENTORY" "$ALL" "$JSON_OUTPUT"
+}
+
+# ===================================================================== remove
+# Only an app a system test created (kind: system-test in inventory.json, which smoke test
+# 16 sets): a real app's data has no automated removal. Only what the inventory recorded
+# for it is removed, each item probed first: its containers, volumes, network and built
+# images (Compose project SLUG), its database and role, its Redis user and keys, its bucket
+# and key, its Authentik application and provider, its proxy host (only when it forwards
+# to SLUG), its Gitea repository (only ORG/SLUG), its env file and data directory, and
+# its inventory record. Anything that cannot be removed is reported and the record stays.
+cmd_remove() {
+  [ -n "$SLUG" ] || die "usage: occ-app remove SLUG [--yes]"
+  load_env; endpoints
+  [ -f "$INVENTORY" ] || die "no inventory.json in $INSTALL_DIR"
+  local rec kind repo res r pk id ids typed left="" org="$GITEA_ORGANIZATION" cid
+  rec="$($PY -c 'import json,sys
+a=(json.load(open(sys.argv[1])).get("apps") or {}).get(sys.argv[2])
+if a is None: sys.exit(3)
+print("%s\t%s\t%s"%(a.get("kind","app"),a.get("repository","")," ".join(a.get("resources",[]))))' "$INVENTORY" "$SLUG")" || die "$SLUG is not in inventory.json: nothing to remove"
+  kind="$(printf '%s' "$rec" | cut -f1)"; repo="$(printf '%s' "$rec" | cut -f2)"; res=" $(printf '%s' "$rec" | cut -f3) "
+  [ "$kind" = system-test ] || die "$SLUG is an app (kind '$kind'), not a system test: occ-app remove only removes what a test created. Removing a real app and its data is manual (docs/cleanup.md)"
+  [ -z "$repo" ] || [ "$repo" = "$org/$SLUG" ] || die "$SLUG is recorded for repository $repo, not $org/$SLUG: nothing removed"
+  if [ "$YES" != true ]; then
+    [ -t 0 ] || die "no terminal: pass --yes to remove $SLUG without the question"
+    printf 'Remove the system-test app %s and everything its deploy recorded? Type the slug: ' "$SLUG" >&2
+    read -r typed || typed=""; [ "$typed" = "$SLUG" ] || die "nothing removed"
+  fi
+  step "remove $SLUG (system test)"
+  ids="$(docker ps -aq --filter "label=com.docker.compose.project=$SLUG")"
+  [ -n "$ids" ] && docker rm -f $ids >/dev/null
+  docker volume ls -q --filter "label=com.docker.compose.project=$SLUG" | xargs docker volume rm >/dev/null 2>&1 || true
+  docker network ls -q --filter "label=com.docker.compose.project=$SLUG" | xargs docker network rm >/dev/null 2>&1 || true
+  { docker images -q --filter "label=com.docker.compose.project=$SLUG"; docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$SLUG-" || true; } | sort -u | xargs docker image rm -f >/dev/null 2>&1 || true
+  ok "containers, volumes, network and built images of Compose project $SLUG"
+  for r in $res; do
+    case "$r" in
+      postgres:database:*)
+        cid="$(svc_cid postgres)"
+        docker exec -i "$cid" psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q -c "DROP DATABASE IF EXISTS \"${r#postgres:database:}\" WITH (FORCE)" >/dev/null \
+          && ok "database ${r#postgres:database:} dropped" || left="$left $r" ;;
+    esac
+  done
+  for r in $res; do
+    case "$r" in
+      postgres:role:*)
+        cid="$(svc_cid postgres)"
+        docker exec -i "$cid" psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -q -c "DROP ROLE IF EXISTS \"${r#postgres:role:}\"" >/dev/null \
+          && ok "role ${r#postgres:role:} dropped" || left="$left $r" ;;
+      redis:acl-user:*)
+        cid="$(svc_cid redis)"
+        printf 'ACL DELUSER %s\nACL SAVE\n' "${r#redis:acl-user:}" | docker exec -i "$cid" redis-cli >/dev/null 2>&1 \
+          && ok "Redis user ${r#redis:acl-user:} deleted" || left="$left $r" ;;
+      redis:prefix:*)
+        cid="$(svc_cid redis)"
+        docker exec -i "$cid" sh -c 'redis-cli --scan --pattern "$1*" | while read -r k; do redis-cli DEL "$k" >/dev/null; done' sh "${r#redis:prefix:}" \
+          && ok "Redis keys ${r#redis:prefix:}* deleted" || left="$left $r" ;;
+      garage:key:*)
+        garage_need && id="$(printf null | garage_api ListKeys | jsonq find "" name "${r#garage:key:}" id)" && [ -n "$id" ] \
+          && printf '{"id":"%s"}' "$id" | garage_api DeleteKey >/dev/null && ok "S3 key ${r#garage:key:} deleted" || left="$left $r" ;;
+      garage:bucket:*)
+        garage_need && id="$(printf '{"globalAlias":"%s"}' "${r#garage:bucket:}" | garage_api GetBucketInfo 2>/dev/null | jsonq get id)" && [ -n "$id" ] \
+          && printf '{"id":"%s"}' "$id" | garage_api DeleteBucket >/dev/null && ok "bucket ${r#garage:bucket:} deleted (it was empty)" || left="$left $r" ;;
+    esac
+  done
+  case "$res" in *" authentik:application:$SLUG "*)
+    api_init ak "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
+    api DELETE "$AK/core/applications/$SLUG/"
+    case "$API_CODE" in 204|404) ok "Authentik application $SLUG deleted" ;; *) left="$left authentik:application:$SLUG" ;; esac ;;
+  esac
+  case "$res" in *" authentik:provider:proxy:app-$SLUG "*)
+    api_init ak "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
+    pk="$(ak_list_find "providers/proxy/?name=$(urlenc "app-$SLUG")" name "app-$SLUG" pk)"
+    if [ -n "$pk" ]; then api DELETE "$AK/providers/proxy/$pk/"; api_ok && ok "Authentik provider app-$SLUG deleted" || left="$left authentik:provider:proxy:app-$SLUG"; fi ;;
+  esac
+  npm_login
+  if [ "$(proxy_host_field "$SLUG.$BASE_DOMAIN" forward_host)" = "$SLUG" ]; then
+    id="$(proxy_host_field "$SLUG.$BASE_DOMAIN" id)"
+    api DELETE "$NPM/nginx/proxy-hosts/$id"
+    api_ok && ok "proxy host $SLUG.$BASE_DOMAIN deleted" || left="$left proxy:$SLUG.$BASE_DOMAIN"
+  fi
+  api_init gt "Authorization: token $GITEA_ADMIN_TOKEN"
+  api DELETE "$GT/repos/$org/$SLUG"
+  case "$API_CODE" in 204|404) ok "Gitea repository $org/$SLUG deleted" ;; *) left="$left gitea:$org/$SLUG" ;; esac
+  for d in "$INSTALL_DIR/apps/$SLUG" "$INSTALL_DIR/app-data/$SLUG"; do
+    rm -rf "$d" 2>/dev/null || docker run --rm -v "$(dirname "$d"):/parent" --entrypoint rm "$POSTGRES_IMAGE" -rf "/parent/$SLUG" >/dev/null 2>&1 || true
+    [ -e "$d" ] && left="$left dir:$d"
+  done
+  [ -n "$left" ] && die "$SLUG not completely removed; left:$left. Its inventory record stays (kind system-test, hidden from occ-app list)"
+  $PY - "$INVENTORY" "$SLUG" <<'PY'
+import json, os, sys, tempfile
+path, slug = sys.argv[1:3]
+inv = json.load(open(path)); (inv.get("apps") or {}).pop(slug, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".inventory.")
+with os.fdopen(fd, "w") as f:
+    json.dump(inv, f, indent=2); f.write("\n")
+os.chmod(tmp, 0o644); os.replace(tmp, path)
+PY
+  ok "$SLUG removed from inventory.json"
+  [ -d "$INSTALL_DIR/agent/reference" ] && { "$OCC_ROOT/scripts/occ-operator.sh" brief --install-dir "$INSTALL_DIR" --out "$INSTALL_DIR/agent/reference" >/dev/null 2>&1 || true; }
+  return 0
 }
 
 # shellcheck source=lib/sso.sh
@@ -440,6 +549,7 @@ case "$CMD" in
   checkout) cmd_checkout ;;
   wait) cmd_wait ;;
   list) cmd_list ;;
+  remove) cmd_remove ;;
   ""|-h|--help|help) usage ;;
   *) die "unknown command: $CMD (see --help)" ;;
 esac

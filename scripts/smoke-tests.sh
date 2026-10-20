@@ -5,7 +5,7 @@
 #
 # Runs tests 1 to 21. Test 14 runs `occ-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
-# main (never skipped: the runners are core); the app stays on the box. Tests 17 and 18
+# main (never skipped: the runners are core), redeploys it, then removes it (occ-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
 # storage and is skipped only when the storage profile is off; test 20 covers the operator
 # agent and is skipped when the agent profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
@@ -170,67 +170,99 @@ else
 fi
 
 # 16. an app reaches the air: the template app smoke-app is created in the organization
-#     (or cloned when it exists), a commit is pushed to main, the deploy run must succeed,
-#     /health answers 200 through the proxy, / redirects to Authentik, the app's database
-#     and role exist (LOGIN NOSUPERUSER, no public connect) and the role signs in with
-#     the password of the app's env file, which a redeploy does not change.
+#     (or cloned when a run left it), a commit is pushed to main, the deploy run must
+#     succeed, /health answers 200 through the proxy, / redirects to Authentik, the app's
+#     database and role exist (LOGIN NOSUPERUSER, no public connect) and the role signs in
+#     with the password of the app's env file. A second push redeploys it and must keep
+#     that password. Then the app is marked kind: system-test in inventory.json and
+#     `occ-app remove smoke-app` takes away what the test created, so the cloud is handed
+#     over without it. If the removal fails the app stays, hidden from `occ-app list`.
+t16_push() { # WORKDIR MESSAGE -> sets T16_SHA, T16_ST, T16_RUN
+  local t0
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$1/.occ-smoke"
+  git -C "$1" add -A
+  git -C "$1" -c user.name=occ-smoke -c user.email="$GITEA_ADMIN_EMAIL" commit -q -m "$2" 2>/dev/null
+  T16_SHA="$(git -C "$1" rev-parse HEAD)"; T16_ST=""
+  t0=$(date +%s)
+  GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git -C "$1" push -q "$T16_REPO" HEAD:main 2>"$1.push.log" \
+    || { T16_ST="push failed: $(tail -n 1 "$1.push.log")"; return 1; }
+  # The run for this commit: Gitea lists jobs as tasks with their head_sha.
+  while :; do
+    api GET "$T16_GT/repos/$GITEA_ORGANIZATION/smoke-app/actions/tasks?limit=20"
+    T16_ST="$(printf '%s' "$API_BODY" | $PY -c 'import json,sys
+try: runs=json.load(sys.stdin).get("workflow_runs") or []
+except Exception: runs=[]
+m=[r for r in runs if r.get("head_sha")==sys.argv[1]]
+print(m[0].get("status","") if m else "")' "$T16_SHA")"
+    case "$T16_ST" in success|failure|cancelled|skipped) break ;; esac
+    [ $(( $(date +%s) - t0 )) -ge 900 ] && break
+    sleep 5
+  done
+  T16_RUN=$(( $(date +%s) - t0 ))
+  [ "$T16_ST" = success ]
+}
+t16_mark() { # mark smoke-app as a system test in inventory.json (it is created by the deploy)
+  $PY - "$INSTALL_DIR/inventory.json" <<'PY'
+import json, os, sys, tempfile
+p = sys.argv[1]
+inv = json.load(open(p)); a = (inv.get("apps") or {}).get("smoke-app")
+if a is not None and a.get("kind") != "system-test":
+    a["kind"] = "system-test"
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".inventory.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(inv, f, indent=2); f.write("\n")
+    os.chmod(tmp, 0o644); os.replace(tmp, p)
+PY
+}
 t16() {
-  local slug=smoke-app org="$GITEA_ORGANIZATION" work ap repo_url sha t0 run st code body loc row fp_before fp_after app_env db
-  local GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
+  local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 removed
+  T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
   have git || { result 16 app-deploy fail "git not found on the box"; return; }
   work="$(mktemp -d "${TMPDIR:-/tmp}/occ-smoke16.XXXXXX")"
-  ap="$work/askpass"; printf '#!/bin/sh\ncase "$1" in *sername*) echo "%s" ;; *) printf "%%s\\n" "$GITEA_ADMIN_TOKEN" ;; esac\n' "$GITEA_ADMIN_USERNAME" > "$ap"; chmod 700 "$ap"
-  repo_url="http://127.0.0.1:${GITEA_LOCAL_PORT}/$org/$slug.git"
+  T16_AP="$work/askpass"; printf '#!/bin/sh\ncase "$1" in *sername*) echo "%s" ;; *) printf "%%s\\n" "$GITEA_ADMIN_TOKEN" ;; esac\n' "$GITEA_ADMIN_USERNAME" > "$T16_AP"; chmod 700 "$T16_AP"
+  T16_REPO="http://127.0.0.1:${GITEA_LOCAL_PORT}/$org/$slug.git"
   app_env="$INSTALL_DIR/apps/$slug/.env"
-  fp_before=""; [ -f "$app_env" ] && fp_before="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
+  # A run that left smoke-app behind (a failed removal): it is the test's own; mark it.
+  t16_mark 2>/dev/null || true
   api_init gt16 "Authorization: token ${GITEA_ADMIN_TOKEN}"
-  api GET "$GT/repos/$org/$slug"
+  api GET "$T16_GT/repos/$org/$slug"
   if [ "$API_CODE" = 404 ] || [ "$(printf '%s' "$API_BODY" | jsonq get empty)" = true ]; then
     "$OCC_ROOT/scripts/occ-app.sh" new "$slug" --dir "$work/$slug" --install-dir "$INSTALL_DIR" --name "Smoke App" --owner "$GITEA_ADMIN_EMAIL" >/dev/null 2>"$work/new.log" \
       || { result 16 app-deploy fail "occ-app new failed: $(tail -n 1 "$work/new.log")"; rm -rf "$work"; return; }
   else
-    GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git clone -q "$repo_url" "$work/$slug" 2>/dev/null \
+    GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git clone -q "$T16_REPO" "$work/$slug" 2>/dev/null \
       || { result 16 app-deploy fail "clone of $org/$slug failed"; rm -rf "$work"; return; }
   fi
-  date -u +%Y-%m-%dT%H:%M:%SZ > "$work/$slug/.occ-smoke"
-  git -C "$work/$slug" add -A
-  git -C "$work/$slug" -c user.name=occ-smoke -c user.email="$GITEA_ADMIN_EMAIL" commit -q -m "smoke test 16" 2>/dev/null
-  sha="$(git -C "$work/$slug" rev-parse HEAD)"
-  t0=$(date +%s)
-  GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$work/$slug" push -q "$repo_url" HEAD:main 2>"$work/push.log" \
-    || { result 16 app-deploy fail "push to $org/$slug failed: $(tail -n 1 "$work/push.log")"; rm -rf "$work"; return; }
-  rm -rf "$work"
-  # The run for this commit: Gitea lists jobs as tasks with their head_sha.
-  st=""
-  while :; do
-    api GET "$GT/repos/$org/$slug/actions/tasks?limit=20"
-    st="$(printf '%s' "$API_BODY" | $PY -c 'import json,sys
-try: runs=json.load(sys.stdin).get("workflow_runs") or []
-except Exception: runs=[]
-m=[r for r in runs if r.get("head_sha")==sys.argv[1]]
-print(m[0].get("status","") if m else "")' "$sha")"
-    case "$st" in success|failure|cancelled|skipped) break ;; esac
-    [ $(( $(date +%s) - t0 )) -ge 900 ] && break
-    sleep 5
-  done
-  run=$(( $(date +%s) - t0 ))
-  if [ "$st" != success ]; then
-    result 16 app-deploy fail "deploy run for $(printf '%s' "$sha" | cut -c1-8) ended '${st:-not started after ${run}s}': $GITEA_BASE_URL/$org/$slug/actions"
-    return
+  api_init gt16 "Authorization: token ${GITEA_ADMIN_TOKEN}"
+  if ! t16_push "$work/$slug" "smoke test 16"; then
+    result 16 app-deploy fail "deploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started after ${T16_RUN:-?}s}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
   fi
+  run1="$T16_RUN"; t16_mark || true
   body="$(curl -sS --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") -w '\n%{http_code}' "$(proxy_url "$slug.$BASE_DOMAIN" /health)" 2>/dev/null || true)"
   code="${body##*$'\n'}"
-  [ "$code" = 200 ] && [ "$(printf '%s' "${body%$'\n'*}" | jsonq get ok)" = true ] || { result 16 app-deploy fail "run green but https://$slug.$BASE_DOMAIN/health answered $code through the proxy"; return; }
+  [ "$code" = 200 ] && [ "$(printf '%s' "${body%$'\n'*}" | jsonq get ok)" = true ] || { result 16 app-deploy fail "run green but https://$slug.$BASE_DOMAIN/health answered $code through the proxy"; rm -rf "$work"; return; }
   loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") "$(proxy_url "$slug.$BASE_DOMAIN" /)" 2>/dev/null || echo 000)"
-  case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) ;; *) result 16 app-deploy fail "/ of $slug is not behind the SSO: got ${loc%% *}"; return ;; esac
+  case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) ;; *) result 16 app-deploy fail "/ of $slug is not behind the SSO: got ${loc%% *}"; rm -rf "$work"; return ;; esac
   db=app_smoke_app
   row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT r.rolsuper, r.rolcanlogin, has_database_privilege('public', d.datname, 'CONNECT') FROM pg_roles r, pg_database d WHERE r.rolname='$db' AND d.datname='$db' AND d.datdba=r.oid;" 2>/dev/null | tr -d '[:space:]')"
-  [ "$row" = "f|t|f" ] || { result 16 app-deploy fail "database/role $db: got '$row' (wanted owner role nosuperuser, login, no public connect)"; return; }
+  [ "$row" = "f|t|f" ] || { result 16 app-deploy fail "database/role $db: got '$row' (wanted owner role nosuperuser, login, no public connect)"; rm -rf "$work"; return; }
   PGPASSWORD="$(envfile get "$app_env" PGPASSWORD)" dc exec -T -e PGPASSWORD postgres psql -h 127.0.0.1 -U "$db" -d "$db" -Atc 'SELECT current_user' >/dev/null 2>&1 \
-    || { result 16 app-deploy fail "role $db cannot sign in with the password in $app_env"; return; }
-  fp_after="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
-  if [ -n "$fp_before" ] && [ "$fp_before" != "$fp_after" ]; then result 16 app-deploy fail "the redeploy changed the database password"; return; fi
-  result 16 app-deploy pass "push to green run in ${run}s; /health 200, / to the SSO, $db owned by its role$( [ -n "$fp_before" ] && echo ', password kept on redeploy')"
+    || { result 16 app-deploy fail "role $db cannot sign in with the password in $app_env"; rm -rf "$work"; return; }
+  fp1="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
+  if ! t16_push "$work/$slug" "smoke test 16: redeploy"; then
+    result 16 app-deploy fail "redeploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
+  fi
+  rm -rf "$work"
+  fp2="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
+  [ "$fp1" = "$fp2" ] || { result 16 app-deploy fail "the redeploy changed the database password"; return; }
+  if "$OCC_ROOT/scripts/occ-app.sh" remove "$slug" --yes --install-dir "$INSTALL_DIR" >"${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log" 2>&1; then
+    removed="removed after the test (repository, route, SSO, database, Redis user, files, inventory)"
+  else
+    removed="NOT removed ($(grep '^\[xx\]' "${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log" | tail -n 1 | cut -c6-)): hidden as kind system-test; occ-app remove $slug"
+    warn "16. $slug was left on the box: $removed"
+  fi
+  rm -f "${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log"
+  result 16 app-deploy pass "push to green run in ${run1}s, redeploy in ${T16_RUN}s kept the password; /health 200, / to the SSO, $db owned by its role; $removed"
 }
 t16
 

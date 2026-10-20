@@ -8,7 +8,14 @@ One box runs what a small company needs around its internal apps: single sign-on
 
 ## Try It in 10 Minutes
 
-On a Mac with [Homebrew](https://brew.sh) (or skip the VM on any Ubuntu box with Docker):
+On a Mac with Docker Desktop, directly (15 to 20 GiB free; no `sudo`):
+
+```bash
+git clone https://github.com/Estoca/open-company-cloud.git ~/src/open-company-cloud && cd ~/src/open-company-cloud
+./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/open-company-cloud
+```
+
+Or in a throwaway VM, on a Mac with [Homebrew](https://brew.sh) and no Docker (or skip the VM on any Ubuntu box with Docker):
 
 ```bash
 brew install lima
@@ -20,7 +27,7 @@ sudo install -d -o $(id -un) -g $(id -gn) /opt/open-company-cloud
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-About a minute for the VM and five for the install. Then open <http://portal.cloud.localhost> on the Mac and sign in, and put a first app on the air with `scripts/occ-app.sh new <name> --push`, about 30 seconds later behind the same sign-in. Every step, with the times measured on a clean VM: [`docs/try-it.md`](docs/try-it.md).
+About a minute for the VM and five for the install. The install ends with seven day-zero steps, with the literal commands: open <http://portal.cloud.localhost> and sign in (the portal is a placeholder: it proves the SSO; to operate, Gitea + `occ-operator brief`), turn on MFA, copy the backup key off the machine, put a first app on the air with `scripts/occ-app.sh new <name> --owner <email> --push` (about 30 seconds later behind the same sign-in), and stop or remove a test install ([`docs/cleanup.md`](docs/cleanup.md)). Both paths, with the times measured: [`docs/try-it.md`](docs/try-it.md).
 
 Or ask a coding agent. Below, Claude Code gets one sentence in Portuguese ("create an internal expense log app on our company cloud and put it on the air") and `ssh` to a box it has never seen; recordings and how they were made are in [`docs/demo/`](docs/demo/).
 
@@ -71,7 +78,7 @@ That machine runs the control plane, the support plane, and the apps:
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
 - an optional operator agent answers "why is it down" in Slack or Telegram from a generated map of the box, read only by default, inside a written contract (the `agent` profile, [`docs/operator-contract.md`](docs/operator-contract.md));
-- an app portal shows what should exist, what is running, and what changed (next on the roadmap; a placeholder answers today);
+- an app portal shows what should exist, what is running, and what changed (next on the roadmap; today a placeholder proves the SSO; to operate, Gitea + `occ-operator brief`);
 - coding agents connect to the same machine and use the same contracts as humans.
 
 This is not meant to replace AWS, Kubernetes, or a mature platform team. It is meant to cover the first, surprisingly large stage where a company needs internal software to be real, authenticated, observable, and repeatable, but does not yet need a distributed platform.
@@ -360,7 +367,7 @@ Next:
 - `git`, `curl`, `python3`; `sshd` for the web terminal of the admin tools;
 - `sudo` for one command if the install directory is under `/opt` (or answer with a folder the user owns).
 
-**Trying it yourself.** [`docs/try-it.md`](docs/try-it.md): a VM on your laptop, one install command, a first app on the air, about 8 minutes.
+**Trying it yourself.** [`docs/try-it.md`](docs/try-it.md): on a Mac with Docker Desktop or in a VM on your laptop, one install command, a first app on the air, about 8 minutes. Adding the next person: [`docs/first-user.md`](docs/first-user.md). Stopping or removing it: [`docs/cleanup.md`](docs/cleanup.md).
 
 Start with the docs:
 
@@ -393,7 +400,16 @@ Same path for an agent or CI, with the answers in a file:
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-`--plan` prints what would happen and changes nothing; `--apply --from <stage>` resumes; `status` reports the state file. Re-running on an installed box changes nothing. Every stage, the generated `.env` (0600) and the smoke tests are described in `docs/install-design.md`, `docs/first-run.md` and `docs/smoke-tests.md`; the agent path is in `docs/llm-bootstrap.md`.
+`--plan` prints what would happen and creates nothing (no directory, no `state.json`); `--apply --from <stage>` resumes. After the install:
+
+```bash
+./install.sh handoff     # the seven day-zero steps again
+./install.sh status      # short: state, URLs, service health, backup age, apps and owners
+./install.sh status --verbose   # every stage and the full operator brief (scripts/occ-operator.sh brief)
+./install.sh stop        # stop the cloud and its apps, data kept (start: ./install.sh start)
+./install.sh remove      # remove a test install; asks for the project name (docs/cleanup.md)
+```
+ Re-running on an installed box changes nothing. Every stage, the generated `.env` (0600) and the smoke tests are described in `docs/install-design.md`, `docs/first-run.md` and `docs/smoke-tests.md`; the agent path is in `docs/llm-bootstrap.md`.
 
 ### Backup
 

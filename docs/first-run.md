@@ -74,12 +74,12 @@ A lesson from testing: curl resolves every `*.localhost` name to loopback by its
 
 ## Human
 
-Asked for, or left to you, never guessed:
+Asked for, or left to you, never guessed. The install ends with these as seven day-zero steps with the literal commands for the box (portal, first password, MFA and password, backup key, first app, operator brief, stop or remove); `install.sh handoff` prints them again.
 
 - **DNS and tunnel.** `local` ingress needs nothing on the box itself (`*.localhost` resolves to loopback; on macOS 26.7 the names resolved natively in Chrome and `curl` too; only if one does not resolve, as in Safari, add it to `/etc/hosts`). From another computer, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open and use Chrome, Edge or Firefox: the tunnel must hold port 80, because the sign-in redirects drop any other port. `private` needs, before the install, an auth key exported as `OCC_TAILSCALE_AUTHKEY` (Tailscale admin console, Settings > Keys; used for the first login only and never written to `.env`) and, once after it, the split DNS: in the Tailscale admin console, DNS > Nameservers > Add nameserver > Custom, the node's tailnet IP as nameserver, "Restrict to domain" on with `BASE_DOMAIN`. The handoff prints the IP and whether the tailnet already sends `BASE_DOMAIN` there; then each device installs the CA (`<install-dir>/local/ca/ca.crt`, the handoff prints the command per OS) and opens `https://portal.<BASE_DOMAIN>`. Nothing is published on the LAN: the tailnet reaches the proxy through the Tailscale node ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` needs the DNS records (or the Cloudflare tunnel routes) and, for `cloudflared`, the tunnel token in the variable named by `ingress.cloudflared.tunnel_token_env`.
 - **First login, MFA, bootstrap password.** Sign in to Authentik as `akadmin` with `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`, enrol MFA, save recovery codes, then change the password; the value in `.env` is then stale by design.
-- **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours.
-- **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled.
+- **Group policy.** Who is an admin, who reaches Gitea and the portal. The installer binds the two groups above and puts `akadmin` in both; adding people is yours: [`first-user.md`](first-user.md).
+- **SMTP, account recovery, invitations.** Authentik and Gitea are installed with mail disabled; until the installer carries SMTP, an admin sets passwords ([`first-user.md`](first-user.md#off-until-mail-is-set-up)).
 - **The CA on each device** in `tls_mode: internal`: the installer makes the CA and the certificate; installing `ca.crt` on the people's devices is theirs (the handoff prints the file, its SHA-256 and the command per OS).
 - **Replacing the placeholder portal.** The `portal` service builds `examples/minimal-web-app`; the real portal takes its place with the same service name, port 8080 and `/health`.
 - **Migrating an existing installation.** Nothing here imports data.
@@ -387,3 +387,40 @@ The rename to Open Company Cloud (commands, variables, project, networks, groups
 | `.env` | `BACKUP_DESTINATION` from the old variable; `AUTHENTIK_PORTAL_GROUP=harness-admins` and `BASE_DOMAIN=harness.localhost`, as the old config says |
 
 On the same box, `install.sh --plan` of the new commit into a fresh directory reported the backup destination as "created on apply" and did not create it (its preflight stopped on ports held by the first install, as it should).
+
+## Onboarding run
+
+What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.
+
+**Setup.** A clean Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.1 rootless, Compose 5.6.0), 2 CPU, 6 GiB, 30 GiB disk, no mounts and no port forwards. The branch copied onto the VM; `bootstrap/config.example.yaml` (core and backup) for runs 1 and 2, the same with `install.profile.ops: true` and `ops.wetty.install_key: true` for run 3. On 2026-10-20.
+
+| Step | Result |
+|---|---|
+| `install.sh --plan`, no `/opt/open-company-cloud` | preflight stops: "cannot create /opt/open-company-cloud. Create it once with: sudo install -d ..."; "the plan stopped at preflight; nothing was created" |
+| `install.sh --plan`, the empty directory made with `sudo install -d` | exit 0; then `sudo find / -xdev -newer <marker>` (minus `/proc`, `/sys`, `/run`, `/var/log`) lists only `/tmp` itself (the plan's temporary directory, created and deleted); the install directory still empty; 0 containers, 0 volumes |
+| Run 1: `install.sh --non-interactive` | 282 s, exit 0; smoke tests 17 passed, 0 failed, 4 skipped |
+| Smoke test 16 | push to green run in 21 s, redeploy in 10 s kept the database password, then `occ-app remove smoke-app`: afterwards the Gitea repository and the Authentik application answer 404, no proxy provider `app-smoke-app`, no role or database `app_*`, Redis has only `default`, `apps/` and `app-data/` empty, `inventory.json` has no app, no container or image `smoke-app` |
+| Handoff | the URLs, then "Day zero, in this order:" with the seven steps and their literal commands; `install.sh handoff` prints them again |
+| `install.sh status` | 9 lines: completed, portal (placeholder), sign-in, Gitea, "11 of 11 healthy", "last success 0.0 h ago (max 26 h)", "apps none yet"; exit 0 |
+| `install.sh status --verbose` | the 14 stages, then the operator brief (118 lines in all) |
+| `occ-app list`, `--all` | "no apps yet" both |
+| A second person ([`first-user.md`](first-user.md)) | user `ana` created through the Authentik API, a password set, added to `occ-users`: `sso-login-check.sh --user ana` signs in to Gitea; `--target http://portal.cloud.localhost --expect denied` passes (the portal is `occ-admins`); an app of hers, `pedidos`, opens for her (`--expect allowed`) and appears in `status` as "pedidos (ana@example.com)" |
+| `occ-app remove pedidos` | refused: "pedidos is an app (kind 'app'), not a system test" |
+| A left-over system test (`pedidos` marked `kind: system-test` by hand) | hidden from `occ-app list` ("1 app(s) left by a system test hidden: pedidos; ...") and from `status` ("apps none yet"), shown by `--all` with `[system test]` and in the brief; `remove` without `--yes` and without a terminal refuses; with `--yes` it removes containers, database, role, Redis user and keys, Authentik application and provider, proxy host, repository (404 afterwards) and the inventory record |
+| `install.sh stop` | 0 running containers; `status`: "services stopped (start: ...)" |
+| `install.sh start` | "11 of 11 healthy" within a minute |
+| `install.sh remove` without a terminal, `--confirm wrong` | refused, nothing removed (11 containers still there) |
+| `install.sh remove --confirm occ` | 11 s: containers, volumes, networks and the three built images gone; the pulled images and `/opt/open-company-cloud` kept, as it says. One volume was left, `act-toolcache` (the runners' job cache, without Compose labels): `remove` now takes it too |
+| Run 2: install again on the same VM | exit 0; 17 passed, 0 failed, 4 skipped; test 16 green in 16 s, redeploy 15 s, removed |
+| `remove --images --dir`, typing `occx` at the prompt | "'occx' is not 'occ': nothing removed" |
+| Typing `occ` | 0 containers, 0 volumes, 0 images. `/opt/open-company-cloud` emptied, the empty directory kept: `/opt` is root's (now said as such instead of a warning) |
+| Run 3: `ops` profile, web terminal key installed | exit 0; smoke tests 19 passed, 0 failed, 2 skipped; `status` adds the four ops URLs and "15 of 15 healthy"; `authorized_keys` 1 line before, 2 after the install |
+| `remove --images --dir`, typing `occ` | 0 containers, volumes and images; "the web terminal's key was taken out of authorized_keys (that line only)": 1 line again |
+
+**What it changed.**
+
+- `install.sh`: the seven day-zero steps at the end of the install and in `install.sh handoff`; `--plan` (and the plan shown before "Apply this plan now?") creates nothing, with its state in a temporary directory; `status` is short and `status --verbose` adds the stages and the operator brief; `stop`, `start` and `remove` (with `--images`, `--dir`, `--confirm NAME`); the preflight warns below 15 GiB free on macOS.
+- `occ-app list` hides apps marked `kind: system-test` (`--all` shows them); `occ-app remove` removes such an app, only what its deploy recorded. Smoke test 16 redeploys, then removes `smoke-app`.
+- [`cleanup.md`](cleanup.md) and [`first-user.md`](first-user.md); [`try-it.md`](try-it.md) with the Mac with Docker Desktop and Lima as two first-class paths.
+
+**Not covered here.** The Mac path itself on Docker Desktop with these commands (`stop`, `remove`, the macOS disk warning): the Mac run above is the reviewer's, before them. Signing in with MFA in a browser. SMTP, which the installer does not carry yet.

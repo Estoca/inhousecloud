@@ -89,6 +89,6 @@ Creating an app and pushing it to `main` is not a checkpoint when the human aske
 
 ## Done means
 
-For an install: `./install.sh status --json` says `completed`, the smoke tests passed, and the human has the URLs, how to open them from their own computer (for `local` ingress on a box they reach by `ssh`: the port-80 tunnel), the command that shows the first password on their screen, the path of `.env` and the list of steps left to them.
+For an install: `./install.sh status --json` says `completed`, the smoke tests passed, and the human has the URLs, how to open them from their own computer (for `local` ingress on a box they reach by `ssh`: the port-80 tunnel), the command that shows the first password on their screen, the path of `.env` and the steps left to them: the seven day-zero steps the install prints at the end, which `./install.sh handoff` prints again.
 
 For an app: the three checks above pass, and the human has the URL and knows it asks for the company sign-in.

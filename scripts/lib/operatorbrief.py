@@ -289,7 +289,7 @@ def build(install_dir, occ_root, live):
     apps_dir = os.path.join(install_dir, "apps")
     for slug, a in sorted((inv.get("apps") or {}).items()):
         app_env = read_env(a.get("env_file") or os.path.join(apps_dir, slug, ".env"))
-        row = {"slug": slug, "name": a.get("name", ""), "owner": a.get("owner_email", ""), "url": a.get("url", ""),
+        row = {"slug": slug, "kind": a.get("kind", "app"), "name": a.get("name", ""), "owner": a.get("owner_email", ""), "url": a.get("url", ""),
                "repository": a.get("repository", ""), "last_commit": a.get("last_commit", ""),
                "provisioned_at": a.get("provisioned_at", ""), "compose_project": slug,
                "compose_overlay": a.get("compose_overlay", ""), "env_file": a.get("env_file", ""),
@@ -397,8 +397,8 @@ def md(b):
         w("|---|---|---|---|---|---|---|")
         for a in b["apps"]:
             rt = "; ".join("%s %s" % (r["service"], r["state"]) for r in a.get("runtime", [])) if "runtime" in a else "not read"
-            w("| `%s` | %s | %s | %s | %s | %s | %s |" % (a["slug"], a["owner"], a["url"], a["repository"], (a["last_commit"] or "")[:12],
-                                                        ", ".join(a["env_names"]), rt or "no container"))
+            w("| `%s`%s | %s | %s | %s | %s | %s | %s |" % (a["slug"], " (system test: `occ-app remove %s`)" % a["slug"] if a["kind"] == "system-test" else "", a["owner"], a["url"], a["repository"], (a["last_commit"] or "")[:12],
+                                                          ", ".join(a["env_names"]), rt or "no container"))
         w("")
         w("Each app: Compose project = its slug; overlay `apps/<slug>/compose.occ.yml`; data `app-data/<slug>` at /data; health = its manifest's healthcheck through the proxy.")
     if b.get("unclaimed_containers"):

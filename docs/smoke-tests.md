@@ -85,8 +85,11 @@ docker compose -f "$OCC_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_USER" 
 # PASS: the deploy run of the pushed commit ends `success` within 15 minutes; /health
 #       answers 200 with ok = true through the proxy; / answers 302 to the outpost; the
 #       query returns f|t|f (owned by its role, not superuser, can log in, no public
-#       connect); the role signs in with PGPASSWORD from apps/smoke-app/.env; and on a
-#       second run that password is the same as before the push
+#       connect); the role signs in with PGPASSWORD from apps/smoke-app/.env; a second
+#       push redeploys it and that password is the same as before
+# Then (not a pass condition): smoke-app is marked kind: system-test in inventory.json and
+scripts/occ-app.sh remove smoke-app --yes --install-dir "$OCC_INSTALL_DIR"
+#       removes what the test created; if it cannot, the app stays, hidden from occ-app list
 
 # 17. The ops tools are behind the SSO (skipped only when the ops profile is off)
 for h in terminal files portainer glances; do curl -sSI "https://$h.$BASE_DOMAIN/"; done
@@ -158,7 +161,7 @@ Test 18 signs in for real, with the smoke user's password from `.env`: it proves
 
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
-Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `occ-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It leaves `smoke-app` running, listed in `inventory.json` and reachable by the users group; every run adds one commit to its repository. The cloud never deletes it; remove it by hand if it bothers you. The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
+Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `occ-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `occ-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `occ-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `occ-app list` (shown with `--all` and in the operator brief) until `occ-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `occ-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
 
 Test 19 provisions with the same function `occ-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
 
