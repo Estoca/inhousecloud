@@ -339,12 +339,22 @@ Done:
 - PR 7: the cold install run: an agent installs the cloud from zero on a clean box from a layperson's request.
 - PR 8: the `storage` profile on Garage (the earlier S3 server's images were no longer downloadable), a bucket and key per app.
 - PR 9: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/occ-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
+- PR 10: try it in 10 minutes ([`docs/try-it.md`](docs/try-it.md)), the demo recordings and the announcement drafts.
+- PR 11: `private` ingress: Tailscale serve, the installation's own name-constrained CA, split DNS.
+- PR 12: the rename to Open Company Cloud (`occ-*` commands, `OCC_*` variables); old names load for one version.
+- PR 13: onboarding after the install: the day-zero handoff, `--plan` as a dry run, stop, start and remove.
+- PR 14: the operator agent in conversation (Telegram), with a memory limit and the writes it can use.
 
 Next:
 
-- The real portal: read-only inventory, deploy runs, health, backups, and `GET /api/platform/status` for agents.
+- The real portal, ported from the internal portal already running in the reference installation: read-only inventory, deploy runs, health, backups, the people who can sign in and their groups (read from Authentik), and `GET /api/platform/status` for agents.
+- `occ doctor`: one command that checks the box the way the smoke tests do (routes and DNS, TLS, the sign-in, disk, containers and their health checks, the age of the last backup) and answers in plain text for a person and with `--json` for an agent or the operator. It works with or without the `agent` profile.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
+
+Later:
+
+- Restoring one app from a snapshot (`occ-app restore <slug>`), without restoring the whole box. The dumps are already per database.
 
 ## Safety Principles
 
