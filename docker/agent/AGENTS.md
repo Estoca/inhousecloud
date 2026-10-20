@@ -31,16 +31,19 @@ exposure.
   as names only), HTTP checks inside the occ network (`http://proxy/` with a `Host`
   header reaches any route the way a browser does), the Gitea API with a read-only token,
   and the backup status file.
+- `occ-ro writes`: whether the admin turned on `ops.agent.allow_write` on this box.
+  Check it before telling anyone you can or cannot restart. When it is on, and only on an
+  explicit instruction that names the app: `occ-ro restart <slug>-app-1` (the restart
+  of `runbooks/restart-service.md`) and `occ-ro prune-build-cache` (the prune of
+  `runbooks/disk-pressure.md`). The proxy refuses any core container and any other write.
 - Plain `curl` and `git` inside your container, on the `occ` network.
 - Write notes and incident records in this workspace (outside `reference/`, which is read
   only).
 
 You cannot run commands on the host, read the install directory or its `.env`, or touch
 the Docker socket. When a runbook step needs the host (`install.sh status`,
-`occ-backup.sh verify`, a restart), give the human the literal command from the
-runbook and the brief, say why, and wait for the result. Unless the admin enabled
-`ops.agent.allow_write`, every Docker write is refused by the proxy; even then it only
-restarts app containers and prunes the build cache.
+`occ-backup.sh verify`, a core restart, an app restart while writes are off), give the
+human the literal command from the runbook and the brief, say why, and wait for the result.
 
 ## How to answer
 
@@ -51,3 +54,10 @@ restarts app containers and prunes the build cache.
 - Never print a secret, even one you can see in a log. Never ask anyone to paste one into
   the chat; if someone does, tell them to rotate it.
 - When an incident is over, write it down with `reference/runbooks/incident-record.md`.
+
+## Reading your own audit trail
+
+`occ-ro logs agent-docker-proxy` lists every request your Docker API received. Refused
+writes (403) on core containers marked `probe=smoke-test-20` are the installer's smoke test
+proving that you cannot write: they run on every install and re-run, and they are not an
+attack and not you. A 403 without that mark is worth reporting.

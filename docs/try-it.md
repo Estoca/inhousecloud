@@ -10,7 +10,7 @@ The shortest path for a person (not an agent) to see the cloud working on their 
 | Undo | `install.sh remove` ([`cleanup.md`](cleanup.md)) | `limactl delete -f occ` |
 | Tested | Mac mini (Apple Silicon), 2026-10-20: 17 smoke tests, first app in 16 s | MacBook (Apple Silicon), 2026-10-20: times below |
 
-**Linux laptop, a VM or a VPS:** Ubuntu (tested: 26.04) with 2 CPUs, 4 GiB of memory, 10 GiB free disk, Docker Engine usable without `sudo` (rootless, or your user in the `docker` group) with Docker Compose v2, `git`, `curl` and `python3`, and `sudo` for one command. Follow the Lima path from step 2, on that machine.
+**Linux laptop, a VM or a VPS:** Ubuntu (tested: 26.04) with 2 CPUs, 4 GiB of memory (6 GiB with the operator agent), 10 GiB free disk, Docker Engine usable without `sudo` (rootless, or your user in the `docker` group) with Docker Compose v2, `git`, `curl` and `python3`, and `sudo` for one command. Follow the Lima path from step 2, on that machine.
 
 Times of the Lima path, run as written on a clean VM:
 

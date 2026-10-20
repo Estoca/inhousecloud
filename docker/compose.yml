@@ -367,7 +367,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - portainer-data:/data
     networks: [ops]
     healthcheck:
@@ -386,7 +386,7 @@ services:
     environment:
       GLANCES_OPT: "-w"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
       - /etc/os-release:/etc/os-release:ro
     networks: [ops]
     healthcheck:
@@ -622,6 +622,8 @@ services:
     command: ["node", "dist/index.js", "gateway", "--bind", "loopback", "--port", "18789"]
     user: ${AGENT_USER:-1000:1000}
     init: true
+    # A limit of its own: past it the kernel kills the agent, not a core service.
+    mem_limit: ${AGENT_MEM_LIMIT:-3g}
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -635,6 +637,8 @@ services:
       OPENCLAW_WORKSPACE_DIR: /agent/workspace
       OPENCLAW_NO_RESPAWN: "1"
       NODE_COMPILE_CACHE: /agent/state/compile-cache
+      # V8 collects before the container limit, instead of growing toward it.
+      NODE_OPTIONS: --max-old-space-size=${AGENT_NODE_HEAP_MB:-1024}
       PATH: /agent/workspace/reference/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       TZ: ${AGENT_TZ:-UTC}
       ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY:-}
@@ -645,6 +649,7 @@ services:
       GITEA_READONLY_TOKEN: ${GITEA_READONLY_TOKEN:-}
       AGENT_GITEA_TOKEN: ${AGENT_GITEA_TOKEN:-}
       OCC_DOCKER_API: http://agent-docker-proxy:2375
+      OCC_AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
       OCC_GITEA_URL: http://gitea:3000
       OCC_BACKUP_REPORTS: /occ/backup-reports
       OCC_BASE_DOMAIN: ${BASE_DOMAIN:-}
