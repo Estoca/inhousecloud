@@ -360,3 +360,30 @@ The install on a Mac with no VM: Docker Desktop instead of Linux and rootless Do
 - `docs/try-it.md`: a Mac with Docker Desktop installs directly; Lima is the path for a Mac without Docker or for a throwaway VM.
 - `/etc/hosts` on macOS is a fallback ("if a name does not resolve, add it"), not a step, here, in `try-it.md` and in the handoff.
 - `install.sh --plan` printed "nothing was changed" after creating the backup directory in the preflight. The plan no longer creates it (it says "created on apply"), and its last line says what it did write: `state.json` and `config.yaml` in the install directory.
+
+## Rename run
+
+The rename to Open Company Cloud (commands, variables, project, networks, groups, example domains, default directory) on two clean boxes, and the one-version compatibility with the old names ([`install-design.md`](install-design.md#renamed-from-open-company-app-harness)).
+
+**Setup.** Two new Lima VMs (Ubuntu 26.04.1, kernel 7.0, Lima's `docker` template with no host mounts and every port forward ignored, Docker 29.9.1 rootless), the branch cloned onto each box.
+
+**New names, every profile on.** 2 CPU, 6 GiB, 30 GiB. `bootstrap/config.example.yaml` with `storage`, `ops` (terminal key installed) and `agent` (no keys) on, backup on.
+
+| Step | Result |
+|---|---|
+| VM created and started | 64 s |
+| `install.sh --non-interactive`, all stages | 459 s, exit 0; smoke tests in the stage **21 passed, 0 failed, 0 skipped** |
+| `scripts/smoke-tests.sh` again | 21 passed, 0 failed, 0 skipped (test 16: push to green run in 10 s) |
+| `occ-app new pedidos --push`, then `occ-app wait pedidos` | exit 0; healthy 23 s after the push; `/health` 200 and `/` 302 to the sign-in through the proxy |
+| `occ-backup.sh verify --latest` | `verify: ok` (snapshots present, `restic check` without errors) |
+| Names on the box | Compose project `occ` (18 containers `occ-*-1`), networks `occ`, `occ-ops`, `occ-agent`, volumes `occ_*`, runner label `occ-deploy`, image `occ-deployer:local`, databases `occ_platform` and `occ`, smoke user `occ-smoke-user`; no `harness` in `.env`, the rendered `compose.yml`, the app's `compose.occ.yml` or any container name |
+
+**Old names, a config from before the rename.** 2 CPU, 4 GiB, 30 GiB. The `bootstrap/config.example.yaml` of `main` before the rename, unchanged (core and backup), and `HARNESS_BACKUP_DESTINATION` exported for `install.sh`.
+
+| Step | Result |
+|---|---|
+| `install.sh --non-interactive` | 328 s, exit 0; smoke tests 17 passed, 0 failed, 4 skipped (`ops`, `storage`, `agent` off) |
+| Warnings at the start | one for `HARNESS_BACKUP_DESTINATION` (read as `OCC_BACKUP_DESTINATION`), one listing the 10 `*_env` names read as `OCC_*`, one listing the 10 values kept with the old defaults |
+| `.env` | `BACKUP_DESTINATION` from the old variable; `AUTHENTIK_PORTAL_GROUP=harness-admins` and `BASE_DOMAIN=harness.localhost`, as the old config says |
+
+On the same box, `install.sh --plan` of the new commit into a fresh directory reported the backup destination as "created on apply" and did not create it (its preflight stopped on ports held by the first install, as it should).
