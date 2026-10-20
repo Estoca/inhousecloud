@@ -6,7 +6,7 @@
 #   storage      Garage (S3-compatible object storage for apps)
 #   ops          admin tools: Portainer, Glances, Wetty (web terminal), FileBrowser
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
-#   tailscale    Tailscale node (ingress private)
+#   tailscale    Tailscale node and its split-DNS server (ingress private)
 #   backup       the backup job (on when BACKUP_ENABLED=true; docs/backup.md)
 #   agent        the operator agent and its read-only Docker API (docs/operator-contract.md)
 # The Gitea Actions runners (gitea-runner, gitea-deployer) are core: push to main deploys.
@@ -15,7 +15,9 @@
 # Rules (docs/install-design.md):
 #   - Authentik keeps its own Postgres; identity never depends on app data.
 #   - The shared Postgres and Redis exist for apps built inside the cloud.
-#   - Only the proxy, the Gitea SSH port and loopback control ports are published.
+#   - Only the proxy, the Gitea SSH port and loopback control ports are published. In
+#     `private` ingress everything is published on 127.0.0.1 and the tailnet reaches the
+#     proxy only through the Tailscale node's serve config (ports 80, 443, Gitea SSH).
 #   - Named volumes only, except the ops tools' explicit host paths (docs/security.md).
 #   - One internal network (harness), joinable by apps. The ops tools live on a second
 #     network (harness-ops) that only the proxy joins: an app container cannot reach them
@@ -218,12 +220,17 @@ services:
       GITEA__actions__ENABLED: ${GITEA_ENABLE_ACTIONS}
       GITEA__mailer__ENABLED: "false"
       GITEA__log__LEVEL: Info
+      # TLS internal: Go reads every file of these directories as trusted roots, so Gitea
+      # trusts the harness CA when it talks to https://auth.<BASE_DOMAIN> (OIDC). The file is
+      # empty when TLS is not internal.
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/harness-ca
     ports:
       - "${BIND_ADDRESS}:${GITEA_SSH_PORT}:22"
       # Loopback only: the installer's control-plane path. Users go through the proxy.
       - "127.0.0.1:${GITEA_LOCAL_PORT}:3000"
     volumes:
       - gitea-data:/data
+      - ./local/ca/ca.crt:/etc/harness-ca/ca.crt:ro
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     networks: [harness]
@@ -484,24 +491,52 @@ services:
       retries: 3
 
   tailscale:
+    # The box's node on the tailnet (ingress private, docs/install-design.md). Userspace
+    # networking in its own network namespace: the tailnet reaches only what
+    # ./tailscale/serve.json forwards (80 and 443 to the proxy, the Gitea SSH port to
+    # Gitea) and the DNS server below; nothing else of the box. The auth key reaches the
+    # container only for the first login (install.sh passes it from the environment and
+    # recreates the container without it); the node then lives on its state volume.
     profiles: ["tailscale"]
     image: ${TAILSCALE_IMAGE}
     restart: unless-stopped
     logging: *default-logging
     hostname: ${TAILSCALE_HOSTNAME}
     environment:
-      TS_AUTHKEY: ${TAILSCALE_AUTHKEY}
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: ${TAILSCALE_HOSTNAME}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_SERVE_CONFIG: /config/serve.json
     volumes:
       - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
     networks: [harness]
     healthcheck:
-      test: ["CMD", "tailscale", "status"]
+      test: ["CMD-SHELL", "tailscale status --json | grep -q '\"BackendState\": \"Running\"'"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  tailnet-dns:
+    # Split DNS for BASE_DOMAIN: answers every *.<BASE_DOMAIN> with the node's tailnet
+    # address. Lives in the Tailscale node's network namespace, bound to its loopback,
+    # where the node delivers DNS sent to <tailnet address>:53. install.sh renders
+    # ./tailscale/Corefile once the address is known.
+    profiles: ["tailscale"]
+    image: ${COREDNS_IMAGE}
+    command: ["-conf", "/config/Corefile"]
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_started
+    volumes:
+      - ./tailscale:/config:ro
 
   # ---------------------------------------------------------------- backup
   backup:

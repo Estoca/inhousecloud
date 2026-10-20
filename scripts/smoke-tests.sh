@@ -3,7 +3,7 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 20. Test 14 runs `harness-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 21. Test 14 runs `harness-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core); the app stays on the box. Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
@@ -52,7 +52,9 @@ result() { # NUMBER NAME STATUS DETAIL
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
 CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer"
 STORAGE=false; case ",$COMPOSE_PROFILES," in *,storage,*) STORAGE=true; CORE="$CORE garage" ;; esac
-INSECURE=""; [ "$TLS_MODE" = internal ] && INSECURE="-k"
+# TLS internal: every HTTPS check verifies the certificate against the harness CA
+# (<install-dir>/local/ca/ca.crt), as a device that installed it would; never -k.
+INSECURE="$(ca_args)"
 SCHEME_URL=https; [ "$TLS_MODE" = off ] && SCHEME_URL=http
 
 # 1. compose file valid
@@ -77,21 +79,21 @@ c2="$(http_code "$AUTHENTIK_BASE_URL/-/health/ready/" $INSECURE $(curl_resolve "
 # 6. Gitea API version with the read-only token (sign-in is required to view)
 api_init gitea-ro "Authorization: token ${GITEA_READONLY_TOKEN}"
 # api() has no --resolve; go through the proxy on loopback with the Host header instead
-out="$(curl -K "$API_CFG" $INSECURE -H "Host: $GITEA_HOST" -w '\n%{http_code}' "$PROXY/api/v1/version" 2>/dev/null || true)"
+out="$(curl -K "$API_CFG" $(proxy_args "$GITEA_HOST") -w '\n%{http_code}' "$(proxy_url "$GITEA_HOST" /api/v1/version)" 2>/dev/null || true)"
 code="${out##*$'\n'}"; v="$(printf '%s' "${out%$'\n'*}" | jsonq get version)"
 [ "$code" = 200 ] && [ -n "$v" ] && result 6 gitea-api pass "version $v" || result 6 gitea-api fail "HTTP $code"
 
 # 7. portal healthcheck (public path, no forward auth)
-out="$(curl -sS $INSECURE -H "Host: $PORTAL_HOST" -w '\n%{http_code}' "$PROXY/health" 2>/dev/null || true)"
+out="$(curl -sS $(proxy_args "$PORTAL_HOST") -w '\n%{http_code}' "$(proxy_url "$PORTAL_HOST" /health)" 2>/dev/null || true)"
 code="${out##*$'\n'}"; okv="$(printf '%s' "${out%$'\n'*}" | jsonq get ok)"
 [ "$code" = 200 ] && [ "$okv" = true ] && result 7 portal-health pass "200 ok" || result 7 portal-health fail "HTTP $code"
 
 # 8. proxy resolves the local route
-code="$(http_code "$PROXY/" -I -H "Host: $PORTAL_HOST")"
+code="$(http_code "$(proxy_url "$PORTAL_HOST" /)" -I $(proxy_args "$PORTAL_HOST"))"
 case "$code" in 200|301|302) result 8 proxy-route pass "HTTP $code" ;; *) result 8 proxy-route fail "HTTP $code" ;; esac
 
 # 9. forward auth protects the portal
-loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $PORTAL_HOST" "$PROXY/" 2>/dev/null || echo 000)"
+loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /)" 2>/dev/null || echo 000)"
 case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) result 9 forward-auth pass "302 to the outpost" ;; *) result 9 forward-auth fail "got ${loc%% *}" ;; esac
 
 # 10. OIDC discovery with the expected issuer
@@ -117,6 +119,7 @@ case "$1" in *sername*) printf "%s\n" "$GITEA_ADMIN_USERNAME" ;; *) printf "%s\n
 head_ref=""; where=""
 if have git && $PY -c 'import socket,sys;socket.gethostbyname(sys.argv[1])' "$GITEA_HOST" 2>/dev/null; then
   ap="$(mktemp "${TMPDIR:-/tmp}/harness-askpass.XXXXXX")"; printf '%s\n' "$ASKPASS_SRC" > "$ap"; chmod 700 "$ap"
+  [ "$TLS_MODE" = internal ] && export GIT_SSL_CAINFO="$INSTALL_DIR/local/ca/ca.crt"
   head_ref="$(GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
   rm -f "$ap"; where="from the host, ${GITEA_SMOKE_REPOSITORY#*://}"
 else
@@ -215,10 +218,10 @@ print(m[0].get("status","") if m else "")' "$sha")"
     result 16 app-deploy fail "deploy run for $(printf '%s' "$sha" | cut -c1-8) ended '${st:-not started after ${run}s}': $GITEA_BASE_URL/$org/$slug/actions"
     return
   fi
-  body="$(curl -sS --max-time 15 -H "Host: $slug.$BASE_DOMAIN" -w '\n%{http_code}' "$PROXY/health" 2>/dev/null || true)"
+  body="$(curl -sS --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") -w '\n%{http_code}' "$(proxy_url "$slug.$BASE_DOMAIN" /health)" 2>/dev/null || true)"
   code="${body##*$'\n'}"
   [ "$code" = 200 ] && [ "$(printf '%s' "${body%$'\n'*}" | jsonq get ok)" = true ] || { result 16 app-deploy fail "run green but https://$slug.$BASE_DOMAIN/health answered $code through the proxy"; return; }
-  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $slug.$BASE_DOMAIN" "$PROXY/" 2>/dev/null || echo 000)"
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") "$(proxy_url "$slug.$BASE_DOMAIN" /)" 2>/dev/null || echo 000)"
   case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) ;; *) result 16 app-deploy fail "/ of $slug is not behind the SSO: got ${loc%% *}"; return ;; esac
   db=app_smoke_app
   row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT r.rolsuper, r.rolcanlogin, has_database_privilege('public', d.datname, 'CONNECT') FROM pg_roles r, pg_database d WHERE r.rolname='$db' AND d.datname='$db' AND d.datdba=r.oid;" 2>/dev/null | tr -d '[:space:]')"
@@ -242,7 +245,7 @@ if [ "$OPS" != true ]; then
 else
   bad=""; good=""
   for sub in $OPS_HOSTS; do
-    loc="$(curl -sS $INSECURE -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $sub.$BASE_DOMAIN" "$PROXY/" 2>/dev/null || echo 000)"
+    loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$sub.$BASE_DOMAIN") "$(proxy_url "$sub.$BASE_DOMAIN" /)" 2>/dev/null || echo 000)"
     case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) good="$good $sub" ;; *) bad="$bad $sub=${loc%% *}" ;; esac
   done
   wetty_running || good="$good (terminal not installed: see stages.optional_profiles.probe.ops)"
@@ -305,15 +308,16 @@ PY
   garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null; id2="$(envfile get "$a" S3_ACCESS_KEY_ID)"
   [ -n "$id1" ] && [ "$id1" = "$id2" ] && [ "$GARAGE_RESULT" = kept ] || bad="$bad second-provision:$GARAGE_RESULT"
   garage_app_bucket smoke-s3-b "$b" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-b failed"; return; }
-  s3() { ( set -a; . "$a"; set +a; $PY "$HARNESS_LIB/s3.py" "$@" ); }
+  s3() { ( set -a; . "$a"; set +a; HARNESS_CA_FILE="$( [ "$TLS_MODE" = internal ] && echo "$INSTALL_DIR/local/ca/ca.crt")" $PY "$HARNESS_LIB/s3.py" "$@" ); }
+  local S3URL="$PROXY"; [ "$TLS_MODE" = internal ] && S3URL="https://127.0.0.1:${PROXY_HTTPS_PORT}"
   want="smoke 19 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  code="$(printf '%s' "$want" | s3 put "$PROXY" "$host" app-smoke-s3-a smoke.txt)"
+  code="$(printf '%s' "$want" | s3 put "$S3URL" "$host" app-smoke-s3-a smoke.txt)"
   [ "$code" = 200 ] || bad="$bad put-own=$code"
-  got="$(s3 get "$PROXY" "$host" app-smoke-s3-a smoke.txt 3>&1 >/dev/null)"
+  got="$(s3 get "$S3URL" "$host" app-smoke-s3-a smoke.txt 3>&1 >/dev/null)"
   [ "$got" = "$want" ] || bad="$bad get-own=mismatch"
-  code="$(printf x | s3 put "$PROXY" "$host" app-smoke-s3-b smoke.txt)"
+  code="$(printf x | s3 put "$S3URL" "$host" app-smoke-s3-b smoke.txt)"
   [ "$code" = 403 ] || bad="$bad put-other=$code"
-  code="$(s3 get "$PROXY" "$host" app-smoke-s3-b smoke.txt 3>/dev/null)"
+  code="$(s3 get "$S3URL" "$host" app-smoke-s3-b smoke.txt 3>/dev/null)"
   [ "$code" = 403 ] || bad="$bad get-other=$code"
   [ -z "$bad" ] && result 19 object-storage pass "garage healthy; buckets and keys for smoke-s3-a/b, key kept on re-provision; PUT+GET 200 on its bucket through $host, 403 on the other's" \
     || result 19 object-storage fail "${bad# }"
@@ -413,6 +417,71 @@ PY
     || result 20 operator-agent fail "${bad# }"
 }
 if [ "$AGENT" = true ]; then t20; else result 20 operator-agent skip "agent profile off"; fi
+
+# 21. ingress surface: the proxy's ports 80/443 are published on loopback only and nothing
+#     on the box's other addresses answers on them (the tailnet reaches the proxy only
+#     through the Tailscale node's serve config). With TLS internal, the certificate the
+#     proxy presents for portal.<BASE_DOMAIN> is the harness wildcard, verifies against the
+#     harness CA (name-constrained to BASE_DOMAIN), covers *.<BASE_DOMAIN> and has more than
+#     30 days left. In private ingress, the split-DNS server answers *.<BASE_DOMAIN> with the
+#     node's tailnet address, the tailnet path node -> proxy answers on 80 and 443 and refuses
+#     the proxy admin port, and no auth key is left in .env or in the node's container.
+#     Skipped in public ingress, where the proxy listens on every interface by design.
+t21() {
+  local bad="" good="" cid binds addrs a p ca="$INSTALL_DIR/local/ca/ca.crt" served want ip tsid out
+  cid="$(dc ps -q proxy | head -n 1)"
+  binds="$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$cid" 2>/dev/null | $PY -c 'import json,sys
+b=json.load(sys.stdin) or {}
+print(" ".join(sorted({x.get("HostIp") or "0.0.0.0" for k in ("80/tcp","443/tcp") for x in (b.get(k) or [])})))' 2>/dev/null)"
+  [ "$binds" = 127.0.0.1 ] && good="published on 127.0.0.1 only" || bad="$bad published-on:${binds:-unknown}"
+  if have ss; then
+    out="$(ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ":($PROXY_HTTP_PORT|$PROXY_HTTPS_PORT)\$" | grep -vE '^(127\.0\.0\.1|\[::1\]|\[::ffff:127\.0\.0\.1\]):' | tr '\n' ' ')"
+    [ -z "$out" ] || bad="$bad listening-on:${out% }"
+  fi
+  addrs="$(hostname -I 2>/dev/null || true)"
+  for a in $addrs; do
+    for p in "$PROXY_HTTP_PORT" "$PROXY_HTTPS_PORT"; do
+      if $PY -c 'import socket,sys;socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=2)' "$a" "$p" 2>/dev/null; then bad="$bad answers-on:$a:$p"; fi
+    done
+  done
+  [ -n "$addrs" ] && good="$good; refused on $(echo $addrs | wc -w | tr -d ' ') other address(es)"
+  if [ "$TLS_MODE" = internal ]; then
+    served="$(openssl s_client -connect "127.0.0.1:$PROXY_HTTPS_PORT" -servername "$PORTAL_HOST" </dev/null 2>/dev/null | openssl x509 -outform PEM 2>/dev/null)"
+    want="$(openssl x509 -in "$INSTALL_DIR/local/ca/wildcard.crt" -outform PEM 2>/dev/null)"
+    if [ -z "$served" ]; then bad="$bad no-certificate-on-443"
+    else
+      [ "$served" = "$want" ] || bad="$bad served-certificate-is-not-the-harness-wildcard"
+      printf '%s\n' "$served" | openssl verify -CAfile "$ca" >/dev/null 2>&1 || bad="$bad does-not-verify-against-the-CA"
+      printf '%s\n' "$served" | openssl x509 -noout -checkend 2592000 >/dev/null 2>&1 || bad="$bad expires-within-30-days"
+      printf '%s\n' "$served" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -qF "DNS:*.$BASE_DOMAIN" || bad="$bad SAN-misses-*.$BASE_DOMAIN"
+      openssl x509 -in "$ca" -noout -ext nameConstraints 2>/dev/null | grep -qF "DNS:$BASE_DOMAIN" || bad="$bad CA-not-name-constrained"
+    fi
+    code="$(http_code "https://$PORTAL_HOST/health" --resolve "$PORTAL_HOST:$PROXY_HTTPS_PORT:127.0.0.1" --cacert "$ca")"
+    [ "$code" = 200 ] || bad="$bad https-portal-health=$code"
+    good="$good; https://$PORTAL_HOST verifies against the harness CA (until $(printf '%s\n' "$served" | openssl x509 -noout -enddate 2>/dev/null | sed 's/notAfter=//'))"
+  fi
+  if [ "$INGRESS" = private ]; then
+    ip="${TAILSCALE_IP:-}"
+    for n in "portal.$BASE_DOMAIN" "smoke-check-$$.$BASE_DOMAIN"; do
+      a="$(dc exec -T tailscale nslookup -type=a "$n" 127.0.0.1 2>/dev/null | awk '/^Address/ && $NF !~ /#53$|:53$/ {print $NF}' | tail -n 1)"
+      [ -n "$ip" ] && [ "$a" = "$ip" ] || bad="$bad dns:$n=${a:-none}"
+    done
+    # The tailnet path, from the node itself: tailnet address -> serve -> proxy.
+    # stdin stays open a few seconds: tailscale nc closes the connection when it ends.
+    out="$(dc exec -T tailscale sh -c '(printf "HEAD /health HTTP/1.0\r\nHost: $1\r\n\r\n"; sleep 4) | timeout 8 tailscale nc "$2" 80 2>/dev/null | head -n 1' sh "$PORTAL_HOST" "$ip" 2>/dev/null | tr -d '\r')"
+    case "$out" in HTTP/*) ;; *) bad="$bad tailnet-80:'${out:-no answer}'" ;; esac
+    out="$(dc exec -T tailscale sh -c 'timeout 10 tailscale nc "$1" 443 </dev/null >/dev/null 2>&1 && echo open || echo closed' sh "$ip" 2>/dev/null)"
+    [ "$out" = open ] || bad="$bad tailnet-443:${out:-?}"
+    out="$(dc exec -T tailscale sh -c '(printf "GET / HTTP/1.0\r\n\r\n"; sleep 4) | timeout 8 tailscale nc "$1" "$2" 2>/dev/null | head -c 12' sh "$ip" "$PROXY_ADMIN_PORT" 2>/dev/null)"
+    [ -z "$out" ] || bad="$bad tailnet-admin-port-answers"
+    [ -z "$(envfile get "$ENV_FILE" TAILSCALE_AUTHKEY)" ] || bad="$bad authkey-in-.env"
+    tsid="$(dc ps -q tailscale | head -n 1)"
+    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$tsid" 2>/dev/null | grep -q '^TS_AUTHKEY=.' && bad="$bad authkey-in-container"
+    good="$good; *.$BASE_DOMAIN -> $ip on the node's DNS; tailnet 80/443 reach the proxy, ${PROXY_ADMIN_PORT} does not; no auth key kept"
+  fi
+  [ -z "$bad" ] && result 21 ingress-surface pass "${good#; }" || result 21 ingress-surface fail "${bad# }"
+}
+if [ "$INGRESS" = public ]; then result 21 ingress-surface skip "public ingress: the proxy listens on every interface"; else t21; fi
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

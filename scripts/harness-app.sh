@@ -69,6 +69,8 @@ endpoints() {
   if [ "$mode" = internal ]; then
     AK="http://authentik-server:9000/api/v3"; GT_ROOT="http://gitea:3000"
     NPM="http://proxy:81/api"; PROXY="http://proxy:80"
+    # TLS internal: https://<name> pinned to the proxy's address on the harness network.
+    PROXY_PIN="$($PY -c 'import socket;print(socket.gethostbyname("proxy"))' 2>/dev/null || true)"; PROXY_TLS_PORT=443
   else
     AK="http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3"; GT_ROOT="http://127.0.0.1:${GITEA_LOCAL_PORT}"
     NPM="http://127.0.0.1:${PROXY_ADMIN_PORT}/api"; PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
@@ -387,7 +389,7 @@ cmd_wait() {
   step "waiting for $M_HEALTH_PATH = $M_HEALTH_STATUS on $host (up to ${TIMEOUT}s)"
   while :; do
     state="$(docker ps -a --filter "label=com.docker.compose.project=$SLUG" --filter "label=com.docker.compose.service=$M_SERVICE" --format '{{.State}}' | head -n 1)"
-    code="$(http_code "$PROXY$M_HEALTH_PATH" -H "Host: $host")"
+    code="$(http_code "$(proxy_url "$host" "$M_HEALTH_PATH")" $(proxy_args "$host"))"
     [ "$code" = "$M_HEALTH_STATUS" ] && break
     case "$state" in exited|dead) code="container $state" ;; esac
     if [ "$state" = exited ] || [ "$state" = dead ] || [ $(( $(date +%s) - t0 )) -ge "$TIMEOUT" ]; then
@@ -405,7 +407,7 @@ cmd_wait() {
     # the forward-auth call answers 500. Retry for up to 60 s before calling it unprotected.
     t0=$(date +%s)
     while :; do
-      loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $host" "$PROXY/" 2>/dev/null || echo 000)"
+      loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$host") "$(proxy_url "$host" /)" 2>/dev/null || echo 000)"
       case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) break ;; esac
       if [ $(( $(date +%s) - t0 )) -ge 60 ]; then
         fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run harness-app provision $SLUG"; exit 1

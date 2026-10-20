@@ -130,6 +130,6 @@ limactl delete -f harness
 ## What this does not show yet
 
 - **macOS natively.** The harness runs on Linux; on a Mac it runs in a VM, as above.
-- **Reaching it from other computers.** The `private` (Tailscale) and `public` (Cloudflare tunnel or DNS) ingress modes exist in the installer and are not tested end to end; `local`, used here, answers on the box (and on the Mac through Lima's forward).
+- **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (Cloudflare tunnel or DNS) exists in the installer and is not tested end to end. `local`, used here, answers on the box (and on the Mac through Lima's forward).
 - **The portal.** A placeholder answers today; the read-only portal with inventory, deploy runs, health and backups is next ([`../README.md`](../README.md#roadmap)).
 - Mail (Authentik and Gitea are installed with SMTP off), MFA and replacing the bootstrap password are yours: [`first-run.md`](first-run.md#human).

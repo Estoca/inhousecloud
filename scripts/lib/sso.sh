@@ -115,9 +115,33 @@ npm_login() {
   api_ok || die "proxy admin login failed (HTTP $API_CODE). PROXY_ADMIN_EMAIL/PROXY_ADMIN_PASSWORD in .env must match the admin created on the proxy's first start."
   tok="$(printf '%s' "$API_BODY" | jsonq get token)"
   api_init npm "Authorization: Bearer $tok"
+  # The same header without the JSON content type, for the certificate upload.
+  NPM_UPLOAD_CFG="$API_TMPDIR/npm-upload.cfg"
+  (umask 077; grep -v 'Content-Type' "$API_CFG" > "$NPM_UPLOAD_CFG")
   api GET "$NPM/nginx/proxy-hosts"
   api_ok || die "list proxy hosts: HTTP $API_CODE"
   PROXY_HOSTS="$API_BODY"
+}
+
+# ensure_internal_certificate CERT KEY: the harness wildcard certificate (scripts/lib/tls.sh)
+# as a custom certificate on the proxy, nice name "harness internal wildcard". Uploaded on
+# every run, so a renewed file reaches nginx; the hosts are reconciled after it. Prints the
+# certificate id. The key goes up as a multipart file, never on a command line.
+ensure_internal_certificate() {
+  local name="harness internal wildcard" id out code
+  api GET "$NPM/nginx/certificates"
+  api_ok || die "list proxy certificates: HTTP $API_CODE"
+  id="$(printf '%s' "$API_BODY" | jsonq find . nice_name "$name" id)"
+  if [ -z "$id" ]; then
+    api POST "$NPM/nginx/certificates" "$(jsonq build provider=other nice_name="$name")"
+    api_ok || die "create proxy certificate: HTTP $API_CODE $API_BODY"
+    id="$(printf '%s' "$API_BODY" | jsonq get id)"; ok "proxy certificate '$name' created (id $id)"
+  fi
+  out="$(curl -K "$NPM_UPLOAD_CFG" -X POST -F "certificate=@$1" -F "certificate_key=@$2" -w '\n%{http_code}' "$NPM/nginx/certificates/$id/upload" 2>/dev/null || true)"
+  code="${out##*$'\n'}"
+  case "$code" in 2*) ok "wildcard certificate uploaded to the proxy (certificate $id)" ;; *) die "upload of the wildcard certificate: HTTP $code $(printf '%s' "${out%$'\n'*}" | head -c 300)" ;; esac
+  record "proxy:certificate:$id"
+  printf '%s' "$id"
 }
 
 # proxy_host_field HOST FIELD: a field of the existing proxy host for HOST, empty if none.
@@ -234,6 +258,10 @@ ensure_proxy_host() { # HOST FORWARD_HOST FORWARD_PORT ADVANCED_CONFIG
   id="$(proxy_host_field "$host" id)"
   meta='{"letsencrypt_agree":false,"dns_challenge":false}'
   case "$TLS_MODE" in
+    internal)
+      # The harness wildcard certificate (ensure_internal_certificate), HTTPS forced.
+      case "${PROXY_CERTIFICATE_ID:-0}" in ""|0) die "tls internal: no certificate on the proxy yet (PROXY_CERTIFICATE_ID in .env); run scripts/first-run.sh" ;; esac
+      ssl=true; http2=true; cert="$PROXY_CERTIFICATE_ID" ;;
     acme)
       ssl=true; http2=true; cert='"new"'
       meta="$(jsonq build letsencrypt_email="$PROXY_ADMIN_EMAIL" letsencrypt_agree:=true dns_challenge:=false)"
