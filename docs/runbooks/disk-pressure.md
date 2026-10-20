@@ -13,7 +13,7 @@ du -xh --max-depth=2 "$I" 2>/dev/null | sort -h | tail -15
 du -xh --max-depth=1 "$BACKUP_DESTINATION" 2>/dev/null | sort -h
 ```
 
-*(agent)* `harness-ro df` (images, which are used by no container, build cache in use or not, volumes); the disk usage of the host itself needs the human.
+*(agent)* `occ-ro df` (images, which are used by no container, build cache in use or not, volumes); the disk usage of the host itself needs the human.
 
 Sort what you found into three kinds, and say which is which:
 

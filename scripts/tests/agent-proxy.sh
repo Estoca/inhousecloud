@@ -15,7 +15,7 @@ exec python3 -I - "$ROOT/docker/agent/docker-ro-proxy.py" <<'PY'
 import http.server, json, os, socket, socketserver, subprocess, sys, tempfile, threading, time, urllib.request
 
 proxy_py = sys.argv[1]
-work = tempfile.mkdtemp(prefix="harness-agent-proxy.")
+work = tempfile.mkdtemp(prefix="occ-agent-proxy.")
 sock = os.path.join(work, "docker.sock")
 seen = []
 
@@ -24,7 +24,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
     def reply(self):
         seen.append("%s %s" % (self.command, self.path.split("?")[0]))
         cid = self.path.split("/")[2] if self.path.startswith("/containers/") else ""
-        project = "harness" if cid == "core" else "demo-app"
+        project = "occ" if cid == "core" else "demo-app"
         body = json.dumps({"Id": cid, "Config": {"Env": ["PASSWORD=s3cret-value", "PLAIN"],
                            "Labels": {"com.docker.compose.project": project}}}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
@@ -46,7 +46,7 @@ def check(ok, what):
     if not ok: fails += 1
 
 def start(port, write):
-    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), HARNESS_PROJECT="harness", AGENT_ALLOW_WRITE=write)
+    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), OCC_PROJECT="occ", AGENT_ALLOW_WRITE=write)
     p = subprocess.Popen([sys.executable, "-I", proxy_py], env=env, stdout=subprocess.DEVNULL)
     for _ in range(50):
         try:
@@ -80,7 +80,7 @@ rw = start(23752, "true")
 try:
     seen.clear()
     check(call(23752, "POST", "/containers/app1/restart")[0] == 200 and "POST /containers/app1/restart" in seen, "allow_write: restart of an app container passes")
-    check(call(23752, "POST", "/containers/core/restart")[0] == 403 and "POST /containers/core/restart" not in seen, "allow_write: restart of a harness container refused")
+    check(call(23752, "POST", "/containers/core/restart")[0] == 403 and "POST /containers/core/restart" not in seen, "allow_write: restart of a cloud container refused")
     check(call(23752, "POST", "/build/prune")[0] == 200, "allow_write: build cache prune passes")
     for m, p in [("POST", "/containers/create"), ("POST", "/containers/app1/exec"), ("POST", "/containers/app1/stop"),
                  ("POST", "/images/prune"), ("POST", "/volumes/prune"), ("DELETE", "/containers/app1")]:

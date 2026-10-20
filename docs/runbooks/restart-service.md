@@ -14,13 +14,13 @@ docker logs --since 15m --tail 60 <container>
 docker inspect -f '{{json .HostConfig.PortBindings}} {{json .Mounts}}' <container>
 ```
 
-*(agent)* `harness-ro ps`, `harness-ro inspect <container>`, `harness-ro logs <container> 60`
+*(agent)* `occ-ro ps`, `occ-ro inspect <container>`, `occ-ro logs <container> 60`
 
 Write down before acting: image id, ports, mounts, health, the last log lines, and what depends on it (the brief's `depends_on`; for Postgres or Redis: every app). That record is the way back and the comparison after.
 
 ## Act
 
-- **One app**: `docker compose -p <slug> restart app`. *(agent)* with `ops.agent.allow_write`: `POST /containers/<id>/restart` through its Docker API, which refuses any container of the `harness` project.
+- **One app**: `docker compose -p <slug> restart app`. *(agent)* with `ops.agent.allow_write`: `POST /containers/<id>/restart` through its Docker API, which refuses any container of the `occ` project.
 - **A core service** (level 3, after the human's ok for that service): `dc restart <service>`, or `dc up -d <service>` when the configuration changed and the container must be recreated. Never `dc down`, never `dc up -d` without a service name: both touch everything.
 - **Not a restart**: a container `unhealthy` while it serves correctly is often a wrong healthcheck, not a sick service. Read the healthcheck (`docker inspect -f '{{json .Config.Healthcheck}}'`) and run it by hand inside the container first.
 
@@ -28,7 +28,7 @@ If it fails again after one restart, stop and go back to diagnosis. Restarting i
 
 ## Post-checks
 
-Health back to `healthy`; the log of the new start clean; the dependants checked (for a core service: `$H/scripts/smoke-tests.sh --install-dir "$I"` covers the core; for an app: `harness-app wait`). Report: what was restarted, why, how long it took, any side effect.
+Health back to `healthy`; the log of the new start clean; the dependants checked (for a core service: `$H/scripts/smoke-tests.sh --install-dir "$I"` covers the core; for an app: `occ-app wait`). Report: what was restarted, why, how long it took, any side effect.
 
 ## Examples
 

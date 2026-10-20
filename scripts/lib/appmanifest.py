@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""company-app.yaml for the harness executor (scripts/harness-app.sh).
+"""company-app.yaml for the cloud executor (scripts/occ-app.sh).
 
   appmanifest.py vars MANIFEST [SLUG]      validate; print shell assignments M_*
   appmanifest.py compose-check SERVICE     compose JSON on stdin (docker compose config
                                            --format json); refuse local infrastructure
   appmanifest.py overlay SLUG SERVICE ENV_FILE NETWORK
-                                           compose JSON on stdin; print compose.harness.yml
+                                           compose JSON on stdin; print compose.occ.yml
   appmanifest.py slug-check SLUG           exit 1 with the reason when SLUG is not usable
 
 Errors go to stderr, one per line, each saying what to change. Exit 1 on any error.
@@ -17,14 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config  # noqa: E402  (the installer's YAML reader: PyYAML when present)
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
-# Names an app may not take: the compose services of the harness (an app's network
+# Names an app may not take: the compose services of the cloud (an app's network
 # alias would shadow them on the shared network) and the platform's own hostnames.
 RESERVED = {
     "proxy", "authentik-postgres", "authentik-server", "authentik-worker", "postgres",
     "redis", "gitea", "portal", "garage", "gitea-runner", "portainer", "glances", "wetty",
     "filebrowser", "terminal", "files", "gitea-deployer",
-    "cloudflared", "tailscale", "backup", "auth", "git", "s3", "s3-console", "harness",
-    "authentik", "www", "api", "admin", "localhost", "harness-smoke",
+    "cloudflared", "tailscale", "backup", "auth", "git", "s3", "s3-console", "occ",
+    "authentik", "www", "api", "admin", "localhost", "occ-smoke",
 }
 # Local infrastructure an app built inside the cloud must not bring (install-design.md).
 INFRA = {
@@ -34,13 +34,13 @@ INFRA = {
 }
 ALTERNATIVE = {
     "postgres": "use the shared Postgres: remove the service and set `database.required: true`; "
-                "harness-app provision creates the app's own database and role and writes "
+                "occ-app provision creates the app's own database and role and writes "
                 "DATABASE_URL into the app's env file",
     "redis": "use the shared Redis: remove the service and set `dependencies.redis.required: true`; "
-             "harness-app provision creates an ACL user limited to the `<slug>:` key prefix and "
+             "occ-app provision creates an ACL user limited to the `<slug>:` key prefix and "
              "writes REDIS_URL and REDIS_PREFIX",
     "s3": "use the shared object storage: remove the service and set `object_storage.required: true` "
-          "(the `storage` profile must be on); harness-app provision creates the app's bucket "
+          "(the `storage` profile must be on); occ-app provision creates the app's bucket "
           "and access key and writes S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY",
 }
 
@@ -49,9 +49,9 @@ def slug_problem(slug):
     if not SLUG.match(slug or ""):
         return "slug %r: use 3 to 32 lowercase letters, digits and hyphens, starting and ending with a letter or digit" % slug
     if slug in RESERVED:
-        return "slug %r is reserved by the harness (%s); pick another name" % (slug, ", ".join(sorted(RESERVED)))
-    if slug.startswith("app-") or slug.startswith("harness-"):
-        return "slug %r: the prefixes app- and harness- are reserved for platform resources" % slug
+        return "slug %r is reserved by the cloud (%s); pick another name" % (slug, ", ".join(sorted(RESERVED)))
+    if slug.startswith("app-") or slug.startswith("occ-"):
+        return "slug %r: the prefixes app- and occ- are reserved for platform resources" % slug
     return None
 
 
@@ -84,7 +84,7 @@ def cmd_vars(path, expected):
         errors.append("app.slug: " + p)
     if expected and slug != expected:
         errors.append("app.slug is %r but this deploy is for %r: the slug, the repository name and the "
-                      "argument of harness-app provision must be the same" % (slug, expected))
+                      "argument of occ-app provision must be the same" % (slug, expected))
     if not get(m, "app.name"):
         errors.append("app.name is required")
     owner = str(get(m, "app.owner_email", ""))
@@ -106,10 +106,10 @@ def cmd_vars(path, expected):
         errors.append("runtime.port is the port the service listens on inside its container (default 8080)")
     dport = get(m, "deploy.port", "auto")
     if dport != "auto":
-        errors.append("deploy.port must be auto: the app publishes no host port, the proxy reaches it on the harness network")
+        errors.append("deploy.port must be auto: the app publishes no host port, the proxy reaches it on the occ network")
     domain = get(m, "deploy.domain")
     if domain and not str(domain).startswith(slug + "."):
-        errors.append("deploy.domain %r: the harness serves the app at <slug>.<BASE_DOMAIN>; set it to %s.<BASE_DOMAIN> or leave it out" % (domain, slug))
+        errors.append("deploy.domain %r: the cloud serves the app at <slug>.<BASE_DOMAIN>; set it to %s.<BASE_DOMAIN> or leave it out" % (domain, slug))
     # Local infrastructure declared in the manifest
     for key, kind in (("database", "postgres"), ("object_storage", "s3")):
         sec = get(m, key, {})
@@ -168,7 +168,7 @@ def cmd_compose_check(service):
                 errors.append("service %r %s, a local %s: apps built inside the cloud do not bring their own "
                               "Postgres, Redis or object storage; %s" % (name, what, {"s3": "S3 server"}.get(kind, kind), ALTERNATIVE[kind]))
         if svc.get("network_mode") == "host" or svc.get("privileged"):
-            errors.append("service %r asks for host networking or privileged mode; the harness runs apps on "
+            errors.append("service %r asks for host networking or privileged mode; the cloud runs apps on "
                           "its internal network without privileges" % name)
         for v in svc.get("volumes") or []:
             src = v.get("source", "") if isinstance(v, dict) else str(v)
@@ -183,8 +183,8 @@ def cmd_compose_check(service):
 def cmd_overlay(slug, service, env_file, network, data_dir=""):
     data = json.load(sys.stdin)
     lines = [
-        "# Generated by harness-app provision for %s. Do not edit: every deploy rewrites it." % slug,
-        "# Puts the app on the harness network (alias %s), drops published host ports," % slug,
+        "# Generated by occ-app provision for %s. Do not edit: every deploy rewrites it." % slug,
+        "# Puts the app on the occ network (alias %s), drops published host ports," % slug,
         "# points env_file at the app's env file in the install directory and mounts the",
         "# app's data directory at /data in its main service.",
         "services:",
@@ -197,17 +197,17 @@ def cmd_overlay(slug, service, env_file, network, data_dir=""):
             "    ports: !reset []",
             "    restart: unless-stopped",
             "    labels:",
-            "      com.harness.app: %s" % json.dumps(slug),
+            "      com.occ.app: %s" % json.dumps(slug),
             "    networks:",
             "      default: {}",
         ]
         if name == service:
-            lines += ["      harness:", "        aliases:", "          - %s" % json.dumps(slug)]
+            lines += ["      occ:", "        aliases:", "          - %s" % json.dumps(slug)]
             if data_dir:
                 lines += ["    volumes:", "      - %s" % json.dumps(data_dir + ":/data")]
         else:
-            lines += ["      harness: {}"]
-    lines += ["networks:", "  harness:", "    name: %s" % json.dumps(network), "    external: true"]
+            lines += ["      occ: {}"]
+    lines += ["networks:", "  occ:", "    name: %s" % json.dumps(network), "    external: true"]
     print("\n".join(lines))
 
 

@@ -15,7 +15,7 @@ stream (follow and stream are forced off).
 
 Writes, only when AGENT_ALLOW_WRITE=true (ops.agent.allow_write in the config):
   POST /containers/ID/restart   only for a container of an app's Compose project, never
-                                one of the harness project (HARNESS_PROJECT)
+                                one of the occ project (OCC_PROJECT)
   POST /build/prune             the build cache, never images or volumes
 Everything else is refused with 403 and logged. Each request is logged to stdout as one
 line (method, path, status): `docker compose logs agent-docker-proxy` is the audit trail.
@@ -30,7 +30,7 @@ import sys
 import urllib.parse
 
 SOCKET = os.environ.get("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
-HARNESS_PROJECT = os.environ.get("HARNESS_PROJECT", "harness")
+OCC_PROJECT = os.environ.get("OCC_PROJECT", "occ")
 ALLOW_WRITE = os.environ.get("AGENT_ALLOW_WRITE", "false").lower() == "true"
 PORT = int(os.environ.get("PORT", "2375"))
 
@@ -100,7 +100,7 @@ def compose_project(cid):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "harness-agent-docker-ro"
+    server_version = "occ-agent-docker-ro"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -116,7 +116,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def refuse(self, status, why):
-        self.send(status, json.dumps({"message": "refused by the harness agent proxy: %s" % why}).encode())
+        self.send(status, json.dumps({"message": "refused by the cloud's agent proxy: %s" % why}).encode())
 
     def split(self):
         u = urllib.parse.urlsplit(self.path)
@@ -168,7 +168,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             project, status = compose_project(m.group(1))
             if status != 200:
                 return self.refuse(404, "no such container")
-            if not project or project == HARNESS_PROJECT:
+            if not project or project == OCC_PROJECT:
                 return self.refuse(403, "restart is allowed for app containers only, not %s" % (project or "a container outside Compose"))
             return self.forward("POST", path, {"t": query.get("t", ["10"])})
         if PRUNE_RE.match(path):

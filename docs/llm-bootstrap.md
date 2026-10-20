@@ -4,25 +4,25 @@ The execution path for a terminal-connected coding agent. Three jobs: **install*
 
 Conventions in this file:
 
-- `$HARNESS` is this repository's checkout on the box (the folder `install.sh` is in).
-- `$DIR` is the install directory. Default `/opt/open-company-harness`.
+- `$OCC` is this repository's checkout on the box (the folder `install.sh` is in).
+- `$DIR` is the install directory. Default `/opt/open-company-cloud`.
 - Every command runs **on the box**, as the user that ran the install (the one who can read `$DIR/.env`). If your terminal is on another machine, run each command through `ssh <box> '<command>'` and write files on the box (a heredoc through ssh, or `scp`).
 
-Operating a box that is already installed (diagnosis, disk, backup, restarts) is a different job with its own rules: [`operator-contract.md`](operator-contract.md) and [`runbooks/`](runbooks/); `scripts/harness-operator.sh brief` prints the map of the box.
+Operating a box that is already installed (diagnosis, disk, backup, restarts) is a different job with its own rules: [`operator-contract.md`](operator-contract.md) and [`runbooks/`](runbooks/); `scripts/occ-operator.sh brief` prints the map of the box.
 
 ## 0. Where am I?
 
 On a fresh box there is no checkout yet: `install.sh` and every later command run from a copy of this repository **on the box**, not from the one your terminal has open. Look for it, and put one there if it is missing:
 
 ```bash
-ls ~/open-company-app-harness/install.sh                                         # already there?
-git clone https://github.com/Estoca/open-company-app-harness.git ~/open-company-app-harness
+ls ~/open-company-cloud/install.sh                                         # already there?
+git clone https://github.com/Estoca/open-company-cloud.git ~/open-company-cloud
 ```
 
-If the box cannot reach GitHub, copy your local folder instead: `scp -r <this folder> <box>:open-company-app-harness`. Keep the copy on the box after the install: `$HARNESS` below is that folder. Copying files is not an install; no yes is needed for it.
+If the box cannot reach GitHub, copy your local folder instead: `scp -r <this folder> <box>:open-company-cloud`. Keep the copy on the box after the install: `$OCC` below is that folder. Copying files is not an install; no yes is needed for it.
 
 ```bash
-cd "$HARNESS"
+cd "$OCC"
 ./install.sh status --install-dir "$DIR" --json
 ```
 
@@ -50,9 +50,9 @@ Success: all of them print a version. If Docker or Compose is missing, **stop an
 
 | Question | Config key | Default |
 |---|---|---|
-| Install directory | `install.directory` | `/opt/open-company-harness` |
+| Install directory | `install.directory` | `/opt/open-company-cloud` |
 | Ingress: `local` (this machine only), `private` (tailnet) or `public` | `ingress.mode` | `local` |
-| Base domain | `ingress.base_domain` | `harness.localhost` for `local` |
+| Base domain | `ingress.base_domain` | `cloud.localhost` for `local` |
 | Admin email | `admin.email`, `authentik.bootstrap_email`, `portal.super_admin_emails` | none: ask |
 | Gitea organization (the company name, lowercase) | `gitea.organization` | `company` |
 | Backup destination (a path on another disk) | `backup.destination` | `<install dir>/backups` (same disk: warned) |
@@ -63,7 +63,7 @@ For `private` and `public`, the TLS mode and tunnel follow the matrix in [`insta
 
 **Never ask for a password, token or key.** The installer generates every secret into `$DIR/.env` (mode 0600).
 
-If the install directory is under `/opt`, it has to exist and belong to the installing user before the plan: `sudo install -d -o "$USER" -g "$(id -gn)" /opt/open-company-harness`. If `sudo -n true` succeeds on the box, run that one command yourself and say so with the plan; otherwise ask the human to run it (it asks for their password, which you never see). Nothing else in the install needs `sudo`.
+If the install directory is under `/opt`, it has to exist and belong to the installing user before the plan: `sudo install -d -o "$USER" -g "$(id -gn)" /opt/open-company-cloud`. If `sudo -n true` succeeds on the box, run that one command yourself and say so with the plan; otherwise ask the human to run it (it asks for their password, which you never see). Nothing else in the install needs `sudo`.
 
 ### 1.3 Write the answers, show the plan
 
@@ -105,7 +105,7 @@ python3 scripts/lib/envfile.py keys "$DIR/.env"    # names of the credentials, n
 
 Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the steps only they can do ([`first-run.md`](first-run.md), section "Human": first sign-in to Authentik as `akadmin` with the password in `AUTHENTIK_BOOTSTRAP_PASSWORD`; MFA; copying `BACKUP_ENCRYPTION_KEY` off the box; SMTP; DNS or tunnel for non-local ingress).
 
-**Passwords stay off the chat.** Do not read them, and do not paste them. Give the human the command that prints one on their own screen, for example `ssh <box> 'python3 ~/open-company-app-harness/scripts/lib/envfile.py get /opt/open-company-harness/.env AUTHENTIK_BOOTSTRAP_PASSWORD'`, and say it is theirs to run.
+**Passwords stay off the chat.** Do not read them, and do not paste them. Give the human the command that prints one on their own screen, for example `ssh <box> 'python3 ~/open-company-cloud/scripts/lib/envfile.py get /opt/open-company-cloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD'`, and say it is theirs to run.
 
 **How the human opens the URLs.** With `ingress.mode: local` the URLs answer only on the box itself. If the human reaches the box from another computer (you got an `ssh` command, not a desktop), the URLs will **not** open on their computer as they are. Do not tell them to just open them. Give them a tunnel that holds **port 80** on their computer, kept open in its own terminal window while they use the cloud:
 
@@ -119,14 +119,14 @@ sudo ssh -N -L 80:127.0.0.1:80 <the same ssh arguments they gave you>
 
 ### 2.1 Slug and owner
 
-- **slug**: 3 to 32 characters, lowercase letters, digits and hyphens, short (`expense-report`, `despesas`). It becomes the repository name and the hostname `<slug>.<BASE_DOMAIN>`. Refused: `portal`, `git`, `auth`, `postgres`, `redis`, `app-*`, `harness-*` and the other platform names. Check it is free: `scripts/harness-app.sh list --install-dir "$DIR"`.
-- **owner**: the email of the person who answers for the app. If the human did not say and you cannot tell, use the admin email of the install (`harness-app new` does that when `--owner` is left out) and say so in the report.
+- **slug**: 3 to 32 characters, lowercase letters, digits and hyphens, short (`expense-report`, `despesas`). It becomes the repository name and the hostname `<slug>.<BASE_DOMAIN>`. Refused: `portal`, `git`, `auth`, `postgres`, `redis`, `app-*`, `occ-*` and the other platform names. Check it is free: `scripts/occ-app.sh list --install-dir "$DIR"`.
+- **owner**: the email of the person who answers for the app. If the human did not say and you cannot tell, use the admin email of the install (`occ-app new` does that when `--owner` is left out) and say so in the report.
 
 ### 2.2 Generate the repository
 
 ```bash
-cd "$HARNESS"
-scripts/harness-app.sh new <slug> --owner <email> --install-dir "$DIR" --dir "$HOME/apps/<slug>"
+cd "$OCC"
+scripts/occ-app.sh new <slug> --owner <email> --install-dir "$DIR" --dir "$HOME/apps/<slug>"
 ```
 
 Success: the output says `repository <org>/<slug> created in Gitea` and `Actions enabled`. The folder `$HOME/apps/<slug>` holds a working app on `main` with `origin` set. Nothing is deployed yet. (`--push` deploys the template right away; use it only to put the empty app on the air first.)
@@ -166,17 +166,17 @@ cd "$HOME/apps/<slug>"
 git add -A
 git -c user.name="<owner name>" -c user.email="<owner email>" commit -m "<what the app does>"
 git -c credential.helper= \
-    -c credential.helper="!f() { echo username=harness; printf 'password=%s\n' \"\$(python3 $HARNESS/scripts/lib/envfile.py get $DIR/.env GITEA_ADMIN_TOKEN)\"; }; f" \
+    -c credential.helper="!f() { echo username=occ; printf 'password=%s\n' \"\$(python3 $OCC/scripts/lib/envfile.py get $DIR/.env GITEA_ADMIN_TOKEN)\"; }; f" \
     push origin main
 ```
 
-Replace `$HARNESS` and `$DIR` with the real paths if they are not set in your shell. The credential helper hands git the install's admin token without printing it or putting it in a URL. (A person on a laptop pushes with their own Gitea account instead.) Success: `main -> main`. The deploy workflow starts within seconds.
+Replace `$OCC` and `$DIR` with the real paths if they are not set in your shell. The credential helper hands git the install's admin token without printing it or putting it in a URL. (A person on a laptop pushes with their own Gitea account instead.) Success: `main -> main`. The deploy workflow starts within seconds.
 
 ### 2.5 Wait for the deploy
 
 ```bash
-cd "$HARNESS"
-scripts/harness-app.sh wait <slug> --install-dir "$DIR" --manifest "$HOME/apps/<slug>/company-app.yaml" --timeout 300
+cd "$OCC"
+scripts/occ-app.sh wait <slug> --install-dir "$DIR" --manifest "$HOME/apps/<slug>/company-app.yaml" --timeout 300
 ```
 
 Success: `<slug> is up at http://<slug>.<BASE_DOMAIN>`. It polls the healthcheck through the proxy, so it also passes while an older version is still up: confirm the run of your commit is green (3.2).
@@ -189,7 +189,7 @@ The real portal will serve `GET http(s)://portal.<BASE_DOMAIN>/api/platform/stat
 
 ```bash
 ./install.sh status --install-dir "$DIR" --json      # stages, smoke tests, URLs
-scripts/harness-app.sh list --install-dir "$DIR"     # apps: slug, URL, owner, last provision
+scripts/occ-app.sh list --install-dir "$DIR"     # apps: slug, URL, owner, last provision
 ```
 
 ### 3.2 The deploy run
@@ -232,7 +232,7 @@ curl -s -H "Authorization: token $GITEA_ADMIN_TOKEN" \
   "http://127.0.0.1:$GITEA_LOCAL_PORT/api/v1/repos/$GITEA_ORGANIZATION/<slug>/actions/jobs/<id>/logs" | tail -n 60
 ```
 
-Lines with `[xx]` are the harness's own errors and say what to change. Then:
+Lines with `[xx]` are the cloud's own errors and say what to change. Then:
 
 | Symptom in the log | Command that shows more | Fix |
 |---|---|---|

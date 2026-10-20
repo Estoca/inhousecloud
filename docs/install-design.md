@@ -21,7 +21,7 @@ Companion files:
 |---|---|---|
 | `core` (always) | reverse proxy, Authentik (with its **own** Postgres and Redis), Gitea, the Gitea Actions runners (`gitea-runner` for CI, `gitea-deployer` for deploys by push to `main`, [`gitops-flow.md`](gitops-flow.md)), the app portal, shared Postgres, shared Redis, internal network, named volumes, minimal backup (the `backup` Compose profile, on unless `backup.enabled: false`) | first boot |
 | `storage` | Garage (S3-compatible object storage): one bucket and one key per app | when an app declares object storage |
-| `ops` | admin tools: Portainer, Glances, a web terminal on the host (Wetty), a file browser for app data (FileBrowser); all four behind the SSO for `harness-admins` only | recommended (the interactive installer defaults to yes), never blocking |
+| `ops` | admin tools: Portainer, Glances, a web terminal on the host (Wetty), a file browser for app data (FileBrowser); all four behind the SSO for `occ-admins` only | recommended (the interactive installer defaults to yes), never blocking |
 | `agent` | the operator agent (OpenClaw) and its read-only Docker API ([The agent profile](#the-agent-profile)) | opt-in (default no): needs an LLM key and a chat channel from a human |
 
 - **The ops tools are admin access to the machine, not core.** They are what an operator reaches for first (who is eating the disk, what is in that app's data, a shell without an SSH client), so the questionnaire recommends them, but the cloud works without them and they never fail an install. Details in [The ops profile](#the-ops-profile) and [`security.md`](security.md).
@@ -30,7 +30,7 @@ Companion files:
 Rules that came from the first box:
 
 - **Identity does not depend on app data.** Authentik keeps its own Postgres and Redis. Core tools (Gitea, the portal) may also own their databases. The *shared* Postgres, Redis and object storage exist for the apps built inside the cloud, and for nothing else. Gitea and the portal live as separate databases, each with its own role, on the shared Postgres instance; Authentik keeps its own.
-- **Apps built inside the cloud do not bring their own database, cache or storage.** `harness-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or S3 server, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
+- **Apps built inside the cloud do not bring their own database, cache or storage.** `occ-app provision` refuses a manifest or a Compose file that declares a Postgres, Redis or S3 server, and says what to declare instead. Exceptions (`infrastructure.exception` with `reason`, `owner`, `review_by`, `migration_plan` and an expiry date) are for the portal to review later; the executor refuses them today. This is what makes the box's resource usage visible in one place.
 - **The company OS, if adopted, is three ordinary apps** (tracker, MCP server, brain sync) deployed by push to `main` like any other. It has no place in the compose files.
 
 ## The storage profile
@@ -38,15 +38,15 @@ Rules that came from the first box:
 Object storage for apps is [Garage](https://garagehq.deuxfleurs.fr/) (`dxflrs/garage`, a versioned tag in `GARAGE_IMAGE`), one node:
 
 - `install.sh` renders `<install-dir>/garage/garage.toml` (no secrets in it: `GARAGE_RPC_SECRET`, `GARAGE_ADMIN_TOKEN` and `GARAGE_METRICS_TOKEN` come from `.env`), starts the service in stage `optional_profiles` and, the first time, gives the node a role in the layout (zone `dc1`, capacity `storage.capacity`, 100G by default) and applies it. A re-run sees the role and changes nothing.
-- The S3 API is `garage:3900` on the harness network and `s3.<BASE_DOMAIN>` through the proxy, without forward auth (requests are signed by the app's key). There is no console: Garage has none, and its admin API (`3903`) is not routed.
-- Per app, `harness-app provision` uses the admin API through `garage json-api` inside the container (payloads on stdin): bucket `app-<slug>`, key `app-<slug>` with read and write on that bucket only, `S3_*` in the app's env file ([`app-contract.md`](app-contract.md#what-the-app-receives)).
+- The S3 API is `garage:3900` on the occ network and `s3.<BASE_DOMAIN>` through the proxy, without forward auth (requests are signed by the app's key). There is no console: Garage has none, and its admin API (`3903`) is not routed.
+- Per app, `occ-app provision` uses the admin API through `garage json-api` inside the container (payloads on stdin): bucket `app-<slug>`, key `app-<slug>` with read and write on that bucket only, `S3_*` in the app's env file ([`app-contract.md`](app-contract.md#what-the-app-receives)).
 - Data and metadata live in the volume `garage-data`, backed up with the other volumes; Garage writes a consistent metadata snapshot every 6 hours in `meta/snapshots/` ([`backup.md`](backup.md)).
 
 **Why Garage and not MinIO.** The first designs used MinIO. By October 2026 its images were no longer available: `quay.io/minio/minio` answers 401 for the pinned release and for `latest`, `minio/minio` is gone from Docker Hub, and the last community release on GitHub is from October 2025, so the community distribution ended. Pinning another tag was not an option. Garage is a single binary, maintained, with versioned images, and its admin API (`CreateBucket`, `ImportKey`, `AllowBucketKey`, layout calls) is scriptable without a client in the image. SeaweedFS was the fallback had Garage lacked per-bucket key permissions; it did not.
 
 ## The ops profile
 
-Four admin tools, each on its own name, each behind forward auth whose application is bound to `harness-admins` only (members of `harness-users` sign in and are refused):
+Four admin tools, each on its own name, each behind forward auth whose application is bound to `occ-admins` only (members of `occ-users` sign in and are refused):
 
 | Name | Service | What it is |
 |---|---|---|
@@ -55,24 +55,24 @@ Four admin tools, each on its own name, each behind forward auth whose applicati
 | `portainer.<BASE_DOMAIN>` | `portainer` | containers, images, volumes, stacks; its own login behind the SSO |
 | `glances.<BASE_DOMAIN>` | `glances` | host resource usage |
 
-- **Their own network.** The four services sit on `harness-ops`, a network only the proxy joins. Apps join `harness`, so an app container cannot reach `wetty:3000` or `filebrowser:80` around the proxy; smoke test 18 proves it. Nothing publishes a host port.
+- **Their own network.** The four services sit on `occ-ops`, a network only the proxy joins. Apps join `occ`, so an app container cannot reach `wetty:3000` or `filebrowser:80` around the proxy; smoke test 18 proves it. Nothing publishes a host port.
 - **Nothing public.** Their proxy hosts use the forward-auth snippet with no public path (no `/health` exception); the installer checks them through their Docker healthchecks.
 - **Web terminal.** Wetty v4 runs `ssh` to the host's sshd with a dedicated ed25519 key, `<install-dir>/local/wetty/id_ed25519` (0600, generated once), the host key pinned in `local/wetty/known_hosts` (`StrictHostKeyChecking=yes`), public key only (no password prompt), and one allowed browser origin (`<scheme>://terminal.<BASE_DOMAIN>`). The preflight looks for sshd on 127.0.0.1 (`ops.wetty.ssh_port`, then the `Port` lines of `sshd_config`, then 22) by its banner. The installer then installs the public key in `~/.ssh/authorized_keys` of the user running it: interactively it asks (default yes); with `--non-interactive` only when `ops.wetty.install_key: true`, otherwise the handoff prints the one command that does it. It reaches the host through `host.docker.internal` (`host-gateway`) and, when that does not answer (rootless Docker keeps the host loopback away from containers), through the host's own address, and proves it with a non-interactive `ssh … true` from inside the container. **No sshd, or no way to reach it: the other three tools come up, the terminal does not, the installer says so, and nothing fails.** `state.json` records the outcome under `stages.optional_profiles.probe.ops`, and `inventory.json` under `ops`.
-- **File browser.** FileBrowser sees two host paths and nothing else: `ops.filebrowser.paths.app_data` (default `<install-dir>/app-data`, one directory per app, which `harness-app provision` creates and mounts at `/data` in the app) and `ops.filebrowser.paths.backup_reports` (default `<BACKUP_DESTINATION>/reports`, read only). The preflight refuses any other path that reaches the install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), the restic repository, a home directory or a system directory (`scripts/lib/opspaths.py`; `scripts/tests/ops-mounts.sh` proves the rule against the rendered compose file). Its own login is off: `auth.method=proxy` takes the user from `X-authentik-username`, which only the proxy sets; each admin gets a non-admin FileBrowser user on first visit; no admin account or default password exists.
-- **Portainer and Glances** moved from the `harness` network to `harness-ops`, and both now have a provider bound to `harness-admins` (Portainer had no SSO before, only its own login; Glances had the forward-auth snippet but no provider). Portainer keeps its own login behind the SSO.
+- **File browser.** FileBrowser sees two host paths and nothing else: `ops.filebrowser.paths.app_data` (default `<install-dir>/app-data`, one directory per app, which `occ-app provision` creates and mounts at `/data` in the app) and `ops.filebrowser.paths.backup_reports` (default `<BACKUP_DESTINATION>/reports`, read only). The preflight refuses any other path that reaches the install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), the restic repository, a home directory or a system directory (`scripts/lib/opspaths.py`; `scripts/tests/ops-mounts.sh` proves the rule against the rendered compose file). Its own login is off: `auth.method=proxy` takes the user from `X-authentik-username`, which only the proxy sets; each admin gets a non-admin FileBrowser user on first visit; no admin account or default password exists.
+- **Portainer and Glances** moved from the `occ` network to `occ-ops`, and both now have a provider bound to `occ-admins` (Portainer had no SSO before, only its own login; Glances had the forward-auth snippet but no provider). Portainer keeps its own login behind the SSO.
 
 ## The agent profile
 
-An operator agent on the box, opt-in (`install.profile.agent`, the interactive installer asks "Enable the operator agent (needs an LLM API key and a chat channel)?", default no). It is a layer over the core, not part of it: the core's happy path (provision, start, route) stays deterministic in scripts and Actions and works with no agent at all. The agent handles what needs judgment (diagnosis, disk, a stuck backup, "why did it go down") and asks a human for what needs a yes. The harness defines the contract ([`operator-contract.md`](operator-contract.md)), the runbooks ([`runbooks/`](runbooks/)) and the map (`scripts/harness-operator.sh brief`); the tool is replaceable. The reference implementation is [OpenClaw](https://openclaw.ai):
+An operator agent on the box, opt-in (`install.profile.agent`, the interactive installer asks "Enable the operator agent (needs an LLM API key and a chat channel)?", default no). It is a layer over the core, not part of it: the core's happy path (provision, start, route) stays deterministic in scripts and Actions and works with no agent at all. The agent handles what needs judgment (diagnosis, disk, a stuck backup, "why did it go down") and asks a human for what needs a yes. The cloud defines the contract ([`operator-contract.md`](operator-contract.md)), the runbooks ([`runbooks/`](runbooks/)) and the map (`scripts/occ-operator.sh brief`); the tool is replaceable. The reference implementation is [OpenClaw](https://openclaw.ai):
 
 | Service | What |
 |---|---|
 | `agent` | `openclaw/openclaw:<release>-slim`, gateway bound to the container's loopback, no port and no route. User `0:0` under rootless Docker (that is the installing user), the installing user's uid otherwise; all capabilities dropped |
 | `agent-docker-proxy` | `docker/agent/docker-ro-proxy.py` on a pinned `python:alpine`: the Docker API as GET on an allowlist, `Env` as names only, read-only root, no capabilities; writes only with `ops.agent.allow_write` ([`security.md`](security.md)) |
 
-- **Workspace, `<install-dir>/agent/`.** `state/` (OpenClaw's config `openclaw.json` and its sessions, 0700), `workspace/` (`AGENTS.md`, which sends the agent to the contract, the brief and the runbooks first; its notes and incident records) and `reference/` (mounted read only inside `workspace/`: `operator-contract.md`, `runbooks/`, `brief.md`, `brief.json`, `bin/harness-ro`). `scripts/harness-operator.sh agent-sync` refreshes it; `install.sh` runs it, and `harness-app provision` regenerates the brief after each deploy.
-- **The brief is generated.** From `state.json`, the rendered compose file, `inventory.json` and `docker ps`, plus what the harness knows of each core service. Never by hand, never a value.
-- **Keys and channel come from a human.** `AGENT_ANTHROPIC_API_KEY` or `AGENT_OPENAI_API_KEY`, and `AGENT_SLACK_BOT_TOKEN` + `AGENT_SLACK_APP_TOKEN` (Socket Mode) or `AGENT_TELEGRAM_BOT_TOKEN`, in `.env` or exported as `HARNESS_AGENT_*` before `install.sh`. The installer never generates them and never fails without them: the agent comes up, reads the box, and cannot answer until they exist; the preflight and the handoff say so. After adding them: `install.sh --apply --from optional_profiles`.
+- **Workspace, `<install-dir>/agent/`.** `state/` (OpenClaw's config `openclaw.json` and its sessions, 0700), `workspace/` (`AGENTS.md`, which sends the agent to the contract, the brief and the runbooks first; its notes and incident records) and `reference/` (mounted read only inside `workspace/`: `operator-contract.md`, `runbooks/`, `brief.md`, `brief.json`, `bin/occ-ro`). `scripts/occ-operator.sh agent-sync` refreshes it; `install.sh` runs it, and `occ-app provision` regenerates the brief after each deploy.
+- **The brief is generated.** From `state.json`, the rendered compose file, `inventory.json` and `docker ps`, plus what the cloud knows of each core service. Never by hand, never a value.
+- **Keys and channel come from a human.** `AGENT_ANTHROPIC_API_KEY` or `AGENT_OPENAI_API_KEY`, and `AGENT_SLACK_BOT_TOKEN` + `AGENT_SLACK_APP_TOKEN` (Socket Mode) or `AGENT_TELEGRAM_BOT_TOKEN`, in `.env` or exported as `OCC_AGENT_*` before `install.sh`. The installer never generates them and never fails without them: the agent comes up, reads the box, and cannot answer until they exist; the preflight and the handoff say so. After adding them: `install.sh --apply --from optional_profiles`.
 - **Config the installer owns.** In `openclaw.json` it sets `gateway.mode`, the workspace, `skipBootstrap`, the model (`ops.agent.model`) and the channel blocks with tokens by environment reference and the access policy (`ops.agent.allow_from`, else pairing); everything else in the file is left alone.
 - **Started** in the `optional_profiles` stage, after the ops tools; the stage checks that the agent reaches the Docker API through the filter. Smoke test 20 checks the isolation.
 
@@ -83,7 +83,7 @@ Five variables, not one. `BASE_DOMAIN` alone cannot say whether TLS terminates a
 | Variable | Values |
 |---|---|
 | `INGRESS` | `local` · `private` · `public` |
-| `BASE_DOMAIN` | e.g. `harness.localhost`, `apps.internal`, `cloud.example.com` |
+| `BASE_DOMAIN` | e.g. `cloud.localhost`, `apps.internal`, `cloud.example.com` |
 | `PUBLIC_BASE_URL` | the portal URL users type |
 | `TLS_MODE` | `off` · `internal` · `edge` · `acme` |
 | `TUNNEL_PROVIDER` | `none` · `tailscale` · `cloudflared` |
@@ -105,7 +105,7 @@ For a company of about thirty people the recommended mode is `private`: a privat
 
 ### Private ingress (`private` / `internal` / `tailscale`)
 
-Built and tested end to end ([`first-run.md`](first-run.md#private-ingress-run)). Every app is `https://<slug>.<BASE_DOMAIN>`, no port, on the tailnet only, with a certificate browsers accept once the harness CA is installed.
+Built and tested end to end ([`first-run.md`](first-run.md#private-ingress-run)). Every app is `https://<slug>.<BASE_DOMAIN>`, no port, on the tailnet only, with a certificate browsers accept once the cloud CA is installed.
 
 ```text
 device on the tailnet --DNS--> <tailnet IP>:53  tailnet-dns (CoreDNS): *.<BASE_DOMAIN> = <tailnet IP>
@@ -116,7 +116,7 @@ the box itself: proxy, Gitea SSH and control ports on 127.0.0.1 only
 | Piece | What the installer does |
 |---|---|
 | Tailscale node | service `tailscale` (`tailscale/tailscale`, pinned): userspace networking in **its own** network namespace, state in the volume `tailscale-state`, name `ingress.tailscale.hostname`. Its serve config (`<install-dir>/tailscale/serve.json`) forwards tailnet ports 80 and 443 to `proxy` and the Gitea SSH port to `gitea:22` as raw TCP: TLS ends at the proxy |
-| Auth key | `HARNESS_TAILSCALE_AUTHKEY`, read from the installer's environment for the first login only and never written to `.env`: compose gets it from the installer's process, the node logs in, and the container is recreated without it. The node then lives on its state; a re-run with the node logged in needs no key (a value an older install left in `.env` is blanked) |
+| Auth key | `OCC_TAILSCALE_AUTHKEY`, read from the installer's environment for the first login only and never written to `.env`: compose gets it from the installer's process, the node logs in, and the container is recreated without it. The node then lives on its state; a re-run with the node logged in needs no key (a value an older install left in `.env` is blanked) |
 | TLS | a CA of the installation's own in `<install-dir>/local/ca/` (`ca.key` 0600, `ca.crt` public), **name-constrained to `BASE_DOMAIN`** and to no IP address, 10 years; a wildcard `*.<BASE_DOMAIN>` certificate signed by it (397 days, renewed by any install run when 30 days remain), uploaded to the proxy as a custom certificate and attached to every host with HTTPS forced. Gitea trusts the CA through `SSL_CERT_DIR`, because it calls Authentik's OIDC endpoints by the public name |
 | DNS | service `tailnet-dns` (CoreDNS, pinned) in the node's namespace, bound to its loopback, answering every `*.<BASE_DOMAIN>` with the node's tailnet address (empty answers for other types, other zones refused). The tailnet's split DNS, a nameserver set in the Tailscale admin console, points `BASE_DOMAIN` at it; the installer cannot set that, and the handoff says exactly what to enter |
 | Checks | the `proxy_ingress` stage fails unless `portal.<BASE_DOMAIN>` resolves to the tailnet address on the node, and says whether the tailnet's own resolver already does (the console step); smoke test 21 checks the surface and the certificate |
@@ -128,7 +128,7 @@ Decisions:
 - **A DNS server on the node, not public records.** A private domain (`.internal` is reserved for this) has no public DNS; split DNS needs a nameserver on the tailnet, and the node is the one place that knows its own address.
 - **Nothing published beyond loopback** (`BIND_ADDRESS=127.0.0.1` in `private`): the LAN does not see the proxy; the installer's checks use the loopback ports and the tailnet path.
 
-What `main` had before: the ingress matrix in preflight; a `tailscale` container in userspace mode on the harness network, with `TS_AUTHKEY` kept in `.env` and nothing routed through it; `BIND_ADDRESS=0.0.0.0`; proxy hosts created without a certificate in `internal` (the preflight told the person to upload one by hand); no DNS for `BASE_DOMAIN`; every installer check and smoke test speaking plain HTTP to the proxy.
+What `main` had before: the ingress matrix in preflight; a `tailscale` container in userspace mode on the occ network, with `TS_AUTHKEY` kept in `.env` and nothing routed through it; `BIND_ADDRESS=0.0.0.0`; proxy hosts created without a certificate in `internal` (the preflight told the person to upload one by hand); no DNS for `BASE_DOMAIN`; every installer check and smoke test speaking plain HTTP to the proxy.
 
 ## Execution Model
 
@@ -185,7 +185,7 @@ Decided by a human, asked for by the installer, never guessed:
 
 `install.sh` creates platform resources only: networks, volumes, the portal's and Gitea's databases and roles, Authentik's database, the initial Gitea organization and admin, the runners. It creates nothing for future apps.
 
-Per app, the executor is **`scripts/harness-app.sh provision`**, run by the app's own deploy job on every push to `main` ([`gitops-flow.md`](gitops-flow.md)). After validating the manifest and the Compose file, and before the containers start, it ensures: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`); `DATABASE_URL` written only to the app's local secret store, `<install-dir>/apps/<slug>/.env` (0600); a Redis ACL user limited to the `<slug>:` prefix; a bucket `app-<slug>` with its own access key, allowed to read and write that bucket only (never Garage's RPC secret or admin token), only when the manifest asks and the `storage` profile is on; the Authentik provider and application and the proxy host with forward auth; and an inventory record with owner and date in `inventory.json`. It is idempotent (a re-run keeps every password) and never deletes a database, bucket, route or namespace. Declared migrations are the app's own job at start for now.
+Per app, the executor is **`scripts/occ-app.sh provision`**, run by the app's own deploy job on every push to `main` ([`gitops-flow.md`](gitops-flow.md)). After validating the manifest and the Compose file, and before the containers start, it ensures: database and role (`LOGIN NOSUPERUSER`, random password, `REVOKE CONNECT FROM PUBLIC`); `DATABASE_URL` written only to the app's local secret store, `<install-dir>/apps/<slug>/.env` (0600); a Redis ACL user limited to the `<slug>:` prefix; a bucket `app-<slug>` with its own access key, allowed to read and write that bucket only (never Garage's RPC secret or admin token), only when the manifest asks and the `storage` profile is on; the Authentik provider and application and the proxy host with forward auth; and an inventory record with owner and date in `inventory.json`. It is idempotent (a re-run keeps every password) and never deletes a database, bucket, route or namespace. Declared migrations are the app's own job at start for now.
 
 This was designed as the portal's job. It is a script because the portal is read-only by design (below) and because a script in the deploy job runs with the push that approved it and logs where the team already looks. A later portal shows what the executor did; it does not have to do it.
 
@@ -193,7 +193,7 @@ Sequence on a box that already has apps with local services: register and audit 
 
 ## The Portal
 
-The portal is the brain the installer boots in step 13, and it is **read-only**. It reads state from where it lives (the git host's CI runs, Docker, the proxy, the identity provider, the shared services, the backup status file) instead of being written to by workflows, tokens or agents. Deploys are CI on push (`harness-app` in the deploy job); the portal shows them. It serves two views of the same data: a page for people and `GET /api/platform/status` as JSON for agents, with one entry per core service and the age of the newest backup.
+The portal is the brain the installer boots in step 13, and it is **read-only**. It reads state from where it lives (the git host's CI runs, Docker, the proxy, the identity provider, the shared services, the backup status file) instead of being written to by workflows, tokens or agents. Deploys are CI on push (`occ-app` in the deploy job); the portal shows them. It serves two views of the same data: a page for people and `GET /api/platform/status` as JSON for agents, with one entry per core service and the age of the newest backup.
 
 The first box learned this the hard way: a write API with per-user tokens let any employee repoint any domain through a forged deploy event. Removing the write surface removed the class of bug.
 
@@ -202,7 +202,7 @@ The first box learned this the hard way: a write API with per-user tokens let an
 Minimum, part of `core`:
 
 - Daily custom-format dump of every Postgres database plus a global dump of roles, written straight to the backup destination, never staged on the system disk.
-- Daily backup of the Gitea, proxy, Authentik and Garage volumes and of the harness configuration.
+- Daily backup of the Gitea, proxy, Authentik and Garage volumes and of the cloud configuration.
 - Deduplicated, encrypted repository (restic or equivalent); retention 7 daily, 4 weekly, 12 monthly. With deduplication, a year of retention of a mostly stable dataset costs a few times one snapshot, not twenty-three.
 - An encrypted off-site copy of the same repository.
 - Checksum and a status file per run; the portal reads the status file and alarms when the newest backup is older than the configured maximum.
@@ -223,6 +223,31 @@ What is built ([`backup.md`](backup.md)) and what is next:
 | Encrypted off-site copy of the repository | next |
 | Monthly restore rehearsal into an isolated target | next |
 | The portal's backup card and alarm on age | next (portal project; the status file is ready) |
+
+## Renamed from Open Company App Harness
+
+Until 2026-10-20 this project was **Open Company App Harness** (repository `open-company-app-harness`). It began as a harness around coding agents and became the company's cloud on one machine, so it took the name of what it is, next to its sibling Open Company OS. Every name changed at once:
+
+| What | Before | Now |
+|---|---|---|
+| Product, repository | Open Company App Harness, `open-company-app-harness` | Open Company Cloud, `open-company-cloud` |
+| Commands | `scripts/harness-app.sh`, `harness-backup.sh`, `harness-operator.sh`; the agent's `harness-ro` | `scripts/occ-app.sh`, `occ-backup.sh`, `occ-operator.sh`; `occ-ro` |
+| Variables | `HARNESS_*` (`HARNESS_INSTALL_DIR`, `HARNESS_TAILSCALE_AUTHKEY`, `HARNESS_AGENT_*`, the `*_env` names in the config) | `OCC_*` |
+| Compose project, networks | `harness`, `harness-ops`, `harness-agent` | `occ`, `occ-ops`, `occ-agent` |
+| Deploy runner label, app overlay | `harness-deploy`, `apps/<slug>/compose.harness.yml` | `occ-deploy`, `apps/<slug>/compose.occ.yml` |
+| Authentik groups | `harness-admins`, `harness-users` | `occ-admins`, `occ-users` |
+| Default install directory | `/opt/open-company-harness` | `/opt/open-company-cloud` |
+| Example domains | `harness.localhost`, `harness.internal` | `cloud.localhost`, `cloud.example.internal` (a placeholder: use a name you control, e.g. `apps.internal`) |
+| Shared Postgres superuser and database, portal database | `harness`, `harness_platform` | `occ`, `occ_platform` |
+
+The commands stay three, each with its own file, rather than one `occ` with subcommands: the rename changes names, not behavior, and the deploy workflow, the runbooks and the agent's instructions call them by path.
+
+What still reads the old names, for this version only (the next one removes it):
+
+- **Environment.** Every script that sources `scripts/lib/common.sh` (`install.sh`, `occ-app`, `occ-backup`, `occ-operator`, first-run, the smoke tests) reads `HARNESS_<X>` as `OCC_<X>` when `OCC_<X>` is unset, and warns once per name: `[!!] HARNESS_INSTALL_DIR is the old name of OCC_INSTALL_DIR ...`.
+- **Config.** A `config.yaml` written before the rename loads. Its `*_env` values `HARNESS_<X>` are read as `OCC_<X>`, and values that carry the old defaults (`/opt/open-company-harness`, `harness.localhost`, `harness-admins`, `harness_platform`, the tailnet hostname `harness`) are used as given. `install.sh` says both in two warning lines at the start of the run.
+
+What does not carry over: an installation made before the rename keeps its `.env`, Compose project and networks under the old names, and re-running the new `install.sh` on it would bring up a second stack beside them. No such installation exists outside test VMs; to move one, take a backup (`occ-backup.sh run`), install fresh and restore. App repositories created before the rename carry a deploy workflow for the `harness-deploy` runner: regenerate it from `templates/app/.gitea/workflows/deploy.yml`.
 
 ## What the First Box Taught Us
 

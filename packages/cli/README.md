@@ -1,8 +1,8 @@
-# Harness CLI
+# Open Company Cloud CLI
 
 Placeholder for a future `company-deploy` CLI.
 
-The app loop already has a command line: [`scripts/harness-app.sh`](../../scripts/harness-app.sh) (`new`, `provision`, `checkout`, `wait`, `list`), a bash script like the rest of the installer, so the box needs nothing but bash, python3, curl, git and Docker. It is installed as `harness-app` in the deploy jobs' image ([`docker/deployer`](../../docker/deployer/Dockerfile)). See [`docs/gitops-flow.md`](../../docs/gitops-flow.md).
+The app loop already has a command line: [`scripts/occ-app.sh`](../../scripts/occ-app.sh) (`new`, `provision`, `checkout`, `wait`, `list`), a bash script like the rest of the installer, so the box needs nothing but bash, python3, curl, git and Docker. It is installed as `occ-app` in the deploy jobs' image ([`docker/deployer`](../../docker/deployer/Dockerfile)). See [`docs/gitops-flow.md`](../../docs/gitops-flow.md).
 
 What a packaged CLI could add later, for laptops:
 

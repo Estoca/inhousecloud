@@ -7,14 +7,14 @@
 ## Read first
 
 ```bash
-$H/scripts/harness-backup.sh --install-dir "$I" status --json     # status, age of the newest success, stale or not
+$H/scripts/occ-backup.sh --install-dir "$I" status --json     # status, age of the newest success, stale or not
 cat "$BACKUP_DESTINATION/reports/latest-status.json"
 ls -l "$BACKUP_DESTINATION/.lock" 2>/dev/null && cat "$BACKUP_DESTINATION/.lock/"{pid,host,started} 2>/dev/null
 dc ps backup; dc logs --since 24h --tail 50 backup
 df -h "$BACKUP_DESTINATION"; mount | grep -F "$BACKUP_DESTINATION"   # is the destination the disk you think it is
 ```
 
-*(agent)* `harness-ro backup`, `harness-ro logs backup 50`, `harness-ro inspect backup`; the lock and the mount need the human.
+*(agent)* `occ-ro backup`, `occ-ro logs backup 50`, `occ-ro inspect backup`; the lock and the mount need the human.
 
 | What you see | Meaning |
 |---|---|
@@ -33,18 +33,18 @@ dc top backup                                                       # restic and
 docker stats --no-stream "$(dc ps -q backup)"                       # CPU and block I/O, now and in 5 minutes
 ```
 
-*(agent)* `harness-ro docker /containers/<id>/stats` twice, and `harness-ro docker /containers/<id>/top`
+*(agent)* `occ-ro docker /containers/<id>/stats` twice, and `occ-ro docker /containers/<id>/top`
 
 - Size and I/O grow: slow, not stuck. Leave it; the hard timeout (`BACKUP_MAX_RUN_MINUTES`) is the ceiling.
 - No growth, no CPU, no I/O, log silent: stuck. Something is blocking a read or a write: the destination (an unmounted or full disk, a network mount that hung), or the host refusing access.
 
-The harness's own job cannot hang forever: past `BACKUP_MAX_RUN_MINUTES` it is killed and recorded as `failed`, the lock is released, and a lock whose process is gone is reaped by the next run. A stuck run within the timeout is waited out or, with an ok, stopped with `dc restart backup` (the run is recorded as failed; the next one starts clean).
+The cloud's own job cannot hang forever: past `BACKUP_MAX_RUN_MINUTES` it is killed and recorded as `failed`, the lock is released, and a lock whose process is gone is reaped by the next run. A stuck run within the timeout is waited out or, with an ok, stopped with `dc restart backup` (the run is recorded as failed; the next one starts clean).
 
 ## Verify after any fix
 
 ```bash
-$H/scripts/harness-backup.sh --install-dir "$I" run              # level 3 when in doubt about another live run
-$H/scripts/harness-backup.sh --install-dir "$I" verify --latest  # manifest, checksums, every dump restored and compared, restic check
+$H/scripts/occ-backup.sh --install-dir "$I" run              # level 3 when in doubt about another live run
+$H/scripts/occ-backup.sh --install-dir "$I" verify --latest  # manifest, checksums, every dump restored and compared, restic check
 ```
 
 Smoke test 14 is the same `verify`. Report the snapshot id, its age, and what `verify` checked.
@@ -57,5 +57,5 @@ What it left, for any box:
 
 - **Unattended jobs never depend on a prompt.** Grant the permission to the binary that actually opens the path (on macOS it is tied to the binary's path), and run it once interactively after installing or upgrading it, so the prompt appears while someone is there.
 - **Pin the binaries** the permission is tied to; a package-manager upgrade changes the path and brings the prompt back.
-- **Lock, hard timeout, JSON progress and a failure status** on the job. The harness's sidecar has all four; it also runs in a container, where no such prompt exists, which is the reason it is the default.
+- **Lock, hard timeout, JSON progress and a failure status** on the job. The cloud's sidecar has all four; it also runs in a container, where no such prompt exists, which is the reason it is the default.
 - **Check the reports mount on every release of whatever reads the status** (the portal): a rebuild once dropped it, and the backup card went blank while backups were fine.

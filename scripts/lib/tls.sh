@@ -35,8 +35,8 @@ ensure_internal_ca() {
 distinguished_name = dn
 prompt = no
 [dn]
-O = Open Company App Harness
-CN = Harness internal CA for $domain
+O = Open Company Cloud
+CN = Open Company Cloud internal CA for $domain
 [v3_ca]
 basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
@@ -78,7 +78,7 @@ ca_fingerprint() { ossl x509 -fingerprint -sha256 -noout -in "$(ca_dir)/ca.crt" 
 # ca_install_help [INDENT]: the file and the per-OS commands a person runs on each device,
 # printed by the handoff. ca.crt is public; the CA key never leaves the box.
 ca_install_help() {
-  local f="harness-ca.crt" i="${1:-    }"
+  local f="occ-ca.crt" i="${1:-    }"
   _out "${i}file:     $(ca_dir)/ca.crt (public). Copy it: scp $(id -un)@<this box>:$(ca_dir)/ca.crt $f"
   _out "${i}SHA-256:  $(ca_fingerprint)   (compare after copying)"
   _out "${i}macOS:    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $f"

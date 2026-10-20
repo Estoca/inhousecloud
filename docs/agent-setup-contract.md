@@ -1,6 +1,6 @@
 # Agent Setup Contract
 
-What a terminal-connected coding agent may ask, must do and must never do on a company cloud built with this harness. The commands are in [`llm-bootstrap.md`](llm-bootstrap.md).
+What a terminal-connected coding agent may ask, must do and must never do on a company cloud built from this repository. The commands are in [`llm-bootstrap.md`](llm-bootstrap.md).
 
 ## The two requests this contract covers
 
@@ -15,7 +15,7 @@ Before either, run section 0 of the playbook to learn whether the cloud is alrea
 
 ```text
 install.sh                     one command: secrets, services, SSO, Git, runners, smoke tests
-harness-app.sh new <slug>      app repository from templates/app, created in the Gitea organization
+occ-app.sh new <slug>      app repository from templates/app, created in the Gitea organization
 git push origin main           the deploy: Gitea Actions on the box provisions and starts the app
 http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in; /health public
 ```
@@ -49,18 +49,18 @@ Only what changes the app, and only if the request does not say it:
 - what the app must do (fields, screens, who uses it), in a few lines;
 - who owns it (an email); if nobody says, the install's admin email, stated in the report.
 
-Pick the slug yourself from the request (`despesas`, `expense-report`) and say it. Do not ask about databases, ports, domains, auth or deploys: the harness decides them.
+Pick the slug yourself from the request (`despesas`, `expense-report`) and say it. Do not ask about databases, ports, domains, auth or deploys: the cloud decides them.
 
 ## The agent must
 
 - Run commands on the box, as the user that installed it, from a checkout of this repository on the box (clone or copy it there first). From another machine, through `ssh`.
-- Use `install.sh` to install and `scripts/harness-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
+- Use `install.sh` to install and `scripts/occ-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
 - Keep the app inside [`app-contract.md`](app-contract.md): listen on `PORT`, answer `/health`, read `DATABASE_URL` and `REDIS_URL`, create its tables on start, take the user from the `X-authentik-*` headers.
 - Push to `main` to deploy, then confirm three things before saying it is live:
   1. the deploy run of the pushed commit is `success`;
   2. `GET http://<slug>.<BASE_DOMAIN>/health` answers 200;
   3. `GET http://<slug>.<BASE_DOMAIN>/` answers 302 to the sign-in.
-- On a failed run, read the job log, fix the cause in the app repository and push again. The harness's errors say what to change.
+- On a failed run, read the job log, fix the cause in the app repository and push again. The cloud's errors say what to change.
 - Report: the URL, the repository, the owner, what the human must do (sign in; for a non-local ingress, open the URL from the company network).
 
 ## The agent never
@@ -70,8 +70,8 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 - reads or edits another app's `<install-dir>/apps/<other>/.env`, or edits its own by hand (`provision` writes it);
 - prints a secret: the values in `<install-dir>/.env` or any app env file. Key names only (`python3 scripts/lib/envfile.py keys <file>`);
 - drops a database or role, deletes a bucket, a Redis user, a proxy route, an Authentik object, a repository, a volume or the install directory. Removing an app is a human's job;
-- edits `.gitea/workflows/deploy.yml` of an app, or writes a workflow with `runs-on: harness-deploy` anywhere else;
-- changes Authentik, the proxy or Gitea settings by hand; `install.sh` and `harness-app` own them;
+- edits `.gitea/workflows/deploy.yml` of an app, or writes a workflow with `runs-on: occ-deploy` anywhere else;
+- changes Authentik, the proxy or Gitea settings by hand; `install.sh` and `occ-app` own them;
 - turns `auth.required` off, unless the human asked for a public app in those words;
 - runs on a box the human did not name, creates DNS records or tunnel routes, or applies an install plan without a yes.
 

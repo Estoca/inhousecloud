@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The operator brief: the map an operator (human or agent) reads before touching the box.
 
-Usage: operatorbrief.py INSTALL_DIR HARNESS_ROOT [--json] [--out DIR] [--no-live]
+Usage: operatorbrief.py INSTALL_DIR OCC_ROOT [--json] [--out DIR] [--no-live]
 
 Generated, never written by hand, from what the box itself says:
   state.json        install status, stages, profiles
@@ -10,7 +10,7 @@ Generated, never written by hand, from what the box itself says:
   .env              variable NAMES only, to build the access matrix
   inventory.json    the apps, their owners, repositories and resources
   docker ps         runtime state per container (skipped with --no-live)
-plus the harness's own knowledge of each core service (role, where its configuration
+plus the cloud's own knowledge of each core service (role, where its configuration
 lives, how it is changed, what healthy looks like), kept in this file.
 
 Never prints a secret value: before writing, every value of .env and of the apps' env
@@ -21,7 +21,7 @@ import datetime, json, os, re, subprocess, sys
 
 SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|^KEY_|AUTHKEY|PGPASSWORD|DATABASE_URL|REDIS_URL|S3_SECRET)")
 
-# What the harness knows about its own services. `config` is where the configuration
+# What the cloud knows about its own services. `config` is where the configuration
 # lives, `change` how it is changed, `health` what healthy looks like and what does not
 # mean broken.
 SERVICES = {
@@ -29,13 +29,13 @@ SERVICES = {
         role="reverse proxy (Nginx Proxy Manager): every <name>.<BASE_DOMAIN>, TLS, forward auth to Authentik",
         internal="80, 443; admin API 81",
         config="volume proxy-data (its own database of proxy hosts); certificates in proxy-letsencrypt",
-        change="admin API on 127.0.0.1:PROXY_ADMIN_PORT as PROXY_ADMIN_EMAIL. App routes: only harness-app provision. Never edit the volume",
+        change="admin API on 127.0.0.1:PROXY_ADMIN_PORT as PROXY_ADMIN_EMAIL. App routes: only occ-app provision. Never edit the volume",
         health="Docker healthcheck. A Host it does not know gets the proxy's default page: an answer is not an app"),
     "authentik-server": dict(
         role="SSO: OIDC for Gitea, proxy providers and the embedded outpost (forward auth)",
         internal="9000",
         config="Authentik's own Postgres (authentik-postgres); volumes authentik-media, authentik-templates",
-        change="API with AUTHENTIK_BOOTSTRAP_TOKEN; first-run.sh (core) and harness-app provision (apps) create providers, applications and bindings",
+        change="API with AUTHENTIK_BOOTSTRAP_TOKEN; first-run.sh (core) and occ-app provision (apps) create providers, applications and bindings",
         health="GET /-/health/ready/ = 200. A protected root answering 302 to /outpost.goauthentik.io/ is correct. App /health 200 with / at 500 through the proxy is the outpost or the provider, not the app"),
     "authentik-worker": dict(
         role="Authentik background tasks and outpost management",
@@ -48,13 +48,13 @@ SERVICES = {
         health="pg_isready"),
     "postgres": dict(
         role="shared Postgres: one database and role app_<slug> per app, plus Gitea's and the portal's",
-        internal="5432", config="volume postgres-data; roles by install.sh (core) and harness-app provision (apps)",
-        change="role and database: harness-app provision. Schema: the app's migrations. Anything destructive: runbook database-migration",
+        internal="5432", config="volume postgres-data; roles by install.sh (core) and occ-app provision (apps)",
+        change="role and database: occ-app provision. Schema: the app's migrations. Anything destructive: runbook database-migration",
         health="pg_isready; then the app's own connection"),
     "redis": dict(
         role="shared Redis: ACL user app-<slug> limited to <slug>:*",
         internal="6379", config="volume redis-data, ACL file /data/users.acl",
-        change="ACL users: harness-app provision",
+        change="ACL users: occ-app provision",
         health="redis-cli ping = PONG"),
     "gitea": dict(
         role="Git and Actions for the organization; deploys start here (push to main)",
@@ -67,24 +67,24 @@ SERVICES = {
         internal="8080", config="build context PORTAL_BUILD_CONTEXT; its database on the shared Postgres",
         change="install.sh", health="/health = 200 through the proxy; / = 302 to the SSO"),
     "gitea-runner": dict(
-        role="CI runner (label ubuntu-latest): jobs get no Docker socket, no harness network, no install directory",
+        role="CI runner (label ubuntu-latest): jobs get no Docker socket, no occ network, no install directory",
         internal="-", config="runner/ci.yaml (rendered by install.sh); registration in its /data/.runner",
         change="install.sh",
         health="'running' is not proof: the newest run in Gitea Actions is"),
     "gitea-deployer": dict(
-        role="deploy runner (label harness-deploy, organization only): its jobs are root on the box",
+        role="deploy runner (label occ-deploy, organization only): its jobs are root on the box",
         internal="-", config="runner/deploy.yaml (rendered by install.sh); image <project>-deployer:local",
         change="install.sh",
         health="'running' is not proof: the newest deploy run in Gitea Actions is"),
     "backup": dict(
-        role="backup job: crond runs harness-backup (pg_dump + volumes + config into restic)",
+        role="backup job: crond runs occ-backup (pg_dump + volumes + config into restic)",
         internal="-", config="BACKUP_* in .env; repository and reports under BACKUP_DESTINATION",
         change="config.yaml backup.* then install.sh --apply",
         health="reports/latest-status.json: status success and age under BACKUP_MAX_AGE_HOURS; a live process without progress is not success"),
     "garage": dict(role="object storage (S3) for apps: one bucket app-<slug> and one key per app; s3.<BASE_DOMAIN> through the proxy",
                    internal="3900 (S3); 3903 (admin API, not routed)",
                    config="garage/garage.toml (rendered by install.sh, no secrets) and volume garage-data; the layout applied by install.sh",
-                   change="buckets and keys: harness-app provision. Layout and capacity: config.yaml storage.* then install.sh",
+                   change="buckets and keys: occ-app provision. Layout and capacity: config.yaml storage.* then install.sh",
                    health="Docker healthcheck is `garage status` (the node answers); `garage health` says whether the layout gives it storage"),
     "portainer": dict(role="ops: Docker UI (admin access to the machine)", internal="9000",
                       config="volume portainer-data", change="admins only, through the SSO", health="/api/system/status"),
@@ -108,14 +108,14 @@ SERVICES = {
 
 # Where each credential comes from and what it opens. `agent`: what the operator agent of
 # the agent profile gets (docs/operator-contract.md, "Never received").
-APPROVER = "the platform admin (a human in harness-admins)"
+APPROVER = "the platform admin (a human in occ-admins)"
 CREDENTIALS = {
     "PROXY_ADMIN_PASSWORD": ("proxy admin account: every route and certificate", "change it in the proxy admin, then in .env", "never"),
     "AUTHENTIK_SECRET_KEY": ("signs Authentik sessions and tokens", "changing it signs everybody out", "never"),
     "AUTHENTIK_PG_PASSWORD": ("owner of Authentik's database", "ALTER ROLE, then .env, then recreate authentik-*", "never"),
     "AUTHENTIK_BOOTSTRAP_PASSWORD": ("akadmin, a person's account: all of identity", "replaced by the admin after the first MFA enrolment", "never"),
     "AUTHENTIK_BOOTSTRAP_TOKEN": ("Authentik API, admin: every user, group, provider", "revoke and recreate in Authentik, then .env", "never"),
-    "AUTHENTIK_SMOKE_USER_PASSWORD": ("harness-smoke-user (harness-users only), smoke test 18", "set it in Authentik, then .env", "never"),
+    "AUTHENTIK_SMOKE_USER_PASSWORD": ("occ-smoke-user (occ-users only), smoke test 18", "set it in Authentik, then .env", "never"),
     "GITEA_ADMIN_PASSWORD": ("Gitea admin account", "change in Gitea, then .env", "never"),
     "GITEA_ADMIN_TOKEN": ("Gitea API, scope all (admin)", "delete the token in Gitea; first-run.sh makes a new one", "never"),
     "GITEA_READONLY_TOKEN": ("Gitea API, read:misc, read:repository, read:organization, read:user", "delete in Gitea, empty it in .env, run first-run.sh", "receives it (read only)"),
@@ -229,13 +229,13 @@ def live_containers(project_label=None):
     return rows
 
 
-def build(install_dir, harness_root, live):
+def build(install_dir, occ_root, live):
     env_file = os.path.join(install_dir, ".env")
     env = read_env(env_file)
     state = load_json(os.path.join(install_dir, "state.json"), {})
     inv = load_json(os.path.join(install_dir, "inventory.json"), {})
     compose_file = os.path.join(install_dir, "compose.yml")
-    project = env.get("COMPOSE_PROJECT_NAME", "harness")
+    project = env.get("COMPOSE_PROJECT_NAME", "occ")
     rc, out = run(["docker", "compose", "--project-directory", install_dir, "-f", compose_file, "config", "--format", "json"])
     rendered = json.loads(out) if rc == 0 and out.strip().startswith("{") else {"services": {}}
     try:
@@ -250,21 +250,21 @@ def build(install_dir, harness_root, live):
     b = {
         "brief_version": 1,
         "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "generated_by": "scripts/harness-operator.sh brief",
+        "generated_by": "scripts/occ-operator.sh brief",
         "install_dir": install_dir,
-        "harness_checkout": harness_root,
+        "occ_checkout": occ_root,
         "installation_id": state.get("installation_id", ""),
         "install": {"status": state.get("status", "unknown"), "stages": stages,
                     "failed": [s for s, v in stages.items() if v == "failed"],
-                    "status_command": "%s/install.sh status --install-dir %s --json" % (harness_root, install_dir)},
+                    "status_command": "%s/install.sh status --install-dir %s --json" % (occ_root, install_dir)},
         "endpoints": {"base_domain": env.get("BASE_DOMAIN", ""), "ingress": "%s/%s/%s" % (env.get("INGRESS", ""), env.get("TLS_MODE", ""), env.get("TUNNEL_PROVIDER", "")),
                       "portal": env.get("PORTAL_BASE_URL", ""), "authentik": env.get("AUTHENTIK_BASE_URL", ""), "gitea": env.get("GITEA_BASE_URL", ""),
                       "proxy_admin": "http://127.0.0.1:%s (loopback only)" % env.get("PROXY_ADMIN_PORT", "81"),
-                      "inside_the_harness_network": {"proxy": "http://proxy:80 (send Host: <name>.%s)" % env.get("BASE_DOMAIN", ""),
+                      "inside_the_occ_network": {"proxy": "http://proxy:80 (send Host: <name>.%s)" % env.get("BASE_DOMAIN", ""),
                                                      "authentik": "http://authentik-server:9000", "gitea": "http://gitea:3000", "portal": "http://portal:8080"}},
         "profiles": ["core"] + profiles,
-        "compose": {"project": project, "file": compose_file, "rendered_from": os.path.join(harness_root, "docker/compose.yml"),
-                    "rendered_by": "install.sh (stage foundation): never edit the copy; change the config or the harness and re-run install.sh",
+        "compose": {"project": project, "file": compose_file, "rendered_from": os.path.join(occ_root, "docker/compose.yml"),
+                    "rendered_by": "install.sh (stage foundation): never edit the copy; change the config or this repository and re-run install.sh",
                     "command": "docker compose --project-directory %s -f %s" % (install_dir, compose_file),
                     "env_file": env_file + " (0600; values never shown here)"},
         "services": [], "apps": [], "access_matrix": [], "app_credentials": [], "other_credentials": [],
@@ -330,19 +330,19 @@ def build(install_dir, harness_root, live):
     b["agent"] = {"enabled": agent_on, "allow_write": env.get("AGENT_ALLOW_WRITE", "false") == "true",
                   "receives": sorted(r["variable"] for r in b["access_matrix"] if r["agent"].startswith("receives") and r["set"]),
                   "write_allowlist": ["POST /containers/<id>/restart for app containers", "POST /build/prune"] if env.get("AGENT_ALLOW_WRITE") == "true" else []}
-    h = harness_root
+    h = occ_root
     b["commands"] = {
         "install status": "%s/install.sh status --install-dir %s --json" % (h, install_dir),
         "smoke tests": "%s/scripts/smoke-tests.sh --install-dir %s" % (h, install_dir),
-        "backup status": "%s/scripts/harness-backup.sh --install-dir %s status --json" % (h, install_dir),
-        "backup verify": "%s/scripts/harness-backup.sh --install-dir %s verify --latest" % (h, install_dir),
-        "apps": "%s/scripts/harness-app.sh list --install-dir %s" % (h, install_dir),
-        "app health": "%s/scripts/harness-app.sh wait <slug> --install-dir %s (from the app repository)" % (h, install_dir),
+        "backup status": "%s/scripts/occ-backup.sh --install-dir %s status --json" % (h, install_dir),
+        "backup verify": "%s/scripts/occ-backup.sh --install-dir %s verify --latest" % (h, install_dir),
+        "apps": "%s/scripts/occ-app.sh list --install-dir %s" % (h, install_dir),
+        "app health": "%s/scripts/occ-app.sh wait <slug> --install-dir %s (from the app repository)" % (h, install_dir),
         "compose": b["compose"]["command"] + " ps",
-        "this brief": "%s/scripts/harness-operator.sh brief --install-dir %s" % (h, install_dir),
+        "this brief": "%s/scripts/occ-operator.sh brief --install-dir %s" % (h, install_dir),
     }
     # A deploy job's image carries scripts, not docs: fall back to the agent's copy.
-    for d in (os.path.join(harness_root, "docs/runbooks"), os.path.join(install_dir, "agent/reference/runbooks")):
+    for d in (os.path.join(occ_root, "docs/runbooks"), os.path.join(install_dir, "agent/reference/runbooks")):
         if os.path.isdir(d):
             b["runbooks"] = sorted(f for f in os.listdir(d) if f.endswith(".md"))
             break
@@ -400,10 +400,10 @@ def md(b):
             w("| `%s` | %s | %s | %s | %s | %s | %s |" % (a["slug"], a["owner"], a["url"], a["repository"], (a["last_commit"] or "")[:12],
                                                         ", ".join(a["env_names"]), rt or "no container"))
         w("")
-        w("Each app: Compose project = its slug; overlay `apps/<slug>/compose.harness.yml`; data `app-data/<slug>` at /data; health = its manifest's healthcheck through the proxy.")
+        w("Each app: Compose project = its slug; overlay `apps/<slug>/compose.occ.yml`; data `app-data/<slug>` at /data; health = its manifest's healthcheck through the proxy.")
     if b.get("unclaimed_containers"):
         w("")
-        w("Containers that belong to neither the harness project nor an app (discovery, not catalog: ask before treating them as apps):")
+        w("Containers that belong to neither the occ project nor an app (discovery, not catalog: ask before treating them as apps):")
         w("")
         for c in b["unclaimed_containers"]:
             w("- `%s` project `%s`: %s" % (c["name"], c["project"] or "-", c["status"]))
@@ -453,11 +453,11 @@ def main():
     a = sys.argv[1:]
     if len(a) < 2:
         sys.exit(__doc__)
-    install_dir, harness_root = a[0].rstrip("/"), a[1].rstrip("/")
+    install_dir, occ_root = a[0].rstrip("/"), a[1].rstrip("/")
     as_json, live, out = "--json" in a, "--no-live" not in a, None
     if "--out" in a:
         out = a[a.index("--out") + 1]
-    b = build(install_dir, harness_root, live)
+    b = build(install_dir, occ_root, live)
     if out:
         os.makedirs(out, exist_ok=True)
         for name, body in (("brief.json", json.dumps(b, indent=2) + "\n"), ("brief.md", md(b))):

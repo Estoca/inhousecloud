@@ -15,11 +15,11 @@
 # Authentik refuses the user after a successful sign-in. Smoke test 18 runs it with the
 # smoke user (AUTHENTIK_SMOKE_USER) and --expect denied on the ops tools.
 set -eu
-HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OCC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$HARNESS_ROOT/scripts/lib/common.sh"
+. "$OCC_ROOT/scripts/lib/common.sh"
 
-INSTALL_DIR="${HARNESS_INSTALL_DIR:-/opt/open-company-harness}"
+INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
 USER_NAME=akadmin
 PASSWORD_ENV=AUTHENTIK_BOOTSTRAP_PASSWORD
 TARGET=""; EXPECT=allowed
@@ -41,9 +41,9 @@ load_env
 eval "PASSWORD=\${$PASSWORD_ENV:-}"
 [ -n "$PASSWORD" ] || die "$PASSWORD_ENV is empty"
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/harness-sso.XXXXXX")"; chmod 700 "$TMP"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/occ-sso.XXXXXX")"; chmod 700 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 JAR="$TMP/jar"; : > "$JAR"
-# TLS internal: certificates are checked against the harness CA, as a device that
+# TLS internal: certificates are checked against the cloud CA, as a device that
 # installed it would.
 INSECURE="$(ca_args)"
 # shellcheck disable=SC2046

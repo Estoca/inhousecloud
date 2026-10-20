@@ -1,5 +1,5 @@
 # Garage, the S3-compatible server of the storage profile (docs/install-design.md).
-# Sourced after common.sh by install.sh, harness-app.sh and smoke-tests.sh.
+# Sourced after common.sh by install.sh, occ-app.sh and smoke-tests.sh.
 #
 # Every call goes through `garage json-api ENDPOINT -` inside the container: the admin API
 # over Garage's own RPC, authenticated by the RPC secret the container already has. The
@@ -7,7 +7,7 @@
 # stdout into a variable and go straight to an env file.
 
 garage_cid() {
-  docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-harness}" \
+  docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-occ}" \
     --filter "label=com.docker.compose.service=garage" | head -n 1
 }
 
@@ -48,7 +48,7 @@ garage_layout_init() {
   else
     node="$(printf null | garage_api GetClusterStatus | jsonq get nodes.0.id)"
     [ -n "$node" ] || { fail "Garage: no node id in GetClusterStatus"; return 1; }
-    printf '{"roles":[{"id":"%s","zone":"dc1","capacity":%s,"tags":["harness"]}]}' "$node" "$cap" \
+    printf '{"roles":[{"id":"%s","zone":"dc1","capacity":%s,"tags":["occ"]}]}' "$node" "$cap" \
       | garage_api UpdateClusterLayout >/dev/null || { fail "Garage: UpdateClusterLayout failed"; return 1; }
     printf '{"version":%s}' "$((version + 1))" | garage_api ApplyClusterLayout >/dev/null \
       || { fail "Garage: ApplyClusterLayout failed"; return 1; }
@@ -87,7 +87,7 @@ print(sys.argv[2] if sys.argv[2] in keys else (keys[0] if keys else ""))' "$name
     else
       GARAGE_RESULT=restored
     fi
-    err="$(mktemp "${TMPDIR:-/tmp}/harness-garage.XXXXXX")"
+    err="$(mktemp "${TMPDIR:-/tmp}/occ-garage.XXXXXX")"
     for _ in 1 2; do
       # The env file first: a failure after this point is repaired by the next run.
       printf '%s' "$id" | envfile set "$envf" S3_ACCESS_KEY_ID
@@ -111,7 +111,7 @@ print(sys.argv[2] if sys.argv[2] in keys else (keys[0] if keys else ""))' "$name
   printf '%s' "$id" | envfile set "$envf" S3_ACCESS_KEY_ID
   printf '%s' "$sk" | envfile set "$envf" S3_SECRET_ACCESS_KEY
 
-  err="$(mktemp "${TMPDIR:-/tmp}/harness-garage.XXXXXX")"
+  err="$(mktemp "${TMPDIR:-/tmp}/occ-garage.XXXXXX")"
   bid="$(printf '{"globalAlias":"%s"}' "$name" | garage_api GetBucketInfo 2>"$err" | jsonq get id)"
   if [ -z "$bid" ]; then
     grep -q NoSuchBucket "$err" || { fail "Garage: GetBucketInfo $name: $(tail -n 1 "$err")"; rm -f "$err"; return 1; }

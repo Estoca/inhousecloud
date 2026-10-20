@@ -14,9 +14,9 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PY="python3 -I"
 CHECK="$ROOT/scripts/lib/opspaths.py"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/harness-ops-mounts.XXXXXX")"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/occ-ops-mounts.XXXXXX")"; trap 'rm -rf "$WORK"' EXIT
 WORK="$(cd "$WORK" && pwd -P)"
-INST="$WORK/opt/harness"; DEST="$WORK/backups"
+INST="$WORK/opt/occ"; DEST="$WORK/backups"
 mkdir -p "$INST/app-data" "$INST/apps/demo" "$INST/local/wetty" "$DEST/reports" "$DEST/restic"
 : > "$INST/.env"; : > "$INST/apps/demo/.env"
 INST="$(cd "$INST" && pwd -P)"; DEST="$(cd "$DEST" && pwd -P)"

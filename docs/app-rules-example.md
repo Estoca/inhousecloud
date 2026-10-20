@@ -18,7 +18,7 @@ Agents should read the live rules before looking at old app repositories. Existi
 1. Read the live `rules.md`.
 2. Read the official app template.
 3. Read the manifest schema before creating or editing `company-app.yaml`.
-4. Keep the repository where it already lives if the harness supports that source.
+4. Keep the repository where it already lives if the cloud supports that source.
 5. Create or update `company-app.yaml` at the repo root.
 6. Create or update `docker-compose.yml`.
 7. Create or update `.env.example`.
@@ -31,7 +31,7 @@ Agents should read the live rules before looking at old app repositories. Existi
 ## Supported Repository Sources
 
 - Company Git server repositories are supported.
-- GitHub repositories are supported when the harness has a CI/image/deploy path for them.
+- GitHub repositories are supported when the cloud has a CI/image/deploy path for them.
 - Do not migrate repositories just to fit a single deployment mechanism.
 - All repositories must follow the same manifest, Compose, env, healthcheck, auth, and deploy-event contract.
 
@@ -158,7 +158,7 @@ Publication happens by push to `main`, not tokens pasted in chat and not a separ
 
 1. Push to `main` of the app's repository in the company organization.
 2. The deploy workflow (`.gitea/workflows/deploy.yml`, from the template) runs on the box.
-3. `harness-app provision <slug>` validates the manifest and Compose file and creates or confirms the database, cache user, bucket, env file, route, SSO application and inventory record.
+3. `occ-app provision <slug>` validates the manifest and Compose file and creates or confirms the database, cache user, bucket, env file, route, SSO application and inventory record.
 4. The workflow builds and starts the app and waits for its healthcheck through the proxy.
 5. A failed step fails the run with the reason; fix it and push again.
 
