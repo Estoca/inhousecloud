@@ -1,5 +1,5 @@
 # Authentik and proxy helpers shared by first-run.sh (platform routes) and
-# occ-app.sh (one route per app). bash 3.2 compatible. Sourced, never executed.
+# ihc-app.sh (one route per app). bash 3.2 compatible. Sourced, never executed.
 #
 # The caller sources common.sh first, sets AK (Authentik API base) and NPM (proxy
 # admin API base), and may define record() to collect the resources it touches.
@@ -124,11 +124,11 @@ npm_login() {
 }
 
 # ensure_internal_certificate CERT KEY: the cloud wildcard certificate (scripts/lib/tls.sh)
-# as a custom certificate on the proxy, nice name "occ internal wildcard". Uploaded on
+# as a custom certificate on the proxy, nice name "ihc internal wildcard". Uploaded on
 # every run, so a renewed file reaches nginx; the hosts are reconciled after it. Prints the
 # certificate id. The key goes up as a multipart file, never on a command line.
 ensure_internal_certificate() {
-  local name="occ internal wildcard" id out code
+  local name="ihc internal wildcard" id out code
   api GET "$NPM/nginx/certificates"
   api_ok || die "list proxy certificates: HTTP $API_CODE"
   id="$(printf '%s' "$API_BODY" | jsonq find . nice_name "$name" id)"
@@ -153,7 +153,7 @@ for h in json.load(sys.stdin):
         v=h.get(sys.argv[2]); print("" if v is None else v); break' "$1" "$2"
 }
 
-FORWARD_AUTH_TEMPLATE='# Open Company Cloud: forward auth through the Authentik embedded outpost.
+FORWARD_AUTH_TEMPLATE='# InHouseCloud: forward auth through the Authentik embedded outpost.
 proxy_buffers 8 16k;
 proxy_buffer_size 32k;
 set $authentik_upstream http://authentik-server:9000;
@@ -238,7 +238,7 @@ ensure_admin_tool() {
 }
 
 # ensure_admin_binding APP_PK GROUP_PK LABEL: the application's only binding is GROUP_PK;
-# bindings to any other group (e.g. occ-users from an older install) are removed.
+# bindings to any other group (e.g. ihc-users from an older install) are removed.
 ensure_admin_binding() {
   local pk
   api GET "$AK/policies/bindings/?target=$1"

@@ -1,6 +1,6 @@
 # Push to main is the deploy (docs/gitops-flow.md). The job runs on the box, on the
-# runner labelled occ-deploy, inside the cloud deployer image: it has the Docker
-# socket, the occ network and the install directory (OCC_INSTALL_DIR).
+# runner labelled ihc-deploy, inside the cloud deployer image: it has the Docker
+# socket, the ihc network and the install directory (IHC_INSTALL_DIR).
 name: deploy
 
 on:
@@ -12,26 +12,26 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: occ-deploy
+    runs-on: ihc-deploy
     timeout-minutes: 20
     env:
       APP_SLUG: __APP_SLUG__
     steps:
       - name: Check out the pushed commit
         env:
-          OCC_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: occ-app checkout
+          IHC_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ihc-app checkout
 
       - name: Provision database, Redis, env file, route and SSO
-        run: occ-app provision "$APP_SLUG"
+        run: ihc-app provision "$APP_SLUG"
 
-      - name: Build and start on the occ network
+      - name: Build and start on the ihc network
         run: |
-          COMPANY_ENV_FILE="$OCC_INSTALL_DIR/apps/$APP_SLUG/.env" \
+          COMPANY_ENV_FILE="$IHC_INSTALL_DIR/apps/$APP_SLUG/.env" \
           docker compose -p "$APP_SLUG" \
             -f docker-compose.yml \
-            -f "$OCC_INSTALL_DIR/apps/$APP_SLUG/compose.occ.yml" \
+            -f "$IHC_INSTALL_DIR/apps/$APP_SLUG/compose.ihc.yml" \
             up -d --build --remove-orphans
 
       - name: Wait for the healthcheck in company-app.yaml
-        run: occ-app wait "$APP_SLUG" --timeout 240
+        run: ihc-app wait "$APP_SLUG" --timeout 240

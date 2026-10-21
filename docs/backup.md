@@ -1,6 +1,6 @@
 # Backup
 
-The minimum backup of [`install-design.md`](install-design.md#backup), as built. One script, [`scripts/occ-backup.sh`](../scripts/occ-backup.sh), run on a schedule by a small container, writing an encrypted restic repository and a status file the portal reads.
+The minimum backup of [`install-design.md`](install-design.md#backup), as built. One script, [`scripts/ihc-backup.sh`](../scripts/ihc-backup.sh), run on a schedule by a small container, writing an encrypted restic repository and a status file the portal reads.
 
 ## What a run does
 
@@ -13,7 +13,7 @@ The minimum backup of [`install-design.md`](install-design.md#backup), as built.
 7. Applies retention per item (`restic forget --group-by host,tags --prune`): `BACKUP_RETENTION_DAILY` / `WEEKLY` / `MONTHLY`, 7/4/12 by default. Each dump, the volumes and the config are their own group, so one item never pushes another out.
 8. Writes the manifest `reports/runs/<run_id>.json` (every item with its snapshot id; dumps with sha256 and size) and the status file. The last 100 manifests are kept.
 
-The destination is a host directory: the interactive installer asks for it right after the Gitea organization; in a config file it is `backup.destination`; `OCC_BACKUP_DESTINATION` at install time wins over both; it is kept as `BACKUP_DESTINATION` in `.env`; default `<install-dir>/backups`. Point it at another disk or mount: preflight warns when it is on the same disk as the installation, and warns when it is not writable.
+The destination is a host directory: the interactive installer asks for it right after the Gitea organization; in a config file it is `backup.destination`; `IHC_BACKUP_DESTINATION` at install time wins over both; it is kept as `BACKUP_DESTINATION` in `.env`; default `<install-dir>/backups`. Point it at another disk or mount: preflight warns when it is on the same disk as the installation, and warns when it is not writable.
 
 ## The status file
 
@@ -48,9 +48,9 @@ The destination is a host directory: the interactive installer asks for it right
 From the host, with the install directory:
 
 ```bash
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud run
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud verify --latest [--json]
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud status [--json]
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud run
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud verify --latest [--json]
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud status [--json]
 ```
 
 On the host the script only forwards to the backup container (`docker compose exec`, or a one-off `run` when the container is stopped), so the host needs no restic and no Postgres client.
@@ -68,7 +68,7 @@ Why not the host's cron: it works on Linux without root, but it would need resti
 The host-cron alternative, if you prefer it, is one line in your user's crontab (`crontab -e`). Do not also leave the sidecar's schedule on, or the lock will refuse the second run.
 
 ```cron
-0 2 * * * /path/to/open-company-cloud/scripts/occ-backup.sh --install-dir /opt/open-company-cloud run >> /opt/open-company-cloud/backups/reports/cron.log 2>&1
+0 2 * * * /path/to/inhousecloud/scripts/ihc-backup.sh --install-dir /opt/inhousecloud run >> /opt/inhousecloud/backups/reports/cron.log 2>&1
 ```
 
 ## Restoring
@@ -76,7 +76,7 @@ The host-cron alternative, if you prefer it, is one line in your user's crontab 
 Run these inside the container, where restic and the key are present:
 
 ```bash
-docker compose --project-directory /opt/open-company-cloud -f /opt/open-company-cloud/compose.yml exec backup sh
+docker compose --project-directory /opt/inhousecloud -f /opt/inhousecloud/compose.yml exec backup sh
 restic snapshots --tag item:shared-postgres__gitea.dump        # pick a snapshot
 restic dump <snapshot> /shared-postgres__gitea.dump > /tmp/gitea.dump
 ```

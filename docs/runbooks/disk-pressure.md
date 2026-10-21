@@ -13,7 +13,7 @@ du -xh --max-depth=2 "$I" 2>/dev/null | sort -h | tail -15
 du -xh --max-depth=1 "$BACKUP_DESTINATION" 2>/dev/null | sort -h
 ```
 
-*(agent)* `occ-ro df` (images, which are used by no container, build cache in use or not, volumes); the disk usage of the host itself needs the human.
+*(agent)* `ihc-ro df` (images, which are used by no container, build cache in use or not, volumes); the disk usage of the host itself needs the human.
 
 Sort what you found into three kinds, and say which is which:
 
@@ -31,7 +31,7 @@ docker image ls --filter dangling=true                    # show first
 docker image rm <id> <id>                                 # only ids from the list shown, never -f
 ```
 
-*(agent)* with `ops.agent.allow_write`: `occ-ro prune-build-cache` (`POST /build/prune` through its Docker API); image removal is not on its allowlist: it shows the list and the human runs it.
+*(agent)* with `ops.agent.allow_write`: `ihc-ro prune-build-cache` (`POST /build/prune` through its Docker API); image removal is not on its allowlist: it shows the list and the human runs it.
 
 Never by reflex: `docker system prune`, `docker image prune -a`, `docker volume prune`. Each removes things that look unused and are not (a stopped app's image, a volume of a service under a profile that is off).
 

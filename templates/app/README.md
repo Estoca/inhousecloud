@@ -18,8 +18,8 @@ Never add `postgres`, `redis` or object storage services, the Docker socket or h
 Commit and push to `main`. That is the whole deploy. The workflow in `.gitea/workflows/deploy.yml` runs on the box:
 
 1. checks out the commit;
-2. `occ-app provision __APP_SLUG__` validates `company-app.yaml` and the compose file, then makes sure of the app's database and role on the shared Postgres, its Redis user and `__APP_SLUG__:` key prefix, its env file, the route `__APP_DOMAIN__` and the SSO application;
-3. builds and starts the app on the occ network;
+2. `ihc-app provision __APP_SLUG__` validates `company-app.yaml` and the compose file, then makes sure of the app's database and role on the shared Postgres, its Redis user and `__APP_SLUG__:` key prefix, its env file, the route `__APP_DOMAIN__` and the SSO application;
+3. builds and starts the app on the ihc network;
 4. waits for `/health` through the proxy.
 
 Check it: the run is green in the repository's Actions tab, `curl http://__APP_DOMAIN__/health` answers 200, and `/` sends an anonymous visitor to the sign-in. When a run fails, its log says what to change; the cloud's `docs/llm-bootstrap.md`, section 4, lists the usual causes.

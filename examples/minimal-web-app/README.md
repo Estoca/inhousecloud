@@ -1,6 +1,6 @@
 # Minimal Web App
 
-Runnable example app for Open Company Cloud.
+Runnable example app for InHouseCloud.
 
 ## Run
 

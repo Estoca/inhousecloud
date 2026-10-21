@@ -7,12 +7,12 @@
 ## Read first
 
 ```bash
-$H/scripts/occ-app.sh list --install-dir "$I"                       # repository, last deployed commit
+$H/scripts/ihc-app.sh list --install-dir "$I"                       # repository, last deployed commit
 docker inspect -f '{{.Config.Image}} {{.Image}} {{.State.StartedAt}}' <slug>-app-1
 docker image ls <slug>-app                                              # the image kept for rollback, if any
 ```
 
-*(agent)* `occ-ro ps`, `occ-ro inspect <slug>-app-1`, `occ-ro gitea /repos/<org>/<slug>/actions/tasks?limit=5`, `occ-ro gitea /repos/<org>/<slug>/commits?sha=main&limit=5`
+*(agent)* `ihc-ro ps`, `ihc-ro inspect <slug>-app-1`, `ihc-ro gitea /repos/<org>/<slug>/actions/tasks?limit=5`, `ihc-ro gitea /repos/<org>/<slug>/commits?sha=main&limit=5`
 
 Answer before acting:
 
@@ -37,13 +37,13 @@ Then one of:
 Never `docker compose up` an app by hand from another directory: the Compose project name comes from the directory unless named, and a second project with the same containers is how a rollout misses the running stack. If a manual start is unavoidable, the deploy job's command is the only form:
 
 ```bash
-cd <checkout of the commit> && COMPANY_ENV_FILE="$I/apps/<slug>/.env" docker compose -p <slug> -f docker-compose.yml -f "$I/apps/<slug>/compose.occ.yml" up -d --build
+cd <checkout of the commit> && COMPANY_ENV_FILE="$I/apps/<slug>/.env" docker compose -p <slug> -f docker-compose.yml -f "$I/apps/<slug>/compose.ihc.yml" up -d --build
 ```
 
 ## Post-checks
 
 ```bash
-$H/scripts/occ-app.sh wait <slug> --install-dir "$I"     # from the app's checkout: health through the proxy, then / to the SSO
+$H/scripts/ihc-app.sh wait <slug> --install-dir "$I"     # from the app's checkout: health through the proxy, then / to the SSO
 ```
 
 Then checks 1 (the run's `head_sha` is the commit asked for), 4, 5, 6 and 7 of the contract. Keep the rollback tag until the next green deploy; remove it then ([disk-pressure](disk-pressure.md)).

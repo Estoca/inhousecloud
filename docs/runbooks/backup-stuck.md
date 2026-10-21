@@ -7,14 +7,14 @@
 ## Read first
 
 ```bash
-$H/scripts/occ-backup.sh --install-dir "$I" status --json     # status, age of the newest success, stale or not
+$H/scripts/ihc-backup.sh --install-dir "$I" status --json     # status, age of the newest success, stale or not
 cat "$BACKUP_DESTINATION/reports/latest-status.json"
 ls -l "$BACKUP_DESTINATION/.lock" 2>/dev/null && cat "$BACKUP_DESTINATION/.lock/"{pid,host,started} 2>/dev/null
 dc ps backup; dc logs --since 24h --tail 50 backup
 df -h "$BACKUP_DESTINATION"; mount | grep -F "$BACKUP_DESTINATION"   # is the destination the disk you think it is
 ```
 
-*(agent)* `occ-ro backup`, `occ-ro logs backup 50`, `occ-ro inspect backup`; the lock and the mount need the human.
+*(agent)* `ihc-ro backup`, `ihc-ro logs backup 50`, `ihc-ro inspect backup`; the lock and the mount need the human.
 
 | What you see | Meaning |
 |---|---|
@@ -33,7 +33,7 @@ dc top backup                                                       # restic and
 docker stats --no-stream "$(dc ps -q backup)"                       # CPU and block I/O, now and in 5 minutes
 ```
 
-*(agent)* `occ-ro docker /containers/<id>/stats` twice, and `occ-ro docker /containers/<id>/top`
+*(agent)* `ihc-ro docker /containers/<id>/stats` twice, and `ihc-ro docker /containers/<id>/top`
 
 - Size and I/O grow: slow, not stuck. Leave it; the hard timeout (`BACKUP_MAX_RUN_MINUTES`) is the ceiling.
 - No growth, no CPU, no I/O, log silent: stuck. Something is blocking a read or a write: the destination (an unmounted or full disk, a network mount that hung), or the host refusing access.
@@ -43,8 +43,8 @@ The cloud's own job cannot hang forever: past `BACKUP_MAX_RUN_MINUTES` it is kil
 ## Verify after any fix
 
 ```bash
-$H/scripts/occ-backup.sh --install-dir "$I" run              # level 3 when in doubt about another live run
-$H/scripts/occ-backup.sh --install-dir "$I" verify --latest  # manifest, checksums, every dump restored and compared, restic check
+$H/scripts/ihc-backup.sh --install-dir "$I" run              # level 3 when in doubt about another live run
+$H/scripts/ihc-backup.sh --install-dir "$I" verify --latest  # manifest, checksums, every dump restored and compared, restic check
 ```
 
 Smoke test 14 is the same `verify`. Report the snapshot id, its age, and what `verify` checked.

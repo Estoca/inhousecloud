@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# occ-operator: what an operator (a human or the agent profile's agent) reads first.
+# ihc-operator: what an operator (a human or the agent profile's agent) reads first.
 #
-#   occ-operator brief [--json] [--out DIR] [--no-live]
+#   ihc-operator brief [--json] [--out DIR] [--no-live]
 #       The map of the box, generated from state.json, the rendered compose.yml,
 #       inventory.json and `docker ps`: for each service where its configuration lives,
 #       how it is changed, its Compose project, internal port, dependencies, health and
 #       what healthy looks like; the apps with owners; the access matrix (variable names
 #       and where they live, never values); the commands. Markdown by default.
-#   occ-operator agent-sync
+#   ihc-operator agent-sync
 #       Refresh the agent's workspace (<install-dir>/agent/): AGENTS.md, the operator
-#       contract, the runbooks, occ-ro and the brief. install.sh runs it; so does
-#       occ-app provision after each deploy (the brief only).
+#       contract, the runbooks, ihc-ro and the brief. install.sh runs it; so does
+#       ihc-app provision after each deploy (the brief only).
 #
-# Options: --install-dir DIR (default $OCC_INSTALL_DIR, else /opt/open-company-cloud).
+# Options: --install-dir DIR (default $IHC_INSTALL_DIR, else /opt/inhousecloud).
 # Read only, except the files it writes under <install-dir>/agent/. Contract:
 # docs/operator-contract.md.
 set -eu
-OCC_ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+IHC_ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$OCC_ROOT/scripts/lib/common.sh"
+. "$IHC_ROOT/scripts/lib/common.sh"
 
-INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
+INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 ARGS=""
 while [ $# -gt 0 ]; do
@@ -41,19 +41,19 @@ AGENT_DIR="$INSTALL_DIR/agent"
 case "$CMD" in
   brief)
     # shellcheck disable=SC2086
-    $PY "$OCC_LIB/operatorbrief.py" "$INSTALL_DIR" "$OCC_ROOT" $ARGS
+    $PY "$IHC_LIB/operatorbrief.py" "$INSTALL_DIR" "$IHC_ROOT" $ARGS
     ;;
   agent-sync)
     [ -d "$AGENT_DIR" ] || die "no agent workspace at $AGENT_DIR (the agent profile is off)"
     ref="$AGENT_DIR/reference"
     mkdir -p "$ref/runbooks" "$ref/bin" "$AGENT_DIR/workspace"
-    if [ -d "$OCC_ROOT/docs/runbooks" ]; then
-      cp "$OCC_ROOT/docs/operator-contract.md" "$ref/operator-contract.md"
-      rm -f "$ref/runbooks/"*.md; cp "$OCC_ROOT/docs/runbooks/"*.md "$ref/runbooks/"
-      cp "$OCC_ROOT/docker/agent/occ-ro.mjs" "$ref/bin/occ-ro"; chmod 755 "$ref/bin/occ-ro"
-      cp "$OCC_ROOT/docker/agent/AGENTS.md" "$AGENT_DIR/workspace/AGENTS.md"
+    if [ -d "$IHC_ROOT/docs/runbooks" ]; then
+      cp "$IHC_ROOT/docs/operator-contract.md" "$ref/operator-contract.md"
+      rm -f "$ref/runbooks/"*.md; cp "$IHC_ROOT/docs/runbooks/"*.md "$ref/runbooks/"
+      cp "$IHC_ROOT/docker/agent/ihc-ro.mjs" "$ref/bin/ihc-ro"; chmod 755 "$ref/bin/ihc-ro"
+      cp "$IHC_ROOT/docker/agent/AGENTS.md" "$AGENT_DIR/workspace/AGENTS.md"
     fi
-    $PY "$OCC_LIB/operatorbrief.py" "$INSTALL_DIR" "$OCC_ROOT" --out "$ref" >/dev/null
+    $PY "$IHC_LIB/operatorbrief.py" "$INSTALL_DIR" "$IHC_ROOT" --out "$ref" >/dev/null
     chmod -R a+rX "$ref"; chmod 644 "$AGENT_DIR/workspace/AGENTS.md" 2>/dev/null || true
     ok "agent workspace refreshed: $AGENT_DIR/workspace/AGENTS.md, $ref (contract, runbooks, brief)"
     ;;

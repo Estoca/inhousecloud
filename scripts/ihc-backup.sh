@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Minimal backup job (docs/install-design.md "Backup", docs/backup.md).
 #
-#   scripts/occ-backup.sh [--install-dir DIR] run                 dump + volumes + config into restic, apply retention
-#   scripts/occ-backup.sh [--install-dir DIR] verify --latest [--json]   check the newest run: manifest, checksums, snapshots, repository
-#   scripts/occ-backup.sh [--install-dir DIR] status [--json]    the status file the portal reads, plus its age
+#   scripts/ihc-backup.sh [--install-dir DIR] run                 dump + volumes + config into restic, apply retention
+#   scripts/ihc-backup.sh [--install-dir DIR] verify --latest [--json]   check the newest run: manifest, checksums, snapshots, repository
+#   scripts/ihc-backup.sh [--install-dir DIR] status [--json]    the status file the portal reads, plus its age
 #
 # The work happens inside the `backup` container (docker/backup/Dockerfile: restic,
-# pg_dump, bash, python3), where this same file is installed as `occ-backup`.
+# pg_dump, bash, python3), where this same file is installed as `ihc-backup`.
 # On the host this script is a thin wrapper that execs it there. In the container:
-#   /occ   the install directory, read-only   (config, .env, compose.yml, state.json)
+#   /ihc   the install directory, read-only   (config, .env, compose.yml, state.json)
 #   /backups   BACKUP_DESTINATION, read-write     (restic/ repository and reports/)
 #   /volumes   the named volumes, read-only
 # Every dump streams from pg_dump straight into `restic backup --stdin`: nothing is
@@ -28,11 +28,11 @@ die()   { fail "$*"; exit 1; }
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ============================================================ host wrapper
-if [ -z "${OCC_BACKUP_CONTAINER:-}" ]; then
-  OCC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${IHC_BACKUP_CONTAINER:-}" ]; then
+  IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
   # shellcheck source=lib/common.sh
-  . "$OCC_ROOT/scripts/lib/common.sh"
-  INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
+  . "$IHC_ROOT/scripts/lib/common.sh"
+  INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
   ARGS=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -52,16 +52,16 @@ if [ -z "${OCC_BACKUP_CONTAINER:-}" ]; then
   set -- $ARGS
   [ $# -gt 0 ] || { usage; exit 1; }
   if [ -n "$(dc ps -q --status running backup 2>/dev/null)" ]; then
-    exec docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" exec -T backup occ-backup "$@"
+    exec docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" exec -T backup ihc-backup "$@"
   else
-    exec docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" run --rm --no-deps -T --entrypoint occ-backup backup "$@"
+    exec docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" run --rm --no-deps -T --entrypoint ihc-backup backup "$@"
   fi
 fi
 
 # ============================================================ in container
 umask 022   # reports/ is read by the portal: 0755 directories, 0644 files
 BACKUPS=/backups
-OCC=/occ
+IHC=/ihc
 VOLUMES=/volumes
 REPORTS="$BACKUPS/reports"
 RUNS="$REPORTS/runs"
@@ -69,7 +69,7 @@ STATUS_FILE="$REPORTS/latest-status.json"
 SUCCESS_FILE="$REPORTS/latest-success.json"
 LOCK_DIR="$BACKUPS/.lock"
 export RESTIC_REPOSITORY="$BACKUPS/restic"
-export RESTIC_HOST=occ
+export RESTIC_HOST=ihc
 export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/restic}"
 MAX_MIN="${BACKUP_MAX_RUN_MINUTES:-240}"
 MAX_AGE_H="${BACKUP_MAX_AGE_HOURS:-26}"
@@ -219,7 +219,7 @@ dump_stream() { # NAME KIND CMD...
   log "dump $name"
   set +e
   "$@" 2>"$err.dump" | $PY "$TMP/hashtee.py" "$sums" | \
-    restic backup --quiet --stdin --stdin-filename "$name" --tag occ --tag "kind:$kind" --tag "item:$name" --json >"$out" 2>"$err"
+    restic backup --quiet --stdin --stdin-filename "$name" --tag ihc --tag "kind:$kind" --tag "item:$name" --json >"$out" 2>"$err"
   local s1=${PIPESTATUS[0]} s2=${PIPESTATUS[1]} s3=${PIPESTATUS[2]}
   set -e
   if [ "$s1" -ne 0 ] || [ "$s2" -ne 0 ] || [ "$s3" -ne 0 ]; then
@@ -240,7 +240,7 @@ path_backup() { # NAME KIND "PATH PATH..." [EXCLUDE...]
   for x in "$@"; do excl="$excl --exclude $x"; done
   log "backup $name: $paths"
   # shellcheck disable=SC2086
-  if ! restic backup --quiet --tag occ --tag "kind:$kind" --tag "item:$name" --json $excl $paths >"$out" 2>"$err"; then
+  if ! restic backup --quiet --tag ihc --tag "kind:$kind" --tag "item:$name" --json $excl $paths >"$out" 2>"$err"; then
     fail "$name: restic failed"; sed 's/^/      /' "$err" | tail -n 20 >&2; return 1
   fi
   snap="$(grep '"message_type":"summary"' "$out" | tail -n 1 | $PY -c 'import json,sys;print(json.load(sys.stdin).get("snapshot_id",""))')"
@@ -269,7 +269,7 @@ dump_instance() { # LABEL HOST USER PASSWORD
 cmd__run() { # RUN_ID STARTED   (child of cmd_run, under the timeout)
   local run="$1" started="$2" finished manifest sha nitems bytes snap vols v
   LAST_SNAP=""
-  TMP="$(mktemp -d /tmp/occ-backup.XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
+  TMP="$(mktemp -d /tmp/ihc-backup.XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
   cat > "$TMP/hashtee.py" <<'EOF'
 import hashlib, sys
 h = hashlib.sha256(); n = 0
@@ -306,7 +306,7 @@ EOF
   done
   if [ -n "$vols" ]; then path_backup volumes volumes "${vols# }" || return 1; fi
   # 3. The cloud configuration: the install directory without backups/ and local/.
-  path_backup config config "$OCC" "$OCC/backups" "$OCC/local" "$OCC/portal-placeholder/node_modules" || return 1
+  path_backup config config "$IHC" "$IHC/backups" "$IHC/local" "$IHC/portal-placeholder/node_modules" || return 1
   snap="$LAST_SNAP"
   # 4. Retention, grouped by host and tags (one group per dump name, one for volumes, one for config).
   log "retention: ${KEEP_D} daily, ${KEEP_W} weekly, ${KEEP_M} monthly"
@@ -336,9 +336,9 @@ cmd_verify() {
     checks="$checks,{\"name\":\"$1\",\"status\":\"$2\",\"detail\":$($PY -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$3")}"
     if [ "$2" = pass ]; then ok "$1: $3"; else fail "$1: $3"; errors=$((errors+1)); fi
   }
-  TMP="$(mktemp -d /tmp/occ-verify.XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
+  TMP="$(mktemp -d /tmp/ihc-verify.XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
   # 1. latest run: the status file, and its outcome
-  if [ ! -f "$STATUS_FILE" ]; then check status-file fail "no $STATUS_FILE: no run yet (occ-backup run)"
+  if [ ! -f "$STATUS_FILE" ]; then check status-file fail "no $STATUS_FILE: no run yet (ihc-backup run)"
   else
     reap >/dev/null 2>&1 || true
     st="$(json_get "$STATUS_FILE" status)"; run="$(json_get "$STATUS_FILE" run_id)"

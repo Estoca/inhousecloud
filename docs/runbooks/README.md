@@ -18,13 +18,13 @@ One file per operation, for the operator of a cloud box ([`../operator-contract.
 Commands run **on the box, as the user that installed it**, unless marked *(agent)*.
 
 ```bash
-I=/opt/open-company-cloud          # the install directory (state.json, .env, compose.yml)
-H=~/open-company-cloud         # the repository checkout install.sh ran from
+I=/opt/inhousecloud          # the install directory (state.json, .env, compose.yml)
+H=~/inhousecloud         # the repository checkout install.sh ran from
 dc() { docker compose --project-directory "$I" -f "$I/compose.yml" "$@"; }
 set -a; . "$I/.env"; set +a          # only for the commands that say so: it puts secrets in your shell
 ```
 
-- A core service is a service of the Compose project `occ` (`dc ps`). An app is the Compose project named by its slug (`docker compose -p <slug> ps`); its container is `<slug>-app-1`.
-- `scripts/occ-operator.sh brief --install-dir "$I"` prints the map of the box: read it before anything else.
-- *(agent)* lines are for the agent profile's container, where `occ-ro` replaces `docker` and `curl` reaches the services by name on the `occ` network (`http://proxy/` with a `Host` header is a request through the proxy). What the container cannot run, the agent asks a human to run, quoting the line.
+- A core service is a service of the Compose project `ihc` (`dc ps`). An app is the Compose project named by its slug (`docker compose -p <slug> ps`); its container is `<slug>-app-1`.
+- `scripts/ihc-operator.sh brief --install-dir "$I"` prints the map of the box: read it before anything else.
+- *(agent)* lines are for the agent profile's container, where `ihc-ro` replaces `docker` and `curl` reaches the services by name on the `ihc` network (`http://proxy/` with a `Host` header is a request through the proxy). What the container cannot run, the agent asks a human to run, quoting the line.
 - Never print a value from `.env` or an app's env file. `python3 "$H/scripts/lib/envfile.py" keys FILE` lists names.
