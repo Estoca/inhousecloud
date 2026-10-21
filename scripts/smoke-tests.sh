@@ -184,6 +184,12 @@ t16_push() { # WORKDIR MESSAGE -> sets T16_SHA, T16_ST, T16_RUN
   git -C "$1" add -A
   git -C "$1" -c user.name=ihc-smoke -c user.email="$GITEA_ADMIN_EMAIL" commit -q -m "$2" 2>/dev/null
   T16_SHA="$(git -C "$1" rev-parse HEAD)"; T16_ST=""
+  # An outside operator's cold install saw "Authentication failed" on this first push and
+  # none a moment later: wait (30 s at most) until Git answers with the token before pushing.
+  git_auth_probe "$T16_REPO" "$T16_AP" 30 2 \
+    || { T16_ST="git not ready after $GIT_PROBE_TRIES tries over 30s: $GIT_PROBE_ERR"; return 1; }
+  [ "$GIT_PROBE_TRIES" -le 1 ] || log "16. git answered with the token after $GIT_PROBE_TRIES tries"
+  T16_TRIES="$GIT_PROBE_TRIES"
   t0=$(date +%s)
   GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git -C "$1" push -q "$T16_REPO" HEAD:main 2>"$1.push.log" \
     || { T16_ST="push failed: $(tail -n 1 "$1.push.log")"; return 1; }
@@ -265,7 +271,7 @@ print("; ".join(bad) or "ok %d apps (schema %s)" % (len(apps), d.get("schema_ver
 }
 
 t16() {
-  local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 removed
+  local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 tries1 removed
   T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
   have git || { result 16 app-deploy fail "git not found on the box"; return; }
   work="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke16.XXXXXX")"
@@ -287,7 +293,7 @@ t16() {
   if ! t16_push "$work/$slug" "smoke test 16"; then
     result 16 app-deploy fail "deploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started after ${T16_RUN:-?}s}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
   fi
-  run1="$T16_RUN"; t16_mark || true
+  run1="$T16_RUN"; tries1="$T16_TRIES"; t16_mark || true
   body="$(curl -sS --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") -w '\n%{http_code}' "$(proxy_url "$slug.$BASE_DOMAIN" /health)" 2>/dev/null || true)"
   code="${body##*$'\n'}"
   [ "$code" = 200 ] && [ "$(printf '%s' "${body%$'\n'*}" | jsonq get ok)" = true ] || { result 16 app-deploy fail "run green but https://$slug.$BASE_DOMAIN/health answered $code through the proxy"; rm -rf "$work"; return; }
@@ -313,7 +319,7 @@ t16() {
     warn "16. $slug was left on the box: $removed"
   fi
   rm -f "${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log"
-  result 16 app-deploy pass "push to green run in ${run1}s, redeploy in ${T16_RUN}s kept the password; /health 200, / to the SSO, $db owned by its role; $removed"
+  result 16 app-deploy pass "git probe passed in ${tries1:-1} try(ies), push to green run in ${run1}s, redeploy in ${T16_RUN}s kept the password; /health 200, / to the SSO, $db owned by its role; $removed"
 }
 t16
 [ "$T22_DONE" = true ] || t22 ""

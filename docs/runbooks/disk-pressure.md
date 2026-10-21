@@ -4,6 +4,18 @@
 **Level.** 1 to read. 2 to prune the Docker build cache, and to remove an image proved unreferenced, one by one, under an instruction. 3 for everything else: volumes, data, backups, images still referenced, anything outside Docker.
 **Preconditions.** None to read.
 
+## What the doctor's `disk` check says
+
+| Free space | Percent used | Result |
+|---|---|---|
+| below 2 GiB | any | `fail` |
+| below 10 GiB (the installer's minimum) | any | `warn`, the free space is the reason |
+| 10 to 15 GiB | 85 % or more | `warn`, the percentage with the space near the minimum |
+| 15 GiB or more | 85 % or more | `ok`, with a note ("88 % used, 26.8 GiB free") |
+| 10 GiB or more | below 85 % | `ok` |
+
+The action line says which of the two criteria fired.
+
 ## Read first, always
 
 ```bash
