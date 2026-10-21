@@ -868,9 +868,7 @@ stage_secrets() {
   env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-ihc_platform}"
   env_default PORTAL_DB_ROLE "${CFG_postgres__portal__role:-ihc_platform}"
   env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-IHC_PLATFORM_DATABASE_PASSWORD}" 32
-  # The real portal (portal/ of this checkout, copied by the foundation stage). An install
-  # made before it existed had ./portal-placeholder here: that value is replaced.
-  v="$(env_get PORTAL_BUILD_CONTEXT)"; case "$v" in ""|./portal-placeholder) env_set PORTAL_BUILD_CONTEXT ./portal ;; esac
+  env_default PORTAL_BUILD_CONTEXT ./portal   # portal/ of this checkout, copied by the foundation stage
   env_default PORTAL_SUPER_ADMIN_EMAILS "${CFG_portal__super_admin_emails:-$ADMIN_EMAIL}"
   # Garage: the RPC secret must be 32 bytes in hex. Generated even with storage off, so
   # turning the profile on later is only a config change.
@@ -918,10 +916,6 @@ stage_secrets() {
   env_default WETTY_SSH_HOST host.docker.internal
   env_set FILEBROWSER_APP_DATA_DIR "$FB_APP_DATA"
   env_set FILEBROWSER_REPORTS_DIR "$FB_REPORTS"
-  # The portal reads the backup status files (docs/backup.md) from here, read only; the
-  # directory exists even with backup off so the mount never creates it as root.
-  env_set PORTAL_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
-  mkdir -p "$BACKUP_DEST/reports" 2>/dev/null && chmod 755 "$BACKUP_DEST/reports" 2>/dev/null || warn "cannot create $BACKUP_DEST/reports: the portal shows no backup status until it exists"
   env_default AUTHENTIK_SMOKE_USER ihc-smoke-user
   env_secret AUTHENTIK_SMOKE_USER_PASSWORD IHC_AUTHENTIK_SMOKE_USER_PASSWORD 32
   agent_env
@@ -1052,6 +1046,14 @@ copy_portal() {
 stage_foundation() {
   cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   copy_portal || { fail "could not copy $IHC_ROOT/portal into $INSTALL_DIR/portal"; return 1; }
+  # Set here, not with the other values: updating the cloud is `--apply --from foundation`,
+  # which runs no secrets stage. An install made before the real portal had the placeholder
+  # as its build context. The portal reads the backup status files (docs/backup.md) from
+  # the reports directory, read only; it exists even with backup off, so the mount never
+  # creates it as root.
+  case "$(env_get PORTAL_BUILD_CONTEXT)" in ""|./portal-placeholder) env_set PORTAL_BUILD_CONTEXT ./portal ;; esac
+  env_set PORTAL_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
+  mkdir -p "$BACKUP_DEST/reports" 2>/dev/null && chmod 755 "$BACKUP_DEST/reports" 2>/dev/null || warn "cannot create $BACKUP_DEST/reports: the portal shows no backup status until it exists"
   mkdir -p "$INSTALL_DIR/docker-ro"
   cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
   chmod 755 "$INSTALL_DIR/docker-ro"; chmod 644 "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
