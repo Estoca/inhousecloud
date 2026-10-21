@@ -390,6 +390,27 @@ On the same box, `install.sh --plan` of the new commit into a fresh directory re
 
 The names in this record are the ones of that day (`occ`); the rename of 2026-10-21 to InHouseCloud (`ihc`) has its own record below.
 
+## Rename run (InHouseCloud, 2026-10-21)
+
+The second rename, to InHouseCloud (`ihc`), on a clean box, and the one-version compatibility with the Open Company Cloud names ([`install-design.md`](install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud)). On 2026-10-21.
+
+**Setup.** A new Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.2 rootless), 2 CPU, 6 GiB, 30 GiB, the branch cloned onto the box. `bootstrap/config.example.yaml` with `storage`, `ops` (terminal key installed) and `agent` on (`ops.agent.model: anthropic/claude-sonnet-5-5`, LLM key and Telegram token passed to `install.sh` through its environment, read from a file outside the repository over stdin), backup on, `local` ingress.
+
+| Step | Result |
+|---|---|
+| `install.sh --non-interactive`, all stages | 421 s, exit 0; smoke tests in the stage **21 passed, 0 failed, 0 skipped** (test 16: push to green run in 15 s, redeploy in 11 s) |
+| `install.sh status` | `InHouseCloud at /opt/inhousecloud: completed`, 18 of 18 services healthy, backup 0.0 h old, no apps |
+| `scripts/smoke-tests.sh` again | 21 passed, 0 failed, 0 skipped in 50 s (test 16: push to green in 10 s; test 19: Garage buckets and keys, PUT+GET 200, 403 across keys) |
+| `ihc-app new pedidos --push`, then `ihc-app wait pedidos` from the app folder | exit 0; `/health` 200 and `/` 302 to the sign-in through the proxy; `ihc-app list` shows it; container `pedidos-app-1` |
+| `ihc-backup.sh verify --latest` | `verify: ok` (`restic check` without errors) |
+| `ihc-operator.sh brief` | generated |
+| `install.sh --plan` into a fresh directory | stopped at the preflight (directory not created yet, ports 80 and 443 held by the running install, as it should) and created nothing: the directory does not exist afterwards |
+| Names on the box | Compose project `ihc` (18 containers `ihc-*-1`), networks `ihc`, `ihc-ops`, `ihc-agent`, volumes `ihc_*`, images `ihc-deployer:local`, `ihc-backup:local`, `ihc-portal:placeholder`, smoke repository `ihc-smoke.git`, smoke user `ihc-smoke-user`, databases `ihc_platform`; no `occ` or `harness` in `.env`, the rendered `compose.yml`, `state.json`, any container name or the installer's output |
+
+**Old names, a config from Open Company Cloud.** On the same box, `install.sh --plan` with the `bootstrap/config.example.yaml` of the day before (unchanged) and `OCC_BACKUP_DESTINATION` exported: one warning for `OCC_BACKUP_DESTINATION` (read as `IHC_BACKUP_DESTINATION`), one listing the 10 `*_env` names read as `IHC_*`, one listing the 6 values kept with the old defaults (`install.directory`, the tailnet hostname, both groups, the portal database and role). The `HARNESS_*` names are no longer read.
+
+**Not revalidated.** `private` ingress (Tailscale): on a second clean VM (2 CPU, 4 GiB) the install reached `proxy_ingress` with the new names (`ihc-tailscale-1`, volume `ihc_tailscale-state`) and stopped there because the Tailscale auth key available for the test was refused by the control plane (state `NeedsLogin`): the key, not the rename. The operator agent in conversation (Telegram) was not exercised either; smoke test 20 covered the agent container, its Docker API and the brief. Both VMs were deleted.
+
 ## Onboarding run
 
 What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.
