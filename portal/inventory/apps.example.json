@@ -1,0 +1,51 @@
+{
+  "source": "inventory/apps.example.json",
+  "updated_at": "2026-10-16T00:00:00.000Z",
+  "_comment": "Exemplo do inventario. O arquivo real fica fora do repo e da imagem; aponte INVENTORY_PATH para ele. Campos opcionais por app: repo_url, target, docker_stack, owner_email, healthcheck_path (runtime.healthcheck.path do manifesto).",
+  "apps": [
+    {
+      "slug": "portal",
+      "domain": "portal.cloud.localhost",
+      "category": "internal_app",
+      "port": 8006,
+      "target": "inhousecloud-portal-app",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "admin@example.com",
+      "repo_url": "http://git.cloud.localhost/company/inhousecloud-portal",
+      "healthcheck_path": "/api/health"
+    },
+    {
+      "slug": "pedidos",
+      "domain": "pedidos.cloud.localhost",
+      "category": "internal_app",
+      "port": 8200,
+      "target": "pedidos-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "admin@example.com",
+      "repo_url": "http://git.cloud.localhost/company/pedidos",
+      "healthcheck_path": "/health"
+    },
+    {
+      "slug": "example-app",
+      "domain": "example-app.cloud.localhost",
+      "category": "disabled",
+      "port": 8090,
+      "target": "externo ou nao mapeado no Docker atual",
+      "status": [
+        "SEM_RESPOSTA_LOCAL",
+        "NAO_MAPEADO"
+      ]
+    }
+  ],
+  "docker_containers": [
+    {
+      "name": "authentik-postgresql-1",
+      "category": "infra",
+      "owner_email": "admin@example.com"
+    }
+  ]
+}

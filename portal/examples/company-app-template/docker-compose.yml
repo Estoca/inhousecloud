@@ -1,0 +1,17 @@
+services:
+  app:
+    build:
+      context: .
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      COMMIT_SHA: ${COMMIT_SHA:-unknown}
+    network_mode: bridge
+    ports:
+      - "${HOST_PORT:-8100}:${APP_PORT:-3000}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.APP_PORT || 3000) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

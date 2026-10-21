@@ -1,0 +1,33 @@
+name: Test
+
+# So CI: confere nomes privados, valida o manifesto de exemplo, builda o frontend e roda os testes.
+# O deploy do portal nao vive aqui.
+on:
+  push:
+    branches:
+      - main
+      - export
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for private names
+        run: sh scripts/check-private-names.sh
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate platform manifest
+        run: npm run validate
+
+      - name: Validate minimal Docker app example
+        run: node src/cli.js validate examples/minimal-docker-app/company-app.yaml
+
+      - name: Run tests
+        run: npm test

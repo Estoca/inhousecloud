@@ -1,0 +1,50 @@
+schema_version: 1
+
+app:
+  slug: company-app-template
+  name: Company App Template
+  owner_email: platform@example.com
+  description: Template oficial para apps internos publicados em cloud.localhost.
+
+runtime:
+  type: docker-compose
+  compose_file: docker-compose.yml
+  service: app
+  healthcheck:
+    type: http
+    path: /health
+    expected_status: 200
+
+deploy:
+  enabled: true
+  domain: template.cloud.localhost
+  port: auto
+  env_file: .env
+  env_example: .env.example
+
+auth:
+  required: true
+  provider: authentik
+  allowed_domains:
+    - example.com
+
+agent_interface:
+  mcp:
+    provider: mcp-gateway
+    tools_path: /api/internal/mcp/v1/tools
+    execute_path: /api/internal/mcp/v1/tools/{tool}/execute
+    authentication: actor_jwt
+    audience: company-app-template.internal-mcp
+    scopes:
+      - company-app-template.read
+    tools:
+      - name: company_app_template_get_status
+        access: read
+
+database:
+  required: false
+  engine: postgres
+
+checks:
+  build_command: docker compose build
+  test_command: npm test

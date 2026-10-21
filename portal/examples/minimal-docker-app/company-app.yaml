@@ -1,0 +1,37 @@
+schema_version: 1
+
+app:
+  slug: minimal-docker-app
+  name: Minimal Docker App
+  owner_email: platform@example.com
+  description: App minimo para validar o contrato do portal do InHouseCloud.
+
+runtime:
+  type: docker-compose
+  compose_file: docker-compose.yml
+  service: app
+  healthcheck:
+    type: http
+    path: /health
+    expected_status: 200
+
+deploy:
+  enabled: true
+  domain: minimal-docker-app.cloud.localhost
+  port: auto
+  env_file: .env
+  env_example: .env.example
+
+auth:
+  required: true
+  provider: authentik
+  allowed_domains:
+    - example.com
+
+database:
+  required: false
+  engine: postgres
+
+checks:
+  build_command: docker compose build
+  test_command: node --test
