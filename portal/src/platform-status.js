@@ -352,7 +352,7 @@ export function createPlatformStatus({
 
   async function collect() {
     const config = platformConfigFromEnv(env);
-    const dockerState = listDockerContainersFn();
+    const dockerState = await listDockerContainersFn();
     const has = (profile) => config.profiles.includes(profile);
     const container = (label, kind, service) => Promise.resolve(checkContainer(label, kind, service, dockerState, config.project));
     const checks = [

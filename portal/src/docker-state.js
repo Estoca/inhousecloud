@@ -1,98 +1,8 @@
-import { spawnSync } from 'node:child_process';
+import { dockerGet, normalizeApiContainer, normalizeApiStats } from './docker-api.js';
 
-// Docker pelo CLI. No cloud o container do portal nao tem o socket: DOCKER_HOST aponta
-// para docker-ro (tcp://docker-ro:2375), a API so leitura do cloud, onde `docker ps -a`,
-// `docker ps --size` e `docker stats --no-stream` caem em rotas permitidas.
-
-export function parseDockerPsJsonLines(output) {
-  return output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-function parsePercent(value) {
-  if (value == null) return null;
-  const parsed = Number(String(value).replace('%', '').trim());
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseBytes(value) {
-  if (!value) return null;
-  const match = String(value).trim().match(/^([\d.]+)\s*([kmgtp]?i?b|b)?$/i);
-  if (!match) return null;
-
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount)) return null;
-
-  const unit = (match[2] || 'b').toLowerCase();
-  const multipliers = {
-    b: 1,
-    kb: 1000,
-    mb: 1000 ** 2,
-    gb: 1000 ** 3,
-    tb: 1000 ** 4,
-    pb: 1000 ** 5,
-    kib: 1024,
-    mib: 1024 ** 2,
-    gib: 1024 ** 3,
-    tib: 1024 ** 4,
-    pib: 1024 ** 5,
-  };
-
-  return Math.round(amount * (multipliers[unit] ?? 1));
-}
-
-export function parseDockerStatsJsonLines(output) {
-  return output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-export function parseDockerLabels(labels) {
-  if (typeof labels !== 'string' || labels.trim() === '') return {};
-  return Object.fromEntries(labels
-    .split(',')
-    .map((label) => label.trim())
-    .filter(Boolean)
-    .map((label) => {
-      const separator = label.indexOf('=');
-      if (separator === -1) return [label, ''];
-      return [label.slice(0, separator), label.slice(separator + 1)];
-    }));
-}
-
-export function normalizeContainer(row) {
-  const labels = parseDockerLabels(row.Labels);
-  return {
-    name: row.Names,
-    image: row.Image,
-    state: row.State,
-    status: row.Status,
-    ports: row.Ports,
-    labels,
-    docker_stack: labels['com.docker.compose.project'] || null,
-    docker_service: labels['com.docker.compose.service'] || null,
-  };
-}
-
-export function normalizeContainerStats(row) {
-  const [memUsedRaw, memLimitRaw] = String(row.MemUsage || '').split('/').map((part) => part.trim());
-  return {
-    id: row.ID || row.Container || null,
-    name: row.Name || null,
-    cpu_percent: parsePercent(row.CPUPerc),
-    memory_usage_bytes: parseBytes(memUsedRaw),
-    memory_limit_bytes: parseBytes(memLimitRaw),
-    memory_percent: parsePercent(row.MemPerc),
-    net_io: row.NetIO || null,
-    block_io: row.BlockIO || null,
-    pids: row.PIDs == null || row.PIDs === '' ? null : Number(row.PIDs),
-  };
-}
+// Containers e consumo pelo HTTP da API do Docker (src/docker-api.js). No cloud, a API
+// so leitura do docker-ro: `GET /containers/json?all=1` e, para os que rodam,
+// `GET /containers/ID/stats?stream=0`.
 
 function aggregateContainerResources(containers) {
   const resourceContainers = containers.filter((container) => container.resources);
@@ -123,86 +33,43 @@ function aggregateContainerResources(containers) {
   };
 }
 
-function listDockerStats() {
-  const result = spawnSync('docker', ['stats', '--no-stream', '--format', '{{json .}}'], {
-    encoding: 'utf8',
-    timeout: 10000,
-  });
-
-  if (result.error?.code === 'ENOENT') {
-    return {
-      available: false,
-      error: 'docker_not_found',
-      stats: [],
-    };
-  }
-
-  if (result.error) {
-    return {
-      available: false,
-      error: result.error.message,
-      stats: [],
-    };
-  }
-
-  if (result.status !== 0) {
-    return {
-      available: false,
-      error: [result.stderr, result.stdout].filter(Boolean).join('\n').trim() || `docker stats exited with ${result.status}`,
-      stats: [],
-    };
-  }
-
+async function listDockerStats(containers, options) {
+  const running = containers.filter((container) => container.state === 'running' && container.id);
+  const results = await Promise.allSettled(running.map(async (container) => (
+    normalizeApiStats(container.name, await dockerGet(`/containers/${encodeURIComponent(container.id)}/stats?stream=0`, options))
+  )));
+  const failed = results.filter((item) => item.status === 'rejected');
   return {
-    available: true,
-    stats: parseDockerStatsJsonLines(result.stdout).map(normalizeContainerStats),
+    available: running.length === 0 || failed.length < running.length,
+    error: failed[0]?.reason?.message ?? null,
+    stats: results.filter((item) => item.status === 'fulfilled').map((item) => item.value),
   };
 }
 
-export function listDockerContainers() {
-  const result = spawnSync('docker', ['ps', '-a', '--format', '{{json .}}'], {
-    encoding: 'utf8',
-    timeout: 10000,
-  });
-
-  if (result.error?.code === 'ENOENT') {
+export async function listDockerContainers({ env = process.env, timeoutMs = 10_000 } = {}) {
+  let rows;
+  try {
+    rows = await dockerGet('/containers/json?all=1', { env, timeoutMs });
+  } catch (error) {
     return {
       available: false,
-      error: 'docker_not_found',
+      error: error.code === 'ENOENT' ? 'docker_not_found' : error.message,
       containers: [],
     };
   }
 
-  if (result.error) {
-    return {
-      available: false,
-      error: result.error.message,
-      containers: [],
-    };
-  }
-
-  if (result.status !== 0) {
-    return {
-      available: false,
-      error: [result.stderr, result.stdout].filter(Boolean).join('\n').trim() || `docker exited with ${result.status}`,
-      containers: [],
-    };
-  }
-
-  const statsState = listDockerStats();
+  const containers = rows.map(normalizeApiContainer);
+  const statsState = await listDockerStats(containers, { env, timeoutMs });
   const statsByName = new Map(statsState.stats.map((stats) => [stats.name, stats]));
 
   return {
     available: true,
     resources_available: statsState.available,
     resources_error: statsState.available ? null : statsState.error,
-    containers: parseDockerPsJsonLines(result.stdout).map((row) => {
-      const container = normalizeContainer(row);
-      return {
-        ...container,
-        resources: statsByName.get(container.name) ?? null,
-      };
-    }),
+    containers: containers.map((container) => ({
+      ...container,
+      resources: statsByName.get(container.name) ?? null,
+    })),
   };
 }
 

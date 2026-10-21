@@ -195,7 +195,6 @@ export async function checkHttpHealth(app, {
 
 // A raiz representa a experiencia de acesso do usuario. Diferentemente do
 // healthcheck, ela deve redirecionar anonimos ao Authentik quando o app usa SSO.
-// `status` e a resposta da raiz: a rota existe no proxy quando ela nao e 404.
 export async function checkSsoProtection(app, {
   fetchImpl = proxyGet,
   timeoutMs = Number(process.env.HEALTHCHECK_TIMEOUT_MS || 2500),
@@ -228,7 +227,9 @@ export async function listHttpHealth(apps, options = {}) {
       sso_expected: app.auth_required !== false,
       sso_effective: ssoEffective,
       route_status: sso.status,
-      route_ok: sso.checked ? sso.status !== 404 : null,
+      // A rota existe quando a raiz manda ao SSO ou o health path nao e 404: para um host
+      // que o proxy nao conhece, a raiz responde 200 (a pagina padrao) e o resto 404.
+      route_ok: sso.checked || health.checked ? Boolean(sso.protected) || (health.status != null && health.status !== 404) : null,
     };
   }));
 
@@ -266,8 +267,8 @@ export function enrichAppsWithHealth(apps, healthState) {
         route_ok: check?.route_ok ?? null,
         error: check?.error ?? null,
       },
-      // A rota no proxy: existe quando a raiz do app, pelo proxy com o Host dele, nao
-      // responde 404. O portal nao le a API de admin do proxy (nem tem a senha dela).
+      // A rota no proxy, pelo que ela responde com o Host do app (route_ok acima). O portal
+      // nao le a API de admin do proxy (nem tem a senha dela).
       proxy: {
         source: 'proxy-probe',
         available: Boolean(check?.sso_checked),

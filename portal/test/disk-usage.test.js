@@ -1,34 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeDockerSizeRow, parseDockerSize, summarizeDiskUsageRows } from '../src/disk-usage.js';
+import http from 'node:http';
+import { collectDockerDiskUsage, summarizeDiskUsageRows } from '../src/disk-usage.js';
 
-test('parseDockerSize parses writable and virtual sizes', () => {
-  assert.deepEqual(parseDockerSize('32.8kB (virtual 346MB)'), {
-    writable_bytes: 32800,
-    virtual_bytes: 346000000,
+test('collectDockerDiskUsage reads sizes from the Docker API list with size=1', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req.url);
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify([{ Id: 'a', Names: ['/pedidos-app-1'], State: 'running', SizeRw: 1500000, SizeRootFs: 200000000,
+      Labels: { 'com.docker.compose.project': 'pedidos', 'com.docker.compose.service': 'app' } }]));
   });
-  assert.deepEqual(parseDockerSize('0B (virtual 1.2GB)'), {
-    writable_bytes: 0,
-    virtual_bytes: 1200000000,
-  });
-});
-
-test('normalizeDockerSizeRow extracts compose metadata and sizes', () => {
-  const row = normalizeDockerSizeRow({
-    Names: 'app-1',
-    Image: 'app:latest',
-    State: 'running',
-    Status: 'Up 1 hour',
-    Ports: '0.0.0.0:8000->8000/tcp',
-    Size: '1.5MB (virtual 200MB)',
-    Labels: 'com.docker.compose.project=stack,com.docker.compose.service=app',
-  });
-
-  assert.equal(row.name, 'app-1');
-  assert.equal(row.docker_stack, 'stack');
-  assert.equal(row.docker_service, 'app');
-  assert.equal(row.size_writable_bytes, 1500000);
-  assert.equal(row.size_virtual_bytes, 200000000);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await collectDockerDiskUsage({
+      env: { DOCKER_HOST: `tcp://127.0.0.1:${server.address().port}` },
+      inventory: { apps: [{ slug: 'pedidos', docker_stack: 'pedidos' }] },
+    });
+    assert.equal(result.available, true);
+    assert.deepEqual(seen, ['/containers/json?all=1&size=1']);
+    assert.equal(result.rows[0].app_slug, 'pedidos');
+    assert.equal(result.rows[0].size_writable_bytes, 1500000);
+    assert.equal(result.summary.size_virtual_bytes, 200000000);
+  } finally {
+    server.close();
+  }
 });
 
 test('summarizeDiskUsageRows aggregates by app', () => {

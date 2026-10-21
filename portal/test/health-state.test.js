@@ -212,6 +212,14 @@ test('a route the proxy does not know answers 404 at the root: proxy.matched is 
   assert.equal(app.overall_status, 'error');
 });
 
+test('a host the proxy does not know: root 200 (its default page) and health 404 is no route', async () => {
+  const fetchImpl = async (url) => ({ status: url.endsWith('/health') ? 404 : 200, headers: new Headers() });
+  const health = await listHttpHealth([{ slug: 'nada', domain: 'nada.cloud.localhost', healthcheck: { path: '/health' }, auth_required: false }], { fetchImpl });
+  assert.equal(health.checks[0].route_ok, false);
+  const [app] = enrichAppsWithHealth([{ slug: 'nada' }], health);
+  assert.equal(app.proxy.matched, false);
+});
+
 test('proxyGet sends the Host header and does not follow redirects', async () => {
   const seen = [];
   const server = http.createServer((req, res) => {

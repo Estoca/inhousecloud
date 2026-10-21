@@ -1,13 +1,11 @@
 # The portal image (service `portal` of the cloud's docker/compose.yml). install.sh copies
-# portal/ into the install directory and builds it. The docker CLI talks to docker-ro, the
-# cloud's read-only Docker API, through DOCKER_HOST: the container never gets the socket.
+# portal/ into the install directory and builds it. The portal reads Docker over HTTP from
+# docker-ro, the cloud's read-only Docker API (DOCKER_HOST): no docker CLI, no socket.
 FROM node:20-alpine
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-
-RUN apk add --no-cache docker-cli
 
 COPY package*.json ./
 RUN npm ci

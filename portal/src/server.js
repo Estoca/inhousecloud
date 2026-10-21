@@ -116,7 +116,7 @@ export function createApp({
   });
   const appsRuntimeResource = swr('apps-runtime', async () => {
     const inventory = readInventory();
-    const dockerState = listDockerContainersFn();
+    const dockerState = await listDockerContainersFn();
     const apps = enrichAppsWithDocker(listApps(), dockerState);
     return {
       source: inventory.source,
@@ -127,7 +127,7 @@ export function createApp({
     };
   });
   const runtimeDockerResource = swr('runtime-docker', async () => (
-    enrichDockerContainersWithInventory(listDockerContainersFn(), readInventory())
+    enrichDockerContainersWithInventory(await listDockerContainersFn(), readInventory())
   ));
   const runtimeHealthResource = swr('runtime-health', async () => listHttpHealthFn(listApps()));
   const platformStatusResource = swr('platform-status', async () => (
@@ -458,7 +458,7 @@ export function createApp({
 
   async function buildAppsStatus({ category = 'all', ownerEmail = null } = {}) {
     const inventory = readInventory();
-    const dockerState = listDockerContainersFn();
+    const dockerState = await listDockerContainersFn();
     const inferredApps = inferAppsFromDockerMetadata({ inventory, dockerState });
     const inventoryApps = appsForCategory([...(inventory.apps ?? []), ...inferredApps], category, ownerEmail);
     const withDocker = enrichAppsWithDocker(inventoryApps, dockerState);

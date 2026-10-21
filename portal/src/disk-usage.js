@@ -1,103 +1,24 @@
-import { spawnSync } from 'node:child_process';
 import { enrichDockerContainersWithInventory, readInventory } from './inventory.js';
-import { parseDockerLabels, parseDockerPsJsonLines } from './docker-state.js';
+import { dockerGet, normalizeApiContainer } from './docker-api.js';
 
-function parseBytes(value) {
-  if (!value) return null;
-  const match = String(value).trim().match(/^([\d.]+)\s*([kmgtp]?i?b|b)?$/i);
-  if (!match) return null;
-
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount)) return null;
-
-  const unit = (match[2] || 'b').toLowerCase();
-  const multipliers = {
-    b: 1,
-    kb: 1000,
-    mb: 1000 ** 2,
-    gb: 1000 ** 3,
-    tb: 1000 ** 4,
-    kib: 1024,
-    mib: 1024 ** 2,
-    gib: 1024 ** 3,
-    tib: 1024 ** 4,
-  };
-
-  return Math.round(amount * (multipliers[unit] ?? 1));
-}
-
-export function parseDockerSize(size) {
-  const value = String(size || '').trim();
-  if (!value) {
-    return {
-      writable_bytes: null,
-      virtual_bytes: null,
-    };
-  }
-
-  const virtualMatch = value.match(/\(virtual\s+([^)]+)\)/i);
-  const writableRaw = value.replace(/\s*\(virtual\s+[^)]+\)\s*/i, '').trim();
-
-  return {
-    writable_bytes: parseBytes(writableRaw),
-    virtual_bytes: parseBytes(virtualMatch?.[1]),
-  };
-}
-
-export function normalizeDockerSizeRow(row) {
-  const labels = parseDockerLabels(row.Labels);
-  const size = parseDockerSize(row.Size);
-  return {
-    name: row.Names,
-    image: row.Image,
-    state: row.State,
-    status: row.Status,
-    ports: row.Ports,
-    labels,
-    docker_stack: labels['com.docker.compose.project'] || null,
-    docker_service: labels['com.docker.compose.service'] || null,
-    size_writable_bytes: size.writable_bytes,
-    size_virtual_bytes: size.virtual_bytes,
-    size_raw: row.Size || null,
-  };
-}
-
-export function collectDockerDiskUsage({
+// Tamanho de cada container (camada gravavel e imagem), de `GET /containers/json?all=1&size=1`
+// na API do Docker (no cloud, o docker-ro).
+export async function collectDockerDiskUsage({
   inventory = readInventory(),
+  env = process.env,
 } = {}) {
-  const result = spawnSync('docker', ['ps', '-a', '--size', '--format', '{{json .}}'], {
-    encoding: 'utf8',
-    timeout: 15000,
-  });
-
-  if (result.error?.code === 'ENOENT') {
+  let containers;
+  try {
+    containers = (await dockerGet('/containers/json?all=1&size=1', { env, timeoutMs: 30_000 })).map(normalizeApiContainer);
+  } catch (error) {
     return {
       available: false,
-      error: 'docker_not_found',
+      error: error.code === 'ENOENT' ? 'docker_not_found' : error.message,
       rows: [],
       summary: null,
     };
   }
 
-  if (result.error) {
-    return {
-      available: false,
-      error: result.error.message,
-      rows: [],
-      summary: null,
-    };
-  }
-
-  if (result.status !== 0) {
-    return {
-      available: false,
-      error: [result.stderr, result.stdout].filter(Boolean).join('\n').trim() || `docker exited with ${result.status}`,
-      rows: [],
-      summary: null,
-    };
-  }
-
-  const containers = parseDockerPsJsonLines(result.stdout).map(normalizeDockerSizeRow);
   const enriched = enrichDockerContainersWithInventory({
     available: true,
     containers,
@@ -115,7 +36,6 @@ export function collectDockerDiskUsage({
       status: container.status ?? null,
       ports: container.ports ?? null,
       app_link_type: container.app_link_type ?? null,
-      size_raw: container.size_raw ?? null,
     },
   }));
 
