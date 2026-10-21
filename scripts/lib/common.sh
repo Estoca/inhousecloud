@@ -44,6 +44,11 @@ ihc_compat_env() {
 }
 ihc_compat_env
 
+# legacy_guard DIR: stop when DIR is an installation made under a previous name
+# (harness, occ). The old names are not operated and not migrated: legacy.py says what to do.
+# A deployer image built before legacy.py existed has no copy of it: nothing to check there.
+legacy_guard() { [ ! -f "$IHC_LIB/legacy.py" ] || $PY "$IHC_LIB/legacy.py" "$1" || exit 1; }
+
 random_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-40}"; }
 
 # sha_fp VALUE: 12 hex chars of sha256, enough to tell "same value" without storing it.

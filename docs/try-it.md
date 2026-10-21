@@ -6,7 +6,7 @@ The shortest path for a person (not an agent) to see the cloud working on their 
 |---|---|---|
 | For | a Mac that already runs Docker Desktop | a Mac without Docker, or when you want a throwaway VM |
 | Where it runs | on the Mac, in `~/inhousecloud` | in an Ubuntu VM with Docker rootless |
-| Steps | [below](#mac-with-docker-desktop), then 4 and 5 | 1 to 5 |
+| Steps | [its own five, below](#mac-with-docker-desktop) | [1 to 6](#1-a-clean-vm-macos) |
 | Undo | `install.sh remove` ([`cleanup.md`](cleanup.md)) | `limactl delete -f ihc` |
 | Tested | Mac mini (Apple Silicon), 2026-10-20: 17 smoke tests, first app in 16 s | MacBook (Apple Silicon), 2026-10-20: times below |
 
@@ -44,10 +44,18 @@ It should print `127.0.0.1` (macOS 26 does; so do Chrome, Firefox, Edge and `cur
 127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost
 ```
 
-Then, in a terminal on the Mac: the repository in `~/src`, the cloud in `~/inhousecloud`.
+Two paths matter on the Mac, and every command below spells them out: the repository (the checkout, with `install.sh` and the scripts) in `~/src/inhousecloud`, and the cloud (the install directory, with `.env`, `state.json` and the backups) in `~/inhousecloud`. They are two different directories; nothing goes in `/opt`.
+
+### Mac 1. Clone
 
 ```bash
-git clone https://github.com/Estoca/inhousecloud.git ~/src/inhousecloud && cd ~/src/inhousecloud
+git clone https://github.com/Estoca/inhousecloud.git ~/src/inhousecloud
+```
+
+### Mac 2. Install
+
+```bash
+cd ~/src/inhousecloud
 ```
 
 ```bash
@@ -58,7 +66,67 @@ git clone https://github.com/Estoca/inhousecloud.git ~/src/inhousecloud && cd ~/
 ./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/inhousecloud
 ```
 
-`--plan` is optional: it checks the Mac and prints what would be created, and creates nothing (not even the directory). The install ends with the seven day-zero steps shown in step 3 below, with the commands for these paths. Continue at step 4; wherever it says `/opt/inhousecloud`, use `~/inhousecloud`, and `~/src/inhousecloud` for the repository.
+`--plan` is optional: it checks the Mac and prints what would be created, and creates nothing (not even the directory). The install takes about 5 minutes plus the image downloads, runs the smoke tests and ends with the seven day-zero steps, with these same two paths written out in full (`/Users/<you>/...`); `~/src/inhousecloud/install.sh handoff --install-dir ~/inhousecloud` prints them again. The example config means what it means on Lima ([step 3](#3-install)): everything on this Mac only, admin `admin@example.com`, Gitea organization `company`, backup in `~/inhousecloud/backups`.
+
+### Mac 3. Sign in
+
+Open <http://portal.cloud.localhost> in Chrome, Edge or Firefox. It sends you to the company sign-in (Authentik). Sign in as `akadmin`; this prints the first password in your own terminal (never paste it into a chat):
+
+```bash
+python3 ~/src/inhousecloud/scripts/lib/envfile.py get ~/inhousecloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD
+```
+
+Then, before anything else: at <http://auth.cloud.localhost/if/user/>, Settings > MFA Devices > Enroll an authenticator app, then Static tokens (keep those recovery codes off this Mac), then Settings > Change password. Gitea is at <http://git.cloud.localhost> ("Sign in with authentik"). Copy the backup key into a password manager: without it no backup can be read.
+
+```bash
+python3 ~/src/inhousecloud/scripts/lib/envfile.py get ~/inhousecloud/.env BACKUP_ENCRYPTION_KEY
+```
+
+### Mac 4. Your first app
+
+The app folder goes in your home directory, apart from both paths above:
+
+```bash
+cd ~ && ~/src/inhousecloud/scripts/ihc-app.sh new pedidos --owner admin@example.com --push --install-dir ~/inhousecloud
+```
+
+```bash
+cd ~/pedidos && ~/src/inhousecloud/scripts/ihc-app.sh wait pedidos --install-dir ~/inhousecloud
+```
+
+If `ping -c 1 portal.cloud.localhost` failed before the install, add `127.0.0.1 pedidos.cloud.localhost` to `/etc/hosts` first. Then open <http://pedidos.cloud.localhost>: "pedidos is running on the company cloud"; <http://pedidos.cloud.localhost/me> shows the user the app received from the sign-in. What `new`, the push and `wait` do is in [step 5](#5-your-first-app) of the Lima path.
+
+### Mac 5. Operate, check, stop, remove
+
+The map of services, apps, owners and commands, and the short state:
+
+```bash
+~/src/inhousecloud/scripts/ihc-operator.sh brief --install-dir ~/inhousecloud
+```
+
+```bash
+~/src/inhousecloud/install.sh status --install-dir ~/inhousecloud
+```
+
+Something looks wrong? The doctor checks the whole box in a few seconds and says, for each problem, what to do:
+
+```bash
+~/inhousecloud/ihc doctor
+```
+
+Done for the day: stop it, keeping everything (`start` brings it back). Done with it: remove it. `remove` lists what goes and asks you to type the project name (`ihc`); `--images` also removes the pulled images (about 5 GiB) and `--dir` the install directory `~/inhousecloud` with `.env` and the backups. The checkout in `~/src/inhousecloud` stays.
+
+```bash
+~/src/inhousecloud/install.sh stop --install-dir ~/inhousecloud
+```
+
+```bash
+~/src/inhousecloud/install.sh remove --images --dir --install-dir ~/inhousecloud
+```
+
+Docker Desktop then still holds the space in its disk image until you purge it ([`cleanup.md`](cleanup.md#docker-desktop-macos-keeps-the-space)). To have a coding agent change the app, ask it in your own words on this Mac, with both paths: the agent works here, no `ssh` needed ([step 6](#6-make-it-do-something) has the rest).
+
+The Mac path ends here. The numbered steps below are the Lima VM path.
 
 ## 1. A clean VM (macOS)
 
@@ -185,14 +253,14 @@ Lima: the VM and its disk go at once.
 limactl delete -f ihc
 ```
 
-Mac with Docker Desktop, or any box: stop it and keep the data, or remove it. `remove` lists what goes and asks you to type the project name (`ihc`); `--images` also removes the pulled images (about 5 GiB) and `--dir` the install directory with `.env` and the backups. Docker Desktop then still holds the space in its disk image until you purge it ([`cleanup.md`](cleanup.md)).
+Mac with Docker Desktop: [Mac 5](#mac-5-operate-check-stop-remove). Any other box: from the checkout, stop it and keep the data, or remove it. `remove` lists what goes and asks you to type the project name (`ihc`); `--images` also removes the pulled images (about 5 GiB) and `--dir` the install directory with `.env` and the backups ([`cleanup.md`](cleanup.md)).
 
 ```bash
-./install.sh stop --install-dir ~/inhousecloud
+./install.sh stop --install-dir /opt/inhousecloud
 ```
 
 ```bash
-./install.sh remove --images --dir --install-dir ~/inhousecloud
+./install.sh remove --images --dir --install-dir /opt/inhousecloud
 ```
 
 ## What this does not show yet

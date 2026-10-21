@@ -23,6 +23,9 @@ never on a command line, never printed.
 import concurrent.futures, datetime, json, os, re, shutil, socket, subprocess, sys, tempfile, time
 import urllib.error, urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import legacy  # noqa: E402  (an installation under a previous name: one message, no checks)
+
 DOCTOR_VERSION = 1
 RUNBOOK = "docs/runbooks/%s.md"
 SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY|DATABASE_URL|REDIS_URL)")
@@ -929,12 +932,25 @@ def main():
     install_dir, root, args = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3:]
     as_json, verbose = "--json" in args, "--verbose" in args or "-v" in args
     out_dir = args[args.index("--out") + 1] if "--out" in args else os.path.join(install_dir, "agent/reference")
+    # Two cases where no check can run: no installation, or one under a previous name
+    # (legacy.py). Either is the install check, failed, alone.
+    msg = action = None
+    evidence = []
+    old = legacy.detect(install_dir)
     if not os.access(os.path.join(install_dir, ".env"), os.R_OK):
         msg = "no readable .env in %s: no installation there, or run the doctor as the user who installed it (--install-dir DIR for another place)" % install_dir
+        action = "pass --install-dir with the directory install.sh used"
+    elif old:
+        lines = legacy.message(install_dir, *old).splitlines()
+        msg, action, evidence = lines[0], " ".join(l.strip() for l in lines[3:]), [lines[1], lines[2]]
+    if msg:
         if as_json:
             print(json.dumps({"doctor_version": DOCTOR_VERSION, "generated_at": iso(now_utc()), "install_dir": install_dir,
-                              "checks": [{"name": "install", "status": "fail", "detail": msg, "action": "pass --install-dir with the directory install.sh used", "runbook": "", "evidence": []}],
+                              "checks": [{"name": "install", "status": "fail", "detail": msg, "action": action, "runbook": "",
+                                          "evidence": evidence}],
                               "summary": {"ok": 0, "warn": 0, "fail": 1}, "not_applicable": []}, indent=2))
+        elif evidence:
+            print("[xx] install  " + "\n             ".join(legacy.message(install_dir, *old).splitlines()), file=sys.stderr)
         else:
             print("[xx] install  " + msg, file=sys.stderr)
         sys.exit(1)

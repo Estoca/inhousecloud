@@ -47,6 +47,7 @@ if [ -z "${IHC_BACKUP_CONTAINER:-}" ]; then
   INSTALL_DIR="${INSTALL_DIR%/}"
   ENV_FILE="$INSTALL_DIR/.env"
   STATE_FILE="$INSTALL_DIR/state.json"
+  legacy_guard "$INSTALL_DIR"
   load_env
   [ "${BACKUP_ENABLED:-true}" = true ] || die "backup is disabled in this installation (BACKUP_ENABLED=false in $ENV_FILE)"
   # shellcheck disable=SC2086

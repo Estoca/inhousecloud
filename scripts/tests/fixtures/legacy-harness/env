@@ -1,0 +1,19 @@
+# Test fixture: an install's .env with the names of its time. No real values.
+COMPOSE_PROJECT_NAME=harness
+COMPOSE_PROFILES=backup
+HARNESS_NETWORK=harness
+HARNESS_OPS_NETWORK=harness-ops
+INGRESS=local
+BASE_DOMAIN=harness.localhost
+TLS_MODE=off
+PORTAL_BASE_URL=http://portal.harness.localhost
+AUTHENTIK_BASE_URL=http://auth.harness.localhost
+GITEA_BASE_URL=http://git.harness.localhost
+AUTHENTIK_PORTAL_GROUP=harness-admins
+AUTHENTIK_APP_GROUP=harness-users
+GITEA_ORGANIZATION=company
+GITEA_RUNNER_NAME=harness-runner
+POSTGRES_DB=harness
+POSTGRES_USER=harness
+BACKUP_ENABLED=true
+BACKUP_DESTINATION=/tmp/fixture-backups

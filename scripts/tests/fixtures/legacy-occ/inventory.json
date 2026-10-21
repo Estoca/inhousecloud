@@ -1,0 +1,1 @@
+{"apps": {"pedidos": {"owner": "admin@example.com", "repository": "company/pedidos", "runner": "occ-deploy"}}}

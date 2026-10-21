@@ -36,6 +36,7 @@ while [ $# -gt 0 ]; do
 done
 INSTALL_DIR="${INSTALL_DIR%/}"
 [ -f "$INSTALL_DIR/.env" ] || die "no installation at $INSTALL_DIR (.env not found)"
+legacy_guard "$INSTALL_DIR"
 AGENT_DIR="$INSTALL_DIR/agent"
 
 case "$CMD" in

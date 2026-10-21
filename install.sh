@@ -1634,6 +1634,7 @@ onboarding_main() {
   [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$DEFAULT_INSTALL_DIR"
   INSTALL_DIR="${INSTALL_DIR%/}"
   STATE_FILE="$INSTALL_DIR/state.json"; ENV_FILE="$INSTALL_DIR/.env"
+  legacy_guard "$INSTALL_DIR"
   case "$1" in
     status)
       [ -f "$STATE_FILE" ] || die "no state.json in $INSTALL_DIR"
@@ -1662,6 +1663,7 @@ case "$SUBCOMMAND" in
 esac
 
 resolve_config
+legacy_guard "$INSTALL_DIR"
 derive
 
 # Dry run: --plan, and the plan shown before "Apply this plan now?". It creates nothing:
