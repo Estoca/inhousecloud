@@ -1,6 +1,6 @@
 # Quickstart
 
-This quickstart describes the target workflow for a company adapting Open Company Cloud as a single-box internal cloud.
+This quickstart describes the target workflow for a company adapting InHouseCloud as a single-box internal cloud.
 
 ## 1. Choose Your Box And Company Defaults
 
@@ -47,7 +47,7 @@ Then, by hand: copy `BACKUP_ENCRYPTION_KEY` from `.env` to a password manager; s
 
 Recommended repositories:
 
-- `open-company-cloud`: shared scripts, schemas, templates, docs, CLI;
+- `inhousecloud`: shared scripts, schemas, templates, docs, CLI;
 - one repository per app.
 
 ## 4. Publish Agent-Facing App Rules
@@ -79,7 +79,7 @@ Tell coding agents to read the live rules before copying patterns from existing 
 On the box:
 
 ```bash
-scripts/occ-app.sh new example-app --owner owner@example.com --install-dir /opt/open-company-cloud
+scripts/ihc-app.sh new example-app --owner owner@example.com --install-dir /opt/inhousecloud
 ```
 
 It copies `templates/app/` (a runnable app, `company-app.yaml`, `docker-compose.yml`, `.env.example`, `.gitea/workflows/deploy.yml`), fills in the slug and owner, commits on `main`, and creates the private repository `<org>/example-app` in Gitea. Edit the app code; keep the contract in `docs/app-contract.md`. Check locally with `docker compose config` and `docker compose up --build`.
@@ -91,7 +91,7 @@ cd example-app
 git push -u origin main
 ```
 
-The push is the approval. The deploy workflow runs on the box and, through `occ-app provision`, creates or confirms:
+The push is the approval. The deploy workflow runs on the box and, through `ihc-app provision`, creates or confirms:
 
 - the app's database and role on the shared Postgres;
 - its Redis user and key prefix, and a bucket when it asks for one;

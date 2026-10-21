@@ -15,7 +15,7 @@ stream (follow and stream are forced off).
 
 Writes, only when AGENT_ALLOW_WRITE=true (ops.agent.allow_write in the config):
   POST /containers/ID/restart   only for a container of an app's Compose project, never
-                                one of the occ project (OCC_PROJECT)
+                                one of the ihc project (IHC_PROJECT)
   POST /build/prune             the build cache, never images or volumes
 Everything else is refused with 403 and logged. Each request is logged to stdout as one
 line (method, path, status): `docker compose logs agent-docker-proxy` is the audit trail.
@@ -30,7 +30,7 @@ import sys
 import urllib.parse
 
 SOCKET = os.environ.get("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
-OCC_PROJECT = os.environ.get("OCC_PROJECT", "occ")
+IHC_PROJECT = os.environ.get("IHC_PROJECT", "ihc")
 ALLOW_WRITE = os.environ.get("AGENT_ALLOW_WRITE", "false").lower() == "true"
 PORT = int(os.environ.get("PORT", "2375"))
 
@@ -100,13 +100,13 @@ def compose_project(cid):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "occ-agent-docker-ro"
+    server_version = "ihc-agent-docker-ro"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        # Smoke test 20 tries writes on purpose; it says so in X-OCC-Probe so that the
+        # Smoke test 20 tries writes on purpose; it says so in X-IHC-Probe so that the
         # audit trail does not read as an attack (a label the caller claims, nothing more).
-        probe = re.sub(r"[^A-Za-z0-9_.-]", "", (self.headers or {}).get("X-OCC-Probe", "") or "")[:40] if hasattr(self, "headers") else ""
+        probe = re.sub(r"[^A-Za-z0-9_.-]", "", (self.headers or {}).get("X-IHC-Probe", "") or "")[:40] if hasattr(self, "headers") else ""
         sys.stdout.write("%s%s\n" % (fmt % args, " probe=%s" % probe if probe else ""))
         sys.stdout.flush()
 
@@ -171,7 +171,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             project, status = compose_project(m.group(1))
             if status != 200:
                 return self.refuse(404, "no such container")
-            if not project or project == OCC_PROJECT:
+            if not project or project == IHC_PROJECT:
                 return self.refuse(403, "restart is allowed for app containers only, not %s" % (project or "a container outside Compose"))
             return self.forward("POST", path, {"t": query.get("t", ["10"])})
         if PRUNE_RE.match(path):

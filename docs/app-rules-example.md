@@ -158,7 +158,7 @@ Publication happens by push to `main`, not tokens pasted in chat and not a separ
 
 1. Push to `main` of the app's repository in the company organization.
 2. The deploy workflow (`.gitea/workflows/deploy.yml`, from the template) runs on the box.
-3. `occ-app provision <slug>` validates the manifest and Compose file and creates or confirms the database, cache user, bucket, env file, route, SSO application and inventory record.
+3. `ihc-app provision <slug>` validates the manifest and Compose file and creates or confirms the database, cache user, bucket, env file, route, SSO application and inventory record.
 4. The workflow builds and starts the app and waits for its healthcheck through the proxy.
 5. A failed step fails the run with the reason; fix it and push again.
 

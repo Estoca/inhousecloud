@@ -24,7 +24,7 @@ dc exec -T postgres psql -U "$POSTGRES_USER" -d app_<slug> -c '\dt+'
 df -h "$BACKUP_DESTINATION"                 # room for the dump: see disk-pressure.md
 ```
 
-*(agent)* it has no database credential: it reads the migration in the repository (`occ-ro gitea /repos/<org>/<slug>/contents/<path>`), classifies it, and hands the human these commands.
+*(agent)* it has no database credential: it reads the migration in the repository (`ihc-ro gitea /repos/<org>/<slug>/contents/<path>`), classifies it, and hands the human these commands.
 
 ## Dump before, restorable, kept
 

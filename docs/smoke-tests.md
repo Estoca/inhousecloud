@@ -4,21 +4,21 @@ Step 18 of the install sequence, 19 tests, after the runners and the optional pr
 
 ```sh
 # 1. The rendered Compose file is valid
-docker compose -f "$OCC_COMPOSE_FILE" config --quiet
+docker compose -f "$IHC_COMPOSE_FILE" config --quiet
 # PASS: exit 0
 
 # 2. Every core service is running and healthy
-docker compose -f "$OCC_COMPOSE_FILE" ps --format json
+docker compose -f "$IHC_COMPOSE_FILE" ps --format json
 # PASS: all core services running/healthy, the two Actions runners included, and garage
 #       when the storage profile is on
 
 # 3. The shared Postgres accepts connections
-docker compose -f "$OCC_COMPOSE_FILE" exec -T postgres \
+docker compose -f "$IHC_COMPOSE_FILE" exec -T postgres \
   pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 # PASS: accepting connections
 
 # 4. The shared Redis answers
-docker compose -f "$OCC_COMPOSE_FILE" exec -T redis redis-cli ping
+docker compose -f "$IHC_COMPOSE_FILE" exec -T redis redis-cli ping
 # PASS: PONG
 
 # 5. Authentik is live and ready
@@ -51,34 +51,34 @@ gitea admin auth list
 # PASS: the OIDC/Authentik source exists and is enabled
 
 # 12. An authenticated clone against Gitea works
-GIT_ASKPASS="$OCC_GIT_ASKPASS" git ls-remote "$GITEA_SMOKE_REPOSITORY"
+GIT_ASKPASS="$IHC_GIT_ASKPASS" git ls-remote "$GITEA_SMOKE_REPOSITORY"
 # PASS: exit 0 and HEAD returned
 
 # 13. The portal's and Gitea's database roles are isolated
-docker compose -f "$OCC_COMPOSE_FILE" exec -T postgres \
+docker compose -f "$IHC_COMPOSE_FILE" exec -T postgres \
   psql -U "$POSTGRES_USER" -d postgres -Atc \
-  "SELECT rolname, rolsuper FROM pg_roles WHERE rolname IN ('occ_platform','gitea');"
+  "SELECT rolname, rolsuper FROM pg_roles WHERE rolname IN ('ihc_platform','gitea');"
 # PASS: both roles exist and rolsuper = false
 
 # 14. The newest backup verifies (skipped only when BACKUP_ENABLED=false)
-scripts/occ-backup.sh --install-dir "$OCC_INSTALL_DIR" verify --latest --json
+scripts/ihc-backup.sh --install-dir "$IHC_INSTALL_DIR" verify --latest --json
 # PASS: ok = true: newest run succeeded and is younger than BACKUP_MAX_AGE_HOURS, its
 #       manifest matches the sha256 in the status file, the destination repository
 #       opens with the key, every snapshot of the manifest exists, every database dump
 #       restores to the sha256 recorded at backup time, and `restic check` is clean
 
 # 15. The final state is consistent
-occ-install status --json
+ihc-install status --json
 # PASS: status = completed; no stage failed or pending
 
 # 16. An app reaches the air (never skipped: the runners are core)
-scripts/occ-app.sh new smoke-app --install-dir "$OCC_INSTALL_DIR"   # or clone it when it exists
+scripts/ihc-app.sh new smoke-app --install-dir "$IHC_INSTALL_DIR"   # or clone it when it exists
 git commit --allow-empty ... && git push origin main                        # a new commit every run
 curl -fsS -H "Authorization: token $GITEA_ADMIN_TOKEN" \
   "$GITEA_BASE_URL/api/v1/repos/$GITEA_ORGANIZATION/smoke-app/actions/tasks"   # until the run ends
 curl -fsS "https://smoke-app.$BASE_DOMAIN/health"
 curl -fsSI "https://smoke-app.$BASE_DOMAIN/"
-docker compose -f "$OCC_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc \
+docker compose -f "$IHC_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc \
   "SELECT r.rolsuper, r.rolcanlogin, has_database_privilege('public', d.datname, 'CONNECT')
      FROM pg_roles r, pg_database d
     WHERE r.rolname = 'app_smoke_app' AND d.datname = 'app_smoke_app' AND d.datdba = r.oid;"
@@ -88,8 +88,8 @@ docker compose -f "$OCC_COMPOSE_FILE" exec -T postgres psql -U "$POSTGRES_USER" 
 #       connect); the role signs in with PGPASSWORD from apps/smoke-app/.env; a second
 #       push redeploys it and that password is the same as before
 # Then (not a pass condition): smoke-app is marked kind: system-test in inventory.json and
-scripts/occ-app.sh remove smoke-app --yes --install-dir "$OCC_INSTALL_DIR"
-#       removes what the test created; if it cannot, the app stays, hidden from occ-app list
+scripts/ihc-app.sh remove smoke-app --yes --install-dir "$IHC_INSTALL_DIR"
+#       removes what the test created; if it cannot, the app stays, hidden from ihc-app list
 
 # 17. The ops tools are behind the SSO (skipped only when the ops profile is off)
 for h in terminal files portainer glances; do curl -sSI "https://$h.$BASE_DOMAIN/"; done
@@ -97,21 +97,21 @@ for h in terminal files portainer glances; do curl -sSI "https://$h.$BASE_DOMAIN
 #       (terminal only when the web terminal is installed; the detail says when it is not)
 
 # 18. The ops tools are for admins only (skipped only when the ops profile is off)
-docker compose -f "$OCC_COMPOSE_FILE" ps --format json          # portainer glances filebrowser [wetty]
+docker compose -f "$IHC_COMPOSE_FILE" ps --format json          # portainer glances filebrowser [wetty]
 scripts/sso-login-check.sh --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD \
   --target "https://files.$BASE_DOMAIN" --expect denied             # and terminal
 docker exec <portal container> wget -T 3 http://filebrowser/health   # an app container
-docker compose -f "$OCC_COMPOSE_FILE" config --format json | scripts/lib/opspaths.py compose "$OCC_INSTALL_DIR" "$BACKUP_DESTINATION"
-# PASS: the containers are healthy; occ-smoke-user (occ-users only) signs in to
+docker compose -f "$IHC_COMPOSE_FILE" config --format json | scripts/lib/opspaths.py compose "$IHC_INSTALL_DIR" "$BACKUP_DESTINATION"
+# PASS: the containers are healthy; ihc-smoke-user (ihc-users only) signs in to
 #       Authentik and is refused both the terminal and the file browser; the wget from
 #       the portal container fails (the ops tools are not on the apps' network); and the
 #       file browser mounts only app data and the backup reports (read only), Wetty only
 #       its key directory (read only)
 
 # 19. Object storage (skipped only when the storage profile is off)
-docker compose -f "$OCC_COMPOSE_FILE" exec garage /garage health
+docker compose -f "$IHC_COMPOSE_FILE" exec garage /garage health
 # provision smoke-s3-a twice and smoke-s3-b once (scripts/lib/garage.sh, the code of
-# occ-app provision), from the template manifest with object_storage.required: true
+# ihc-app provision), from the template manifest with object_storage.required: true
 scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-a smoke.txt   # key of A
 scripts/lib/s3.py get http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-a smoke.txt   # key of A
 scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-b smoke.txt   # key of A
@@ -121,7 +121,7 @@ scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-b smoke.tx
 #       A's PUT and GET on B's bucket answer 403
 
 # 20. The operator agent (skipped only when the agent profile is off)
-docker compose -f "$OCC_COMPOSE_FILE" ps agent agent-docker-proxy
+docker compose -f "$IHC_COMPOSE_FILE" ps agent agent-docker-proxy
 python3 -c '...' "$AGENT_DIR/reference/brief.json"                  # services, access matrix, no secret value
 docker exec <agent> node -e 'fetch(DOCKER_API + "/containers/<postgres>/restart", {method: "POST"})'
 docker inspect <agent>                                               # mounts, networks, environment
@@ -157,12 +157,12 @@ Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS s
 
 Test 20 does not talk to the LLM or the chat channel: the installer never has their keys. A conversation is checked by a human after putting the keys in `.env` ([`operator-contract.md`](operator-contract.md), section 7).
 
-Test 18 signs in for real, with the smoke user's password from `.env`: it proves the binding to `occ-admins`, not just that a route exists. The positive side (an admin reaches a shell and the file list) needs the admin's password, which a human replaces after the first sign-in, so it is not a smoke test; `scripts/sso-login-check.sh --target https://terminal.<BASE_DOMAIN>` checks it by hand with `--expect allowed`. Without the box, `scripts/tests/ops-mounts.sh` checks the mounts of the compose file in the repository, including that a file browser mounting the install directory, `apps/` or `local/` is refused.
+Test 18 signs in for real, with the smoke user's password from `.env`: it proves the binding to `ihc-admins`, not just that a route exists. The positive side (an admin reaches a shell and the file list) needs the admin's password, which a human replaces after the first sign-in, so it is not a smoke test; `scripts/sso-login-check.sh --target https://terminal.<BASE_DOMAIN>` checks it by hand with `--expect allowed`. Without the box, `scripts/tests/ops-mounts.sh` checks the mounts of the compose file in the repository, including that a file browser mounting the install directory, `apps/` or `local/` is refused.
 
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
-Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `occ-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `occ-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `occ-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `occ-app list` (shown with `--all` and in the operator brief) until `occ-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `occ-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
+Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `ihc-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `ihc-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `ihc-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `ihc-app list` (shown with `--all` and in the operator brief) until `ihc-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `ihc-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
 
-Test 19 provisions with the same function `occ-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
+Test 19 provisions with the same function `ihc-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
 
 Test 6 is the one most often wrong on a real box: a Gitea configured to require sign-in answers 403 to an anonymous version call, and a probe without the token reports the service down while everything works.

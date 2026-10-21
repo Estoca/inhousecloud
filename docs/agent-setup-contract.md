@@ -15,7 +15,7 @@ Before either, run section 0 of the playbook to learn whether the cloud is alrea
 
 ```text
 install.sh                     one command: secrets, services, SSO, Git, runners, smoke tests
-occ-app.sh new <slug>      app repository from templates/app, created in the Gitea organization
+ihc-app.sh new <slug>      app repository from templates/app, created in the Gitea organization
 git push origin main           the deploy: Gitea Actions on the box provisions and starts the app
 http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in; /health public
 ```
@@ -54,7 +54,7 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 ## The agent must
 
 - Run commands on the box, as the user that installed it, from a checkout of this repository on the box (clone or copy it there first). From another machine, through `ssh`.
-- Use `install.sh` to install and `scripts/occ-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
+- Use `install.sh` to install and `scripts/ihc-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
 - Keep the app inside [`app-contract.md`](app-contract.md): listen on `PORT`, answer `/health`, read `DATABASE_URL` and `REDIS_URL`, create its tables on start, take the user from the `X-authentik-*` headers.
 - Push to `main` to deploy, then confirm three things before saying it is live:
   1. the deploy run of the pushed commit is `success`;
@@ -70,8 +70,8 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 - reads or edits another app's `<install-dir>/apps/<other>/.env`, or edits its own by hand (`provision` writes it);
 - prints a secret: the values in `<install-dir>/.env` or any app env file. Key names only (`python3 scripts/lib/envfile.py keys <file>`);
 - drops a database or role, deletes a bucket, a Redis user, a proxy route, an Authentik object, a repository, a volume or the install directory. Removing an app is a human's job;
-- edits `.gitea/workflows/deploy.yml` of an app, or writes a workflow with `runs-on: occ-deploy` anywhere else;
-- changes Authentik, the proxy or Gitea settings by hand; `install.sh` and `occ-app` own them;
+- edits `.gitea/workflows/deploy.yml` of an app, or writes a workflow with `runs-on: ihc-deploy` anywhere else;
+- changes Authentik, the proxy or Gitea settings by hand; `install.sh` and `ihc-app` own them;
 - turns `auth.required` off, unless the human asked for a public app in those words;
 - runs on a box the human did not name, creates DNS records or tunnel routes, or applies an install plan without a yes.
 

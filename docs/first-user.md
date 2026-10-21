@@ -8,10 +8,10 @@ The install leaves one person: `akadmin`, in both groups. This is how a second p
 
 | Group | Opens | For |
 |---|---|---|
-| `occ-users` | Gitea (sign-in with Authentik) and every app deployed on the cloud | everyone who uses or builds apps |
-| `occ-admins` | the portal and the ops tools (web terminal, file browser, Portainer, Glances) when the `ops` profile is on | the few who operate the box |
+| `ihc-users` | Gitea (sign-in with Authentik) and every app deployed on the cloud | everyone who uses or builds apps |
+| `ihc-admins` | the portal and the ops tools (web terminal, file browser, Portainer, Glances) when the `ops` profile is on | the few who operate the box |
 
-They do not include each other: an admin who also uses the apps is in both, like `akadmin`. The ops tools are a shell and the files of the box, so `occ-admins` is root on it in practice ([`security.md`](security.md)). The names come from `authentik.app_group` and `authentik.portal_group` in the config.
+They do not include each other: an admin who also uses the apps is in both, like `akadmin`. The ops tools are a shell and the files of the box, so `ihc-admins` is root on it in practice ([`security.md`](security.md)). The names come from `authentik.app_group` and `authentik.portal_group` in the config.
 
 ## Add a person
 
@@ -19,9 +19,9 @@ In Authentik's admin interface, <http://auth.cloud.localhost/if/admin/>, signed 
 
 1. **Directory > Users > Create.** Username, name, email; type `Internal`.
 2. Open the new user: **Set password**. Pick a temporary one and send it to the person over a channel other than the one where you send the URL.
-3. **Directory > Groups > `occ-users` > Users > Add existing user**: the person. Also `occ-admins`, only if they operate the box.
+3. **Directory > Groups > `ihc-users` > Users > Add existing user**: the person. Also `ihc-admins`, only if they operate the box.
 
-The person then opens <http://portal.cloud.localhost> (only with `occ-admins`), an app, or <http://git.cloud.localhost> with "Sign in with authentik", and at <http://auth.cloud.localhost/if/user/> changes the password and enrolls MFA (Settings > MFA Devices).
+The person then opens <http://portal.cloud.localhost> (only with `ihc-admins`), an app, or <http://git.cloud.localhost> with "Sign in with authentik", and at <http://auth.cloud.localhost/if/user/> changes the password and enrolls MFA (Settings > MFA Devices).
 
 **Gitea.** The first "Sign in with authentik" creates their Gitea account. To let them push to an app's repository (a push to `main` is a deploy), add them, after that first sign-in, to a team of the organization with write access: Gitea > `company` > Teams. Without it they see nothing: every app repository is private.
 

@@ -1,25 +1,25 @@
 #!/usr/bin/env node
-// occ-ro: the reference agent's read-only view of the box (docs/operator-contract.md).
+// ihc-ro: the reference agent's read-only view of the box (docs/operator-contract.md).
 // Runs inside the agent container with Node only; every call is a GET.
 //
-//   occ-ro ps                       containers: project, service, state, health, image
-//   occ-ro logs NAME [LINES]        last lines of a container (name, id or Compose service)
-//   occ-ro inspect NAME             container inspect (Env as names only)
-//   occ-ro df                       Docker disk usage: images, build cache, volumes
-//   occ-ro http URL [HOST]          status, redirect and first bytes; HOST sets the Host header
-//   occ-ro gitea PATH               GET on the Gitea API with the read-only token
-//   occ-ro backup                   the backup status file
-//   occ-ro docker PATH              any allowlisted GET on the read-only Docker API
-//   occ-ro writes                   whether ops.agent.allow_write is on, and what it allows
-//   occ-ro restart NAME             restart one app container (allow_write; never a core one)
-//   occ-ro prune-build-cache        prune the Docker build cache (allow_write)
+//   ihc-ro ps                       containers: project, service, state, health, image
+//   ihc-ro logs NAME [LINES]        last lines of a container (name, id or Compose service)
+//   ihc-ro inspect NAME             container inspect (Env as names only)
+//   ihc-ro df                       Docker disk usage: images, build cache, volumes
+//   ihc-ro http URL [HOST]          status, redirect and first bytes; HOST sets the Host header
+//   ihc-ro gitea PATH               GET on the Gitea API with the read-only token
+//   ihc-ro backup                   the backup status file
+//   ihc-ro docker PATH              any allowlisted GET on the read-only Docker API
+//   ihc-ro writes                   whether ops.agent.allow_write is on, and what it allows
+//   ihc-ro restart NAME             restart one app container (allow_write; never a core one)
+//   ihc-ro prune-build-cache        prune the Docker build cache (allow_write)
 //
-// Environment: OCC_DOCKER_API (http://agent-docker-proxy:2375), OCC_GITEA_URL,
-// GITEA_READONLY_TOKEN, OCC_BACKUP_REPORTS (/occ/backup-reports),
-// OCC_AGENT_ALLOW_WRITE (true|false). The proxy enforces the writes, not this script.
+// Environment: IHC_DOCKER_API (http://agent-docker-proxy:2375), IHC_GITEA_URL,
+// GITEA_READONLY_TOKEN, IHC_BACKUP_REPORTS (/ihc/backup-reports),
+// IHC_AGENT_ALLOW_WRITE (true|false). The proxy enforces the writes, not this script.
 import { readFileSync } from "node:fs";
 
-const DOCKER = process.env.OCC_DOCKER_API || "http://agent-docker-proxy:2375";
+const DOCKER = process.env.IHC_DOCKER_API || "http://agent-docker-proxy:2375";
 const [cmd, ...args] = process.argv.slice(2);
 
 async function dget(path) {
@@ -51,7 +51,7 @@ function demux(buf) {
   return out;
 }
 
-const WRITES = (process.env.OCC_AGENT_ALLOW_WRITE || "false") === "true";
+const WRITES = (process.env.IHC_AGENT_ALLOW_WRITE || "false") === "true";
 async function dpost(path) {
   const r = await fetch(DOCKER + path, { method: "POST" });
   const body = (await r.text()).slice(0, 300);
@@ -103,13 +103,13 @@ const commands = {
     });
   },
   async gitea(path) {
-    const base = process.env.OCC_GITEA_URL || "http://gitea:3000";
+    const base = process.env.IHC_GITEA_URL || "http://gitea:3000";
     const r = await fetch(`${base}/api/v1${path}`, { headers: { Authorization: `token ${process.env.GITEA_READONLY_TOKEN || ""}` } });
     console.log(r.status);
     console.log(JSON.stringify(await r.json().catch(() => null), null, 2));
   },
   async backup() {
-    const dir = process.env.OCC_BACKUP_REPORTS || "/occ/backup-reports";
+    const dir = process.env.IHC_BACKUP_REPORTS || "/ihc/backup-reports";
     console.log(readFileSync(`${dir}/latest-status.json`, "utf8"));
   },
   async docker(path) {
@@ -117,13 +117,13 @@ const commands = {
   },
   async writes() {
     console.log(WRITES
-      ? "allow_write: on. Allowed: restart of one app container (occ-ro restart NAME) and build cache prune (occ-ro prune-build-cache). Never a core container, never anything else."
+      ? "allow_write: on. Allowed: restart of one app container (ihc-ro restart NAME) and build cache prune (ihc-ro prune-build-cache). Never a core container, never anything else."
       : "allow_write: off. Every Docker write is refused; give the human the command instead.");
   },
   // Level 2 of the contract: only on an explicit instruction naming the app. Record the
-  // state before (occ-ro inspect) and prove health after (runbooks/restart-service.md).
+  // state before (ihc-ro inspect) and prove health after (runbooks/restart-service.md).
   async restart(name) {
-    if (!name) throw new Error("usage: occ-ro restart NAME");
+    if (!name) throw new Error("usage: ihc-ro restart NAME");
     const c = await resolve(name);
     const project = c.Labels["com.docker.compose.project"] || "-";
     const before = `${c.Names[0].slice(1)} project=${project} state=${c.State} (${c.Status})`;

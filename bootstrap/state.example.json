@@ -6,7 +6,7 @@
   "created_at": "2026-01-01T00:00:00Z",
   "updated_at": "2026-01-01T00:00:00Z",
   "paths": {
-    "install_dir": "/opt/open-company-cloud",
+    "install_dir": "/opt/inhousecloud",
     "env_file": ".env",
     "compose_file": "compose.generated.yml"
   },

@@ -1,8 +1,8 @@
 # Shared shell library for install.sh, first-run.sh and smoke-tests.sh.
 # bash 3.2 compatible. Sourced, never executed.
 
-OCC_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OCC_ROOT="$(cd "$OCC_LIB/../.." && pwd)"
+IHC_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IHC_ROOT="$(cd "$IHC_LIB/../.." && pwd)"
 PY="python3 -I"
 
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
@@ -19,29 +19,30 @@ fail() { _out "[xx] $*"; }
 die()  { fail "$*"; exit 1; }
 
 # ------------------------------------------------------------------ helpers
-jsonq()   { $PY "$OCC_LIB/jsonq.py" "$@"; }
-envfile() { $PY "$OCC_LIB/envfile.py" "$@"; }
-state()   { $PY "$OCC_LIB/state.py" "$STATE_FILE" "$@"; }
+jsonq()   { $PY "$IHC_LIB/jsonq.py" "$@"; }
+envfile() { $PY "$IHC_LIB/envfile.py" "$@"; }
+state()   { $PY "$IHC_LIB/state.py" "$STATE_FILE" "$@"; }
 
 env_get() { envfile get "$ENV_FILE" "$1"; }
 # env_set KEY VALUE: the value travels on stdin, never on a command line.
 env_set() { printf '%s' "$2" | envfile set "$ENV_FILE" "$1"; }
 
 # ------------------------------------------------------------------ old names
-# Renamed from Open Company App Harness (docs/install-design.md): for one version, a
-# HARNESS_<X> in the environment still sets OCC_<X> when that is unset, with a warning.
-# Children inherit the OCC_ value and OCC_COMPAT_WARNED, so each name warns once.
-occ_compat_env() {
+# Renamed from Open Company Cloud (docs/install-design.md): for one version, an
+# OCC_<X> in the environment still sets IHC_<X> when that is unset, with a warning.
+# Children inherit the IHC_ value and IHC_COMPAT_WARNED, so each name warns once.
+# The HARNESS_<X> names of the first rename are not read any more.
+ihc_compat_env() {
   local name new
-  for name in $(env | sed -n 's/^\(HARNESS_[A-Za-z0-9_]*\)=.*/\1/p'); do
-    new="OCC_${name#HARNESS_}"
+  for name in $(env | sed -n 's/^\(OCC_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    new="IHC_${name#OCC_}"
     eval "[ -z \"\${$new+x}\" ]" || continue
     eval "export $new=\"\$$name\""
-    [ -n "${OCC_COMPAT_WARNED:-}" ] || warn "$name is the old name of $new (renamed from Open Company App Harness): read for this version only, rename it"
+    [ -n "${IHC_COMPAT_WARNED:-}" ] || warn "$name is the old name of $new (renamed from Open Company Cloud): read for this version only, rename it"
   done
-  export OCC_COMPAT_WARNED=1
+  export IHC_COMPAT_WARNED=1
 }
-occ_compat_env
+ihc_compat_env
 
 random_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-40}"; }
 
@@ -163,7 +164,7 @@ port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 API_TMPDIR=""
 api_init() {
   if [ -z "$API_TMPDIR" ]; then
-    API_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/occ-api.XXXXXX")"
+    API_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ihc-api.XXXXXX")"
     chmod 700 "$API_TMPDIR"
     trap 'rm -rf "$API_TMPDIR"' EXIT
   fi

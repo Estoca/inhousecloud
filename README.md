@@ -1,4 +1,6 @@
-# Open Company Cloud
+# InHouseCloud
+
+InHouseCloud: the company's own cloud, installed and operated with one command. Open source.
 
 The company's cloud on one machine: an agent installs it, and an agent puts apps on the air in it.
 
@@ -11,23 +13,23 @@ One box runs what a small company needs around its internal apps: single sign-on
 On a Mac with Docker Desktop, directly (15 to 20 GiB free; no `sudo`):
 
 ```bash
-git clone https://github.com/Estoca/open-company-cloud.git ~/src/open-company-cloud && cd ~/src/open-company-cloud
-./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/open-company-cloud
+git clone https://github.com/Estoca/inhousecloud.git ~/src/inhousecloud && cd ~/src/inhousecloud
+./install.sh --non-interactive --config bootstrap/config.example.yaml --install-dir ~/inhousecloud
 ```
 
 Or in a throwaway VM, on a Mac with [Homebrew](https://brew.sh) and no Docker (or skip the VM on any Ubuntu box with Docker):
 
 ```bash
 brew install lima
-limactl start --tty=false --name occ --cpus 2 --memory 4 --disk 30 template:docker
-limactl shell occ
+limactl start --tty=false --name ihc --cpus 2 --memory 4 --disk 30 template:docker
+limactl shell ihc
 # inside the VM:
-cd ~ && git clone https://github.com/Estoca/open-company-cloud.git && cd open-company-cloud
-sudo install -d -o $(id -un) -g $(id -gn) /opt/open-company-cloud
+cd ~ && git clone https://github.com/Estoca/inhousecloud.git && cd inhousecloud
+sudo install -d -o $(id -un) -g $(id -gn) /opt/inhousecloud
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-About a minute for the VM and five for the install. The install ends with seven day-zero steps, with the literal commands: open <http://portal.cloud.localhost> and sign in (the portal is a placeholder: it proves the SSO; to operate, Gitea + `occ-operator brief`), turn on MFA, copy the backup key off the machine, put a first app on the air with `scripts/occ-app.sh new <name> --owner <email> --push` (about 30 seconds later behind the same sign-in), and stop or remove a test install ([`docs/cleanup.md`](docs/cleanup.md)). Both paths, with the times measured: [`docs/try-it.md`](docs/try-it.md).
+About a minute for the VM and five for the install. The install ends with seven day-zero steps, with the literal commands: open <http://portal.cloud.localhost> and sign in (the portal is a placeholder: it proves the SSO; to operate, Gitea + `ihc-operator brief`), turn on MFA, copy the backup key off the machine, put a first app on the air with `scripts/ihc-app.sh new <name> --owner <email> --push` (about 30 seconds later behind the same sign-in), and stop or remove a test install ([`docs/cleanup.md`](docs/cleanup.md)). Both paths, with the times measured: [`docs/try-it.md`](docs/try-it.md).
 
 Or ask a coding agent. Below, Claude Code gets one sentence in Portuguese ("create an internal expense log app on our company cloud and put it on the air") and `ssh` to a box it has never seen; recordings and how they were made are in [`docs/demo/`](docs/demo/).
 
@@ -50,7 +52,7 @@ Coding agents can produce internal apps faster than most teams can safely deploy
 
 Without a shared platform, each app tends to grow its own deployment script, fixed port, environment variable pattern, auth behavior, and README. That works for one app. It becomes fragile at ten apps and risky at fifty.
 
-Open Company Cloud creates a small cloud control plane around one machine:
+InHouseCloud creates a small cloud control plane around one machine:
 
 - a standard ingress route;
 - a default auth layer;
@@ -78,7 +80,7 @@ That machine runs the control plane, the support plane, and the apps:
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
 - an optional operator agent answers "why is it down" in Slack or Telegram from a generated map of the box, read only by default, inside a written contract (the `agent` profile, [`docs/operator-contract.md`](docs/operator-contract.md));
-- an app portal shows what should exist, what is running, and what changed (next on the roadmap; today a placeholder proves the SSO; to operate, Gitea + `occ-operator brief`);
+- an app portal shows what should exist, what is running, and what changed (next on the roadmap; today a placeholder proves the SSO; to operate, Gitea + `ihc-operator brief`);
 - coding agents connect to the same machine and use the same contracts as humans.
 
 This is not meant to replace AWS, Kubernetes, or a mature platform team. It is meant to cover the first, surprisingly large stage where a company needs internal software to be real, authenticated, observable, and repeatable, but does not yet need a distributed platform.
@@ -96,7 +98,7 @@ What a terminal-connected agent does with them, today:
 
 1. Reads `AGENTS.md`, which routes it to `docs/agent-setup-contract.md` (what to ask, what never to do) and `docs/llm-bootstrap.md` (the commands, with success conditions).
 2. **Install.** Asks for the install directory, ingress mode and domain, admin email, Gitea organization, backup destination and optional profiles; never for a password (the installer generates them). Shows `./install.sh --plan`, applies after a yes, and reports the URLs and the steps left to the human. Four to seven minutes on a clean box.
-3. **App.** Runs `scripts/occ-app.sh new <slug>`, writes the app in the generated repository (shared Postgres and Redis through `DATABASE_URL` and `REDIS_URL`, the user from the SSO headers), pushes to `main`, and confirms the deploy run is green, `/health` answers 200 and `/` asks for the sign-in.
+3. **App.** Runs `scripts/ihc-app.sh new <slug>`, writes the app in the generated repository (shared Postgres and Redis through `DATABASE_URL` and `REDIS_URL`, the user from the SSO headers), pushes to `main`, and confirms the deploy run is green, `/health` answers 200 and `/` asks for the sign-in.
 4. **Repair.** On a red run, reads the job log, fixes the app and pushes again.
 
 The test of this is a cold run: an agent given only the repository and a one-line request in a layperson's words. Results in `docs/first-run.md`, "Cold agent run".
@@ -161,12 +163,12 @@ flowchart LR
   Rules[Live cloud rules] --> Agent
 
   AppRepo -->|push to main = approval| Actions[Gitea Actions<br/>deploy runner on the box]
-  Actions --> Provision[occ-app provision]
+  Actions --> Provision[ihc-app provision]
   Provision --> Services[Shared Postgres, Redis, Garage S3<br/>own database, role, prefix, bucket]
   Provision --> Proxy[Proxy host + forward auth]
   Provision --> Auth[Authentik provider + application]
   Provision --> Inventory[inventory.json]
-  Actions --> Docker[docker compose up<br/>on the occ network]
+  Actions --> Docker[docker compose up<br/>on the ihc network]
   Docker --> Health[healthcheck through the proxy]
   Health --> Actions
 
@@ -212,16 +214,16 @@ auth:
     - example.com
 ```
 
-`occ-app provision` validates that contract on every push to `main` and refuses an app that breaks it, before anything changes.
+`ihc-app provision` validates that contract on every push to `main` and refuses an app that breaks it, before anything changes.
 
 ## Operating Model
 
 One path, from the first deploy to the hundredth:
 
-1. `scripts/occ-app.sh new <slug>` creates the app from `templates/app` and its private repository in the Gitea organization.
+1. `scripts/ihc-app.sh new <slug>` creates the app from `templates/app` and its private repository in the Gitea organization.
 2. A developer or a coding agent builds the app inside that contract (`docs/app-contract.md`).
 3. A push to `main` is the approval. Who may push to `main` is set in Gitea: organization membership, team permissions, branch protection.
-4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, runs `occ-app provision <slug>` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), builds and starts the app on the occ network, and waits for its healthcheck through the proxy.
+4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, runs `ihc-app provision <slug>` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), builds and starts the app on the ihc network, and waits for its healthcheck through the proxy.
 5. The run log in Gitea is the record; the portal reads it.
 
 Nobody else acts between the push and the app on the air: the run log is the record and the push is the approval (`docs/gitops-flow.md`).
@@ -306,17 +308,17 @@ docs/first-run.md      What the install automates, what it leaves to you, and ev
 docs/llm-bootstrap.md, docs/agent-setup-contract.md   The agent path
 docs/operator-contract.md, docs/runbooks/             The operator agent (agent profile)
 schemas/               JSON schema for company-app.yaml
-templates/app/         The app template occ-app new copies: runnable app, manifest, deploy workflow
+templates/app/         The app template ihc-app new copies: runnable app, manifest, deploy workflow
 examples/minimal-web-app/  The placeholder portal
 docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup, agent,
                        cloudflared, tailscale), .env.example, backup/ and deployer/ images
 install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
-scripts/occ-app.sh new, provision, checkout, wait, list: the app loop (docs/gitops-flow.md)
-scripts/occ-backup.sh run, verify, status: the nightly backup (docs/backup.md)
+scripts/ihc-app.sh new, provision, checkout, wait, list: the app loop (docs/gitops-flow.md)
+scripts/ihc-backup.sh run, verify, status: the nightly backup (docs/backup.md)
 scripts/smoke-tests.sh The checks that decide "installed"
 scripts/sso-login-check.sh  Walks the sign-in with curl, the way a browser would
-scripts/occ-operator.sh brief: the generated map an operator reads first (docs/operator-contract.md)
+scripts/ihc-operator.sh brief: the generated map an operator reads first (docs/operator-contract.md)
 scripts/lib/, scripts/tests/  Helpers (Authentik and proxy, Garage, env files, state) and their tests
 bootstrap/             config.example.yaml and state.example.json for the installer
 packages/cli/          Placeholder for validation and workflow tooling
@@ -324,7 +326,7 @@ packages/cli/          Placeholder for validation and workflow tooling
 
 ## Status
 
-Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `occ-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the cloud installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). `private` ingress (Tailscale) is tested end to end too, with a sign-in from another device on the tailnet. Not there yet: the real portal (a placeholder answers), `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
+Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `ihc-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the cloud installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). `private` ingress (Tailscale) is tested end to end too, with a sign-in from another device on the tailnet. Not there yet: the real portal (a placeholder answers), `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
 
 ## Roadmap
 
@@ -333,30 +335,30 @@ Done:
 - PR 1: install design (profiles, ingress matrix, stage model, first-run, backup minimum).
 - PR 2: `install.sh`, the core cloud on one box (proxy, Authentik, Gitea on the shared Postgres, shared Postgres and Redis), first-run automation, smoke tests.
 - PR 3: backup job (restic sidecar, lock, hard timeout, status file).
-- PR 4: the app loop: `occ-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
+- PR 4: the app loop: `ihc-app new`, deploy by push to `main` on Gitea Actions, the Actions runners in core.
 - PR 5: the agent path (`AGENTS.md`, `docs/llm-bootstrap.md`, `docs/agent-setup-contract.md`) rewritten for the loop above and tested with a cold agent run.
 - PR 6: the `ops` profile: Portainer, Glances, a web terminal and a file browser, for admins only behind the SSO.
 - PR 7: the cold install run: an agent installs the cloud from zero on a clean box from a layperson's request.
 - PR 8: the `storage` profile on Garage (the earlier S3 server's images were no longer downloadable), a bucket and key per app.
-- PR 9: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/occ-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
+- PR 9: the `agent` profile: the operator contract ([`docs/operator-contract.md`](docs/operator-contract.md)), runbooks ([`docs/runbooks/`](docs/runbooks/)), the generated brief (`scripts/ihc-operator.sh brief`) and OpenClaw as the reference agent, read only by default.
 - PR 10: try it in 10 minutes ([`docs/try-it.md`](docs/try-it.md)), the demo recordings and the announcement drafts.
 - PR 11: `private` ingress: Tailscale serve, the installation's own name-constrained CA, split DNS.
-- PR 12: the rename to Open Company Cloud (`occ-*` commands, `OCC_*` variables); old names load for one version.
+- PR 12: the rename to InHouseCloud (`ihc-*` commands, `IHC_*` variables); old names load for one version.
 - PR 13: onboarding after the install: the day-zero handoff, `--plan` as a dry run, stop, start and remove.
 - PR 14: the operator agent in conversation (Telegram), with a memory limit and the writes it can use.
 
 Next:
 
 - The real portal, ported from the internal portal already running in the reference installation: read-only inventory, deploy runs, health, backups, the people who can sign in and their groups (read from Authentik), and `GET /api/platform/status` for agents.
-- `occ doctor`: one command that checks the box the way the smoke tests do (routes and DNS, TLS, the sign-in, disk, containers and their health checks, the age of the last backup) and answers in plain text for a person and with `--json` for an agent or the operator. It works with or without the `agent` profile.
+- `ihc doctor`: one command that checks the box the way the smoke tests do (routes and DNS, TLS, the sign-in, disk, containers and their health checks, the age of the last backup) and answers in plain text for a person and with `--json` for an agent or the operator. It works with or without the `agent` profile.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
-- **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `occ-app new` and the agent path produce it by default; a company can make it mandatory.
+- **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `ihc-app new` and the agent path produce it by default; a company can make it mandatory.
 - **The cloud's own MCP.** One gateway per company at `mcp.<BASE_DOMAIN>`, behind the SSO, that knows which person is calling: the platform's tools read only (status, apps, deploy runs, backup age, `doctor`) and a route to each app's provider by audience and scope, with a token per person or team. Apps never expose MCP on their own; the gateway does. This is the endpoint the [Open Company OS](https://github.com/Estoca/open-company-os) assumes exists. The reference installation runs a separate internal MCP service today; it becomes the reference implementation and moves inside.
 
 Later:
 
-- Restoring one app from a snapshot (`occ-app restore <slug>`), without restoring the whole box. The dumps are already per database.
+- Restoring one app from a snapshot (`ihc-app restore <slug>`), without restoring the whole box. The dumps are already per database.
 
 ## Safety Principles
 
@@ -417,7 +419,7 @@ Same path for an agent or CI, with the answers in a file:
 ```bash
 ./install.sh handoff     # the seven day-zero steps again
 ./install.sh status      # short: state, URLs, service health, backup age, apps and owners
-./install.sh status --verbose   # every stage and the full operator brief (scripts/occ-operator.sh brief)
+./install.sh status --verbose   # every stage and the full operator brief (scripts/ihc-operator.sh brief)
 ./install.sh stop        # stop the cloud and its apps, data kept (start: ./install.sh start)
 ./install.sh remove      # remove a test install; asks for the project name (docs/cleanup.md)
 ```
@@ -425,13 +427,13 @@ Same path for an agent or CI, with the answers in a file:
 
 ### Backup
 
-Part of the install, on by default. A small `backup` container runs `scripts/occ-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and Garage (storage profile) volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
+Part of the install, on by default. A small `backup` container runs `scripts/ihc-backup.sh` on `backup.schedule` (02:00 UTC by default): every Postgres database of the shared instance and of Authentik's, streamed by `pg_dump` into an encrypted restic repository, plus the Gitea, proxy, Authentik and Garage (storage profile) volumes and the install directory. Retention is 7 daily, 4 weekly, 12 monthly. A lock and a hard timeout keep a hung run from blocking the next night; it is killed and recorded as failed. Each run writes `reports/latest-status.json`, which the portal reads.
 
 ```bash
-export OCC_BACKUP_DESTINATION=/mnt/backup-disk/occ   # or answer the installer's question, or backup.destination in the config
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud run
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud verify --latest
-scripts/occ-backup.sh --install-dir /opt/open-company-cloud status
+export IHC_BACKUP_DESTINATION=/mnt/backup-disk/ihc   # or answer the installer's question, or backup.destination in the config
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud run
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud verify --latest
+scripts/ihc-backup.sh --install-dir /opt/inhousecloud status
 ```
 
 Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The off-site copy and the monthly restore rehearsal are not built yet. Details and restore steps: `docs/backup.md`. App databases live on the shared Postgres, so they are in the nightly dump with everything else.
@@ -441,15 +443,15 @@ Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository c
 On the box (the Actions runners are part of every install):
 
 ```bash
-scripts/occ-app.sh new expense-report --owner maria@example.com --install-dir /opt/open-company-cloud
+scripts/ihc-app.sh new expense-report --owner maria@example.com --install-dir /opt/inhousecloud
 cd expense-report
 git push -u origin main
 ```
 
-The push runs `.gitea/workflows/deploy.yml` on the box: the app gets its own database and role on the shared Postgres, a Redis user limited to its key prefix, an env file at `<install-dir>/apps/expense-report/.env` (0600), the route `expense-report.<BASE_DOMAIN>` behind the SSO and a line in `inventory.json`; then it is built, started on the occ network and checked at `/health`. Every later push redeploys it, keeping its passwords. The flow, the runners and the trust they need: `docs/gitops-flow.md`. The contract the app keeps: `docs/app-contract.md`.
+The push runs `.gitea/workflows/deploy.yml` on the box: the app gets its own database and role on the shared Postgres, a Redis user limited to its key prefix, an env file at `<install-dir>/apps/expense-report/.env` (0600), the route `expense-report.<BASE_DOMAIN>` behind the SSO and a line in `inventory.json`; then it is built, started on the ihc network and checked at `/health`. Every later push redeploys it, keeping its passwords. The flow, the runners and the trust they need: `docs/gitops-flow.md`. The contract the app keeps: `docs/app-contract.md`.
 
 `scripts/bootstrap.mjs` remains for cloning the platform repositories of a manifest (`bootstrap/repos.example.json`); it no longer starts services.
 
 ## Name
 
-This project was called **Open Company App Harness** (repository `open-company-app-harness`) until 2026-10-20. It started as a harness around coding agents and grew into the company's cloud on one machine, so it was renamed to match its sibling, Open Company OS. Commands, variables and defaults changed with it (`harness-app` → `occ-app`, `HARNESS_*` → `OCC_*`); what still reads the old names, and for how long, is in [`docs/install-design.md`](docs/install-design.md#renamed-from-open-company-app-harness).
+Renamed from **Open Company App Harness** (repository `open-company-app-harness`, until 2026-10-20) and **Open Company Cloud** (`open-company-cloud`, prefix `occ`, 2026-10-20 to 2026-10-21). The first name said where it came from, a harness around coding agents; the second said what it is, but a trademark search found "OpenCompany" and "OpenCloud" already taken by other open-source projects and live marks. InHouseCloud is the company's own cloud, in-house, and clashes with nothing. Commands, variables and defaults changed with each rename (`harness-app` → `occ-app` → `ihc-app`, `HARNESS_*` → `OCC_*` → `IHC_*`); what still reads the previous names, and for how long, is in [`docs/install-design.md`](docs/install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud).

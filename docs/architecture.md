@@ -1,6 +1,6 @@
 # Architecture
 
-Open Company Cloud describes a single-box internal cloud: one machine that runs the core services a small company needs to build, protect, deploy, observe, and operate internal apps.
+InHouseCloud describes a single-box internal cloud: one machine that runs the core services a small company needs to build, protect, deploy, observe, and operate internal apps.
 
 The deployment pipeline is only one layer of the system. The full architecture includes ingress, SSO, Git, runtime, shared services, observability, and an agent-friendly control loop.
 
@@ -68,9 +68,9 @@ Each app repository contains:
 
 ### Deploy Runner and Executor
 
-The core runs two Gitea Actions runners. `gitea-runner` serves CI for any repository, with no Docker socket in its jobs. `gitea-deployer` serves the organization's repositories only (label `occ-deploy`) and gives its jobs the Docker socket, the occ network and the install directory.
+The core runs two Gitea Actions runners. `gitea-runner` serves CI for any repository, with no Docker socket in its jobs. `gitea-deployer` serves the organization's repositories only (label `ihc-deploy`) and gives its jobs the Docker socket, the ihc network and the install directory.
 
-An app's deploy workflow runs there on every push to `main`. Its executor is `scripts/occ-app.sh provision`: it validates the manifest and the compose file, then ensures the app's database and role on the shared Postgres, its Redis ACL user, its optional bucket, its env file in the install directory, the proxy route with forward auth, the Authentik application and the inventory record. Then the job builds the app, starts it on the occ network and waits for its healthcheck through the proxy. The executor is idempotent and never deletes. Details: [`gitops-flow.md`](gitops-flow.md).
+An app's deploy workflow runs there on every push to `main`. Its executor is `scripts/ihc-app.sh provision`: it validates the manifest and the compose file, then ensures the app's database and role on the shared Postgres, its Redis ACL user, its optional bucket, its env file in the install directory, the proxy route with forward auth, the Authentik application and the inventory record. Then the job builds the app, starts it on the ihc network and waits for its healthcheck through the proxy. The executor is idempotent and never deletes. Details: [`gitops-flow.md`](gitops-flow.md).
 
 The first box ran this loop through a deploy-request repository and an operator agent on the box; both were retired once the operator's steps became the executor.
 
@@ -115,11 +115,11 @@ Coding agents should read the live rules before preparing a repo. They edit app 
 ## App Deployment Flow
 
 1. A user asks an agent or developer to create an internal app.
-2. `occ-app new <slug>` creates the repository from the template in the Gitea organization.
+2. `ihc-app new <slug>` creates the repository from the template in the Gitea organization.
 3. `company-app.yaml` declares owner, runtime, health, auth, and the shared services it needs.
 4. Local checks validate the app and its health behavior.
 5. A push to `main` approves the deploy.
-6. The deploy workflow runs on the box: checkout, `occ-app provision`, `docker compose up`, healthcheck through the proxy.
+6. The deploy workflow runs on the box: checkout, `ihc-app provision`, `docker compose up`, healthcheck through the proxy.
 7. The run log is the record; the portal reads it with health and inventory.
 8. Every later push to `main` redeploys the same way.
 

@@ -1,4 +1,4 @@
-# Open Company Cloud: the single-box company cloud as Compose profiles.
+# InHouseCloud: the single-box company cloud as Compose profiles.
 #
 # Every value comes from .env (see .env.example); install.sh generates that file.
 # Services with no `profiles:` key are the `core` profile and always run.
@@ -19,11 +19,11 @@
 #     `private` ingress everything is published on 127.0.0.1 and the tailnet reaches the
 #     proxy only through the Tailscale node's serve config (ports 80, 443, Gitea SSH).
 #   - Named volumes only, except the ops tools' explicit host paths (docs/security.md).
-#   - One internal network (occ), joinable by apps. The ops tools live on a second
-#     network (occ-ops) that only the proxy joins: an app container cannot reach them
+#   - One internal network (ihc), joinable by apps. The ops tools live on a second
+#     network (ihc-ops) that only the proxy joins: an app container cannot reach them
 #     without going through the proxy and the SSO.
 
-name: ${COMPOSE_PROJECT_NAME:-occ}
+name: ${COMPOSE_PROJECT_NAME:-ihc}
 
 x-logging: &default-logging
   driver: json-file
@@ -49,7 +49,7 @@ services:
       - proxy-data:/data
       - proxy-letsencrypt:/etc/letsencrypt
     networks:
-      occ:
+      ihc:
         aliases:
           # Containers resolve the public hostnames to the proxy, so Gitea can
           # fetch Authentik's OIDC discovery document by its public URL.
@@ -74,7 +74,7 @@ services:
       POSTGRES_PASSWORD: ${AUTHENTIK_PG_PASSWORD}
     volumes:
       - authentik-postgres-data:/var/lib/postgresql/data
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -108,7 +108,7 @@ services:
     volumes:
       - authentik-media:/media
       - authentik-templates:/templates
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s
@@ -140,7 +140,7 @@ services:
       - authentik-media:/media
       - authentik-templates:/templates
       - authentik-certs:/certs
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s
@@ -160,7 +160,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -170,14 +170,14 @@ services:
 
   redis:
     # Shared Redis: for apps built inside the cloud. Each app gets an ACL user limited to
-    # its key prefix (scripts/occ-app.sh); users persist in /data/users.acl.
+    # its key prefix (scripts/ihc-app.sh); users persist in /data/users.acl.
     image: ${REDIS_IMAGE}
     command: ["sh", "-c", "touch /data/users.acl && exec redis-server --save 60 1 --loglevel warning --aclfile /data/users.acl"]
     restart: unless-stopped
     logging: *default-logging
     volumes:
       - redis-data:/data
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -223,17 +223,17 @@ services:
       # TLS internal: Go reads every file of these directories as trusted roots, so Gitea
       # trusts the cloud CA when it talks to https://auth.<BASE_DOMAIN> (OIDC). The file is
       # empty when TLS is not internal.
-      SSL_CERT_DIR: /etc/ssl/certs:/etc/occ-ca
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/ihc-ca
     ports:
       - "${BIND_ADDRESS}:${GITEA_SSH_PORT}:22"
       # Loopback only: the installer's control-plane path. Users go through the proxy.
       - "127.0.0.1:${GITEA_LOCAL_PORT}:3000"
     volumes:
       - gitea-data:/data
-      - ./local/ca/ca.crt:/etc/occ-ca/ca.crt:ro
+      - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/healthz"]
       interval: 10s
@@ -247,7 +247,7 @@ services:
     # same name, port, network and healthcheck path.
     build:
       context: ${PORTAL_BUILD_CONTEXT}
-    image: ${COMPOSE_PROJECT_NAME:-occ}-portal:placeholder
+    image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:placeholder
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -261,7 +261,7 @@ services:
       DATABASE_URL: postgres://${PORTAL_DB_ROLE}:${PORTAL_DB_PASSWORD}@postgres:5432/${PORTAL_DB_NAME}
       REDIS_URL: redis://redis:6379/0
       SUPER_ADMIN_EMAILS: ${PORTAL_SUPER_ADMIN_EMAILS}
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 10s
@@ -274,7 +274,7 @@ services:
     # S3 API on garage:3900 for apps, s3.<BASE_DOMAIN> through the proxy. No console:
     # Garage has none. The admin API (3903) answers only with GARAGE_ADMIN_TOKEN and is
     # not routed. install.sh renders ./garage/garage.toml (no secrets in it) and applies
-    # the single-node layout; occ-app provision creates one bucket and key per app.
+    # the single-node layout; ihc-app provision creates one bucket and key per app.
     profiles: ["storage"]
     image: ${GARAGE_IMAGE}
     restart: unless-stopped
@@ -287,7 +287,7 @@ services:
     volumes:
       - ./garage/garage.toml:/etc/garage.toml:ro
       - garage-data:/var/lib/garage
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       # The image has no shell: the node answering its own RPC is "healthy". Whether the
       # layout gives it storage is `garage health`, checked by install.sh and smoke test 19.
@@ -301,7 +301,7 @@ services:
   # Two runners on purpose (docs/gitops-flow.md). Both daemons need the Docker socket to
   # start job containers; only the deployer hands it to its jobs.
   gitea-runner:
-    # CI for any repository: label ubuntu-latest. Jobs get no Docker socket, no occ
+    # CI for any repository: label ubuntu-latest. Jobs get no Docker socket, no ihc
     # network and no install directory (runner/ci.yaml).
     image: ${GITEA_RUNNER_IMAGE}
     restart: unless-stopped
@@ -319,7 +319,7 @@ services:
       - gitea-runner-data:/data
       - ./runner:/config:ro
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       # Liveness of the daemon; registration is recorded in /data/.runner.
       test: ["CMD-SHELL", "pgrep act_runner >/dev/null && test -f /data/.runner"]
@@ -329,8 +329,8 @@ services:
       start_period: 30s
 
   gitea-deployer:
-    # Deploys: label occ-deploy, registered for the organization only. Its jobs run in
-    # the <project>-deployer:local image with the Docker socket, the occ network and
+    # Deploys: label ihc-deploy, registered for the organization only. Its jobs run in
+    # the <project>-deployer:local image with the Docker socket, the ihc network and
     # the install directory: a job here is root on the box (runner/deploy.yaml).
     image: ${GITEA_RUNNER_IMAGE}
     restart: unless-stopped
@@ -342,13 +342,13 @@ services:
       GITEA_INSTANCE_URL: http://gitea:3000
       GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_DEPLOY_RUNNER_TOKEN}
       GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME}-deploy
-      GITEA_RUNNER_LABELS: occ-deploy
+      GITEA_RUNNER_LABELS: ihc-deploy
       CONFIG_FILE: /config/deploy.yaml
     volumes:
       - gitea-deployer-data:/data
       - ./runner:/config:ro
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD-SHELL", "pgrep act_runner >/dev/null && test -f /data/.runner"]
       interval: 30s
@@ -358,7 +358,7 @@ services:
 
   # ------------------------------------------------------------------- ops
   # Admin tools, reachable only through the proxy with forward auth bound to the
-  # occ-admins group (scripts/first-run.sh). They sit on the ops network, which apps
+  # ihc-admins group (scripts/first-run.sh). They sit on the ops network, which apps
   # never join, so the SSO in front of them cannot be bypassed from an app container.
   # Each one is admin access to the machine: docs/security.md.
   portainer:
@@ -417,7 +417,7 @@ services:
       - --known-hosts=/keys/known_hosts
       - --force-ssh
       - --allowed-origin=${WETTY_ORIGIN:-http://localhost}
-      - --title=${COMPOSE_PROJECT_NAME:-occ}
+      - --title=${COMPOSE_PROJECT_NAME:-ihc}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -435,7 +435,7 @@ services:
     # File manager at files.<BASE_DOMAIN>. It sees exactly two host paths and nothing
     # else (docs/security.md; tested by scripts/tests/ops-mounts.sh):
     #   /srv/apps            <install-dir>/app-data: one directory per app, mounted at
-    #                        /data in the app (scripts/occ-app.sh)
+    #                        /data in the app (scripts/ihc-app.sh)
     #   /srv/backup-reports  <BACKUP_DESTINATION>/reports, read only
     # Never the install directory itself, its .env, local/ or the apps' env files.
     # Its own login is off: auth.method=proxy trusts X-authentik-username, which only the
@@ -482,7 +482,7 @@ services:
     logging: *default-logging
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN}
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       # The image has no shell; this checks the binary answers, not the tunnel state.
       test: ["CMD", "cloudflared", "version"]
@@ -513,7 +513,7 @@ services:
     volumes:
       - tailscale-state:/var/lib/tailscale
       - ./tailscale:/config:ro
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD-SHELL", "tailscale status --json | grep -q '\"BackendState\": \"Running\"'"]
       interval: 30s
@@ -540,7 +540,7 @@ services:
 
   # ---------------------------------------------------------------- backup
   backup:
-    # The minimal backup job (docs/backup.md): busybox crond runs occ-backup on
+    # The minimal backup job (docs/backup.md): busybox crond runs ihc-backup on
     # BACKUP_SCHEDULE. Dumps stream from pg_dump into a restic repository encrypted with
     # BACKUP_ENCRYPTION_KEY under BACKUP_DESTINATION; volumes and the install directory
     # are mounted read-only. install.sh assembles the build context in ./backup-job.
@@ -549,7 +549,7 @@ services:
       context: ${BACKUP_BUILD_CONTEXT:-./backup-job}
       args:
         PG_CLIENT: ${BACKUP_PG_CLIENT_PACKAGE:-postgresql16-client}
-    image: ${COMPOSE_PROJECT_NAME:-occ}-backup:local
+    image: ${COMPOSE_PROJECT_NAME:-ihc}-backup:local
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -568,7 +568,7 @@ services:
       TZ: ${BACKUP_TZ:-UTC}
     volumes:
       - ${BACKUP_DESTINATION}:/backups
-      - .:/occ:ro
+      - .:/ihc:ro
       - backup-cache:/var/cache/restic
       - gitea-data:/volumes/gitea-data:ro
       - proxy-data:/volumes/proxy-data:ro
@@ -577,7 +577,7 @@ services:
       - authentik-templates:/volumes/authentik-templates:ro
       - authentik-certs:/volumes/authentik-certs:ro
       - garage-data:/volumes/garage-data:ro
-    networks: [occ]
+    networks: [ihc]
     healthcheck:
       test: ["CMD-SHELL", "pgrep crond >/dev/null"]
       interval: 30s
@@ -598,7 +598,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      OCC_PROJECT: ${COMPOSE_PROJECT_NAME:-occ}
+      IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
       AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
@@ -648,17 +648,17 @@ services:
       TELEGRAM_BOT_TOKEN: ${AGENT_TELEGRAM_BOT_TOKEN:-}
       GITEA_READONLY_TOKEN: ${GITEA_READONLY_TOKEN:-}
       AGENT_GITEA_TOKEN: ${AGENT_GITEA_TOKEN:-}
-      OCC_DOCKER_API: http://agent-docker-proxy:2375
-      OCC_AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
-      OCC_GITEA_URL: http://gitea:3000
-      OCC_BACKUP_REPORTS: /occ/backup-reports
-      OCC_BASE_DOMAIN: ${BASE_DOMAIN:-}
+      IHC_DOCKER_API: http://agent-docker-proxy:2375
+      IHC_AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
+      IHC_GITEA_URL: http://gitea:3000
+      IHC_BACKUP_REPORTS: /ihc/backup-reports
+      IHC_BASE_DOMAIN: ${BASE_DOMAIN:-}
     volumes:
       - ${AGENT_DIR:-./agent}/state:/agent/state
       - ${AGENT_DIR:-./agent}/workspace:/agent/workspace
       - ${AGENT_DIR:-./agent}/reference:/agent/workspace/reference:ro
-      - ${AGENT_BACKUP_REPORTS_DIR:-./backups/reports}:/occ/backup-reports:ro
-    networks: [occ, agent]
+      - ${AGENT_BACKUP_REPORTS_DIR:-./backups/reports}:/ihc/backup-reports:ro
+    networks: [ihc, agent]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
@@ -669,14 +669,14 @@ services:
       start_period: 60s
 
 networks:
-  occ:
-    name: ${OCC_NETWORK}
+  ihc:
+    name: ${IHC_NETWORK}
   ops:
     # Ops tools and the proxy only. Not internal: Wetty needs the route to the host's sshd.
-    name: ${OCC_OPS_NETWORK:-occ-ops}
+    name: ${IHC_OPS_NETWORK:-ihc-ops}
   agent:
     # The agent and its read-only Docker API only. Internal: the proxy has no way out.
-    name: ${OCC_AGENT_NETWORK:-occ-agent}
+    name: ${IHC_AGENT_NETWORK:-ihc-agent}
     internal: true
 
 volumes:

@@ -1,18 +1,18 @@
 # Demo recordings
 
-Three terminal recordings made on 2026-10-20 on clean Lima VMs (Ubuntu 26.04.1, 2 CPU, 4 GiB, Docker 29.9.1 rootless), from `main` at the time. They were made before the rename from Open Company App Harness: the screen shows the old names (`harness-app` for `occ-app`, `/opt/open-company-harness`, `*.harness.localhost`), and they were not re-recorded. Play one with `asciinema play docs/demo/<file>.cast`, or render it with [agg](https://github.com/asciinema/agg) (`agg <file>.cast <file>.gif`).
+Three terminal recordings made on 2026-10-20 on clean Lima VMs (Ubuntu 26.04.1, 2 CPU, 4 GiB, Docker 29.9.1 rootless), from `main` at the time. They were made before the two renames (Open Company App Harness → Open Company Cloud on 2026-10-20 → InHouseCloud on 2026-10-21): the screen shows the first names (`harness-app` for `ihc-app`, `/opt/open-company-harness`, `*.harness.localhost`). They have not been re-recorded yet; they will be re-recorded under the InHouseCloud names, and the GIF with them. The file names carry no project name and stay. Play one with `asciinema play docs/demo/<file>.cast`, or render it with [agg](https://github.com/asciinema/agg) (`agg <file>.cast <file>.gif`).
 
 | File | What it shows | Real time | Recording |
 |---|---|---|---|
 | [`agent-install.cast`](agent-install.cast) | A coding agent installs the cloud on a box with nothing of it, from a layperson's request in Portuguese | 419 s of agent time, the install 367 s of it | 1 min 31 s |
 | [`agent-first-app.cast`](agent-first-app.cast), [`agent-first-app.gif`](agent-first-app.gif) | On that box, a new agent session gets "create an internal expense log app and put it on the air", then a check by hand: `/health` 200, `/` sent to the sign-in, the sign-in page | 107 s, request to report | 1 min 4 s |
-| [`first-app-cli.cast`](first-app-cli.cast) | The same by hand, as in [`../try-it.md`](../try-it.md) step 5: `occ-app new --push`, `wait`, the checks | 38 s | 28 s |
+| [`first-app-cli.cast`](first-app-cli.cast) | The same by hand, as in [`../try-it.md`](../try-it.md) step 5: `ihc-app new --push`, `wait`, the checks | 38 s | 28 s |
 
 ## How they were made
 
 The agent recordings repeat the method of [`../first-run.md`](../first-run.md) ("Cold install run" and "Cold agent run"): `claude -p` (Claude Opus 5.5) on the host, in a fresh clone of this repository, with no MCP servers, no user settings, slash commands off, and tools limited to `Read`, `Glob`, `Grep`, `Bash(ssh:*)` and `Bash(scp:*)`. It reached the VM only through `ssh`. Its output (`--output-format stream-json`) went through a small formatter that prints the agent's messages in full and each tool call and the last lines of its result in one line each. The person was simulated with `--resume`: the request, then the answers to its questions (a fictitious bakery, a fictitious email, only this machine, no separate disk for backups, no file storage, admin tools yes), then "sim, pode instalar".
 
-The install run asked the same 6 questions as the earlier cold runs, showed the plan, installed, and reported **18 passed, 0 failed, 2 skipped** (the `storage` and `agent` profiles were off), the port-80 tunnel for a laptop, and the command that prints the sign-in password on the person's own screen. The app run took 13 turns: `occ-app new despesas`, a Node server on the shared Postgres, a build on the box, push, `occ-app wait`, a test row in and out through the container; the deploy run was green and `sso-login-check.sh` signed in to the app afterwards.
+The install run asked the same 6 questions as the earlier cold runs, showed the plan, installed, and reported **18 passed, 0 failed, 2 skipped** (the `storage` and `agent` profiles were off), the port-80 tunnel for a laptop, and the command that prints the sign-in password on the person's own screen. The app run took 13 turns: `ihc-app new despesas`, a Node server on the shared Postgres, a build on the box, push, `ihc-app wait`, a test row in and out through the container; the deploy run was green and `sso-login-check.sh` signed in to the app afterwards.
 
 ## What was edited
 

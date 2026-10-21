@@ -3,25 +3,25 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 21. Test 14 runs `occ-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 21. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
-# main (never skipped: the runners are core), redeploys it, then removes it (occ-app remove). Tests 17 and 18
+# main (never skipped: the runners are core), redeploys it, then removes it (ihc-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
 # storage and is skipped only when the storage profile is off; test 20 covers the operator
 # agent and is skipped when the agent profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
-#   OCC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
+#   IHC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
 #   AUTHENTIK_ISSUER     -> AUTHENTIK_BASE_URL/application/o/gitea
-#   OCC_GIT_ASKPASS  -> a helper written inside the Gitea container for test 12
+#   IHC_GIT_ASKPASS  -> a helper written inside the Gitea container for test 12
 set -eu
-OCC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$OCC_ROOT/scripts/lib/common.sh"
+. "$IHC_ROOT/scripts/lib/common.sh"
 # shellcheck source=lib/garage.sh
-. "$OCC_ROOT/scripts/lib/garage.sh"
+. "$IHC_ROOT/scripts/lib/garage.sh"
 
-INSTALL_DIR="${OCC_INSTALL_DIR:-/opt/open-company-cloud}"
+INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -118,7 +118,7 @@ ASKPASS_SRC='#!/bin/sh
 case "$1" in *sername*) printf "%s\n" "$GITEA_ADMIN_USERNAME" ;; *) printf "%s\n" "$GITEA_READONLY_TOKEN" ;; esac'
 head_ref=""; where=""
 if have git && $PY -c 'import socket,sys;socket.gethostbyname(sys.argv[1])' "$GITEA_HOST" 2>/dev/null; then
-  ap="$(mktemp "${TMPDIR:-/tmp}/occ-askpass.XXXXXX")"; printf '%s\n' "$ASKPASS_SRC" > "$ap"; chmod 700 "$ap"
+  ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; printf '%s\n' "$ASKPASS_SRC" > "$ap"; chmod 700 "$ap"
   [ "$TLS_MODE" = internal ] && export GIT_SSL_CAINFO="$INSTALL_DIR/local/ca/ca.crt"
   head_ref="$(GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
   rm -f "$ap"; where="from the host, ${GITEA_SMOKE_REPOSITORY#*://}"
@@ -142,7 +142,7 @@ done
 if [ "${BACKUP_ENABLED:-true}" != true ]; then
   result 14 backup-verify skip "BACKUP_ENABLED=false"
 else
-  vout="$("$OCC_ROOT/scripts/occ-backup.sh" --install-dir "$INSTALL_DIR" verify --latest --json 2>/dev/null | tail -n 1 || true)"
+  vout="$("$IHC_ROOT/scripts/ihc-backup.sh" --install-dir "$INSTALL_DIR" verify --latest --json 2>/dev/null | tail -n 1 || true)"
   vok="$(printf '%s' "$vout" | jsonq get ok)"
   if [ "$vok" = true ]; then
     result 14 backup-verify pass "run $(printf '%s' "$vout" | jsonq get run_id): $(printf '%s' "$vout" | jsonq len checks) checks passed"
@@ -175,13 +175,13 @@ fi
 #     database and role exist (LOGIN NOSUPERUSER, no public connect) and the role signs in
 #     with the password of the app's env file. A second push redeploys it and must keep
 #     that password. Then the app is marked kind: system-test in inventory.json and
-#     `occ-app remove smoke-app` takes away what the test created, so the cloud is handed
-#     over without it. If the removal fails the app stays, hidden from `occ-app list`.
+#     `ihc-app remove smoke-app` takes away what the test created, so the cloud is handed
+#     over without it. If the removal fails the app stays, hidden from `ihc-app list`.
 t16_push() { # WORKDIR MESSAGE -> sets T16_SHA, T16_ST, T16_RUN
   local t0
-  date -u +%Y-%m-%dT%H:%M:%SZ > "$1/.occ-smoke"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$1/.ihc-smoke"
   git -C "$1" add -A
-  git -C "$1" -c user.name=occ-smoke -c user.email="$GITEA_ADMIN_EMAIL" commit -q -m "$2" 2>/dev/null
+  git -C "$1" -c user.name=ihc-smoke -c user.email="$GITEA_ADMIN_EMAIL" commit -q -m "$2" 2>/dev/null
   T16_SHA="$(git -C "$1" rev-parse HEAD)"; T16_ST=""
   t0=$(date +%s)
   GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git -C "$1" push -q "$T16_REPO" HEAD:main 2>"$1.push.log" \
@@ -218,7 +218,7 @@ t16() {
   local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 removed
   T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
   have git || { result 16 app-deploy fail "git not found on the box"; return; }
-  work="$(mktemp -d "${TMPDIR:-/tmp}/occ-smoke16.XXXXXX")"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke16.XXXXXX")"
   T16_AP="$work/askpass"; printf '#!/bin/sh\ncase "$1" in *sername*) echo "%s" ;; *) printf "%%s\\n" "$GITEA_ADMIN_TOKEN" ;; esac\n' "$GITEA_ADMIN_USERNAME" > "$T16_AP"; chmod 700 "$T16_AP"
   T16_REPO="http://127.0.0.1:${GITEA_LOCAL_PORT}/$org/$slug.git"
   app_env="$INSTALL_DIR/apps/$slug/.env"
@@ -227,8 +227,8 @@ t16() {
   api_init gt16 "Authorization: token ${GITEA_ADMIN_TOKEN}"
   api GET "$T16_GT/repos/$org/$slug"
   if [ "$API_CODE" = 404 ] || [ "$(printf '%s' "$API_BODY" | jsonq get empty)" = true ]; then
-    "$OCC_ROOT/scripts/occ-app.sh" new "$slug" --dir "$work/$slug" --install-dir "$INSTALL_DIR" --name "Smoke App" --owner "$GITEA_ADMIN_EMAIL" >/dev/null 2>"$work/new.log" \
-      || { result 16 app-deploy fail "occ-app new failed: $(tail -n 1 "$work/new.log")"; rm -rf "$work"; return; }
+    "$IHC_ROOT/scripts/ihc-app.sh" new "$slug" --dir "$work/$slug" --install-dir "$INSTALL_DIR" --name "Smoke App" --owner "$GITEA_ADMIN_EMAIL" >/dev/null 2>"$work/new.log" \
+      || { result 16 app-deploy fail "ihc-app new failed: $(tail -n 1 "$work/new.log")"; rm -rf "$work"; return; }
   else
     GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git clone -q "$T16_REPO" "$work/$slug" 2>/dev/null \
       || { result 16 app-deploy fail "clone of $org/$slug failed"; rm -rf "$work"; return; }
@@ -255,13 +255,13 @@ t16() {
   rm -rf "$work"
   fp2="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
   [ "$fp1" = "$fp2" ] || { result 16 app-deploy fail "the redeploy changed the database password"; return; }
-  if "$OCC_ROOT/scripts/occ-app.sh" remove "$slug" --yes --install-dir "$INSTALL_DIR" >"${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log" 2>&1; then
+  if "$IHC_ROOT/scripts/ihc-app.sh" remove "$slug" --yes --install-dir "$INSTALL_DIR" >"${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log" 2>&1; then
     removed="removed after the test (repository, route, SSO, database, Redis user, files, inventory)"
   else
-    removed="NOT removed ($(grep '^\[xx\]' "${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log" | tail -n 1 | cut -c6-)): hidden as kind system-test; occ-app remove $slug"
+    removed="NOT removed ($(grep '^\[xx\]' "${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log" | tail -n 1 | cut -c6-)): hidden as kind system-test; ihc-app remove $slug"
     warn "16. $slug was left on the box: $removed"
   fi
-  rm -f "${TMPDIR:-/tmp}/occ-smoke16-remove.$$.log"
+  rm -f "${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log"
   result 16 app-deploy pass "push to green run in ${run1}s, redeploy in ${T16_RUN}s kept the password; /health 200, / to the SSO, $db owned by its role; $removed"
 }
 t16
@@ -285,8 +285,8 @@ else
 fi
 
 # 18. the ops tools are for admins only: their containers are healthy; the smoke user
-#     (AUTHENTIK_SMOKE_USER, occ-users only) signs in and is denied the terminal and
-#     the file browser; an app container on the occ network cannot reach them; the
+#     (AUTHENTIK_SMOKE_USER, ihc-users only) signs in and is denied the terminal and
+#     the file browser; an app container on the ihc network cannot reach them; the
 #     file browser mounts only app data and the backup reports (read only), never the
 #     install directory or an env file.
 if [ "$OPS" != true ]; then
@@ -297,23 +297,23 @@ else
   for s in $svcs; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
   for sub in $OPS_HOSTS; do
     case "$sub" in terminal|files) ;; *) continue ;; esac
-    out="$("$OCC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --target "$SCHEME_URL://$sub.$BASE_DOMAIN" --expect denied 2>/dev/null | tail -n 1 || true)"
+    out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --target "$SCHEME_URL://$sub.$BASE_DOMAIN" --expect denied 2>/dev/null | tail -n 1 || true)"
     case "$out" in *PASS*) ;; *) bad="$bad $sub:smoke-user-not-denied(${out:-no output})" ;; esac
   done
   PORTAL_CID="$(dc ps -q portal | head -n 1)"
   if docker exec "$PORTAL_CID" sh -c 'wget -q -T 3 -O /dev/null http://filebrowser/health || wget -q -T 3 -O /dev/null http://wetty:3000/' >/dev/null 2>&1; then
     bad="$bad reachable-from-an-app-container"
   fi
-  dc config --format json 2>/dev/null | $PY "$OCC_LIB/opspaths.py" compose "$INSTALL_DIR" "$BACKUP_DESTINATION" "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}" 2>"${TMPDIR:-/tmp}/occ-opspaths.$$" \
-    || bad="$bad mounts:$(head -n 2 "${TMPDIR:-/tmp}/occ-opspaths.$$" | tr '\n' ' ')"
-  rm -f "${TMPDIR:-/tmp}/occ-opspaths.$$"
+  dc config --format json 2>/dev/null | $PY "$IHC_LIB/opspaths.py" compose "$INSTALL_DIR" "$BACKUP_DESTINATION" "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}" 2>"${TMPDIR:-/tmp}/ihc-opspaths.$$" \
+    || bad="$bad mounts:$(head -n 2 "${TMPDIR:-/tmp}/ihc-opspaths.$$" | tr '\n' ' ')"
+  rm -f "${TMPDIR:-/tmp}/ihc-opspaths.$$"
   [ -z "$bad" ] && result 18 ops-admins-only pass "$(echo $svcs | wc -w | tr -d ' ') containers healthy; $AUTHENTIK_SMOKE_USER denied$(wetty_running && echo ' terminal and') files; unreachable from apps; mounts: app data + reports (ro)" \
     || result 18 ops-admins-only fail "${bad# }"
 fi
 
 # 19. object storage: Garage is healthy with a layout; two apps (smoke-s3-a, smoke-s3-b)
 #     declaring object_storage.required: true each get a bucket and a key through the
-#     same code as occ-app provision; a second provision keeps the key; app A writes
+#     same code as ihc-app provision; a second provision keeps the key; app A writes
 #     and reads an object in its bucket through s3.<BASE_DOMAIN> and is denied on B's.
 #     Their env files stay in <install-dir>/local/smoke-storage/ (0700), so re-runs reuse them.
 t19() {
@@ -321,8 +321,8 @@ t19() {
   [ "$(container_health garage)" = healthy ] || { result 19 object-storage fail "garage is $(container_health garage)"; return; }
   garage_need 2>/dev/null && garage_healthy || { result 19 object-storage fail "garage health: cluster unavailable (no layout?): install.sh --apply --from optional_profiles"; return; }
   (umask 077; mkdir -p "$dir"); chmod 700 "$dir"
-  work="$(mktemp -d "${TMPDIR:-/tmp}/occ-smoke19.XXXXXX")"
-  cp "$OCC_ROOT/templates/app/company-app.yaml" "$work/company-app.yaml"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke19.XXXXXX")"
+  cp "$IHC_ROOT/templates/app/company-app.yaml" "$work/company-app.yaml"
   $PY - "$work/company-app.yaml" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -330,17 +330,17 @@ s = s.replace("object_storage:\n  required: false", "object_storage:\n  required
 s = s.replace("__APP_SLUG__", "smoke-s3-a").replace("__APP_NAME__", "Smoke S3").replace("__OWNER_EMAIL__", "smoke@example.com").replace("__APP_DOMAIN__", "smoke-s3-a.example.com")
 open(p, "w").write(s)
 PY
-  m="$($PY "$OCC_LIB/appmanifest.py" vars "$work/company-app.yaml" smoke-s3-a 2>/dev/null | grep '^M_BUCKET=' || true)"
+  m="$($PY "$IHC_LIB/appmanifest.py" vars "$work/company-app.yaml" smoke-s3-a 2>/dev/null | grep '^M_BUCKET=' || true)"
   rm -rf "$work"
   case "$m" in *true*) ;; *) result 19 object-storage fail "the template manifest with object_storage.required: true did not ask for a bucket ($m)"; return ;; esac
   a="$dir/smoke-s3-a.env"; b="$dir/smoke-s3-b.env"
   for f in "$a" "$b"; do [ -f "$f" ] || (umask 077; : > "$f"); done
-  garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-a failed (run: occ-app provision with object storage)"; return; }
+  garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-a failed (run: ihc-app provision with object storage)"; return; }
   id1="$(envfile get "$a" S3_ACCESS_KEY_ID)"
   garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null; id2="$(envfile get "$a" S3_ACCESS_KEY_ID)"
   [ -n "$id1" ] && [ "$id1" = "$id2" ] && [ "$GARAGE_RESULT" = kept ] || bad="$bad second-provision:$GARAGE_RESULT"
   garage_app_bucket smoke-s3-b "$b" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-b failed"; return; }
-  s3() { ( set -a; . "$a"; set +a; OCC_CA_FILE="$( [ "$TLS_MODE" = internal ] && echo "$INSTALL_DIR/local/ca/ca.crt")" $PY "$OCC_LIB/s3.py" "$@" ); }
+  s3() { ( set -a; . "$a"; set +a; IHC_CA_FILE="$( [ "$TLS_MODE" = internal ] && echo "$INSTALL_DIR/local/ca/ca.crt")" $PY "$IHC_LIB/s3.py" "$@" ); }
   local S3URL="$PROXY"; [ "$TLS_MODE" = internal ] && S3URL="https://127.0.0.1:${PROXY_HTTPS_PORT}"
   want="smoke 19 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   code="$(printf '%s' "$want" | s3 put "$S3URL" "$host" app-smoke-s3-a smoke.txt)"
@@ -399,8 +399,8 @@ PY
   case "$out" in ok*) ;; *) bad="$bad brief:$out" ;; esac
   # The Docker API as the agent sees it.
   out="$(docker exec -i "$acid" node - "$pgid" <<'JS' 2>&1
-const api = process.env.OCC_DOCKER_API, pg = process.argv[2];
-const r = async (m, p) => (await fetch(api + p, { method: m, headers: { "X-OCC-Probe": "smoke-test-20" } })).status;
+const api = process.env.IHC_DOCKER_API, pg = process.argv[2];
+const r = async (m, p) => (await fetch(api + p, { method: m, headers: { "X-IHC-Probe": "smoke-test-20" } })).status;
 (async () => {
   const restart = await r("POST", `/containers/${pg}/restart`);
   const create = await r("POST", "/containers/create");
@@ -413,8 +413,8 @@ JS
 )"
   [ "$out" = "restart=403 create=403 delete=403 list=200 envvalues=0" ] || bad="$bad docker-api:$out"
   # What the agent container can reach on the box.
-  insp="$(mktemp "${TMPDIR:-/tmp}/occ-smoke20.XXXXXX")"; docker inspect "$acid" > "$insp" 2>/dev/null || true
-  out="$($PY - "$INSTALL_DIR" "$ENV_FILE" "${OCC_OPS_NETWORK:-occ-ops}" "$insp" <<'PY'
+  insp="$(mktemp "${TMPDIR:-/tmp}/ihc-smoke20.XXXXXX")"; docker inspect "$acid" > "$insp" 2>/dev/null || true
+  out="$($PY - "$INSTALL_DIR" "$ENV_FILE" "${IHC_OPS_NETWORK:-ihc-ops}" "$insp" <<'PY'
 import json, os, re, sys
 inst, envf, opsnet, insp = sys.argv[1:5]
 try:
@@ -482,7 +482,7 @@ print(" ".join(sorted({x.get("HostIp") or "0.0.0.0" for k in ("80/tcp","443/tcp"
     want="$(openssl x509 -in "$INSTALL_DIR/local/ca/wildcard.crt" -outform PEM 2>/dev/null)"
     if [ -z "$served" ]; then bad="$bad no-certificate-on-443"
     else
-      [ "$served" = "$want" ] || bad="$bad served-certificate-is-not-the-occ-wildcard"
+      [ "$served" = "$want" ] || bad="$bad served-certificate-is-not-the-ihc-wildcard"
       printf '%s\n' "$served" | openssl verify -CAfile "$ca" >/dev/null 2>&1 || bad="$bad does-not-verify-against-the-CA"
       printf '%s\n' "$served" | openssl x509 -noout -checkend 2592000 >/dev/null 2>&1 || bad="$bad expires-within-30-days"
       printf '%s\n' "$served" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -qF "DNS:*.$BASE_DOMAIN" || bad="$bad SAN-misses-*.$BASE_DOMAIN"

@@ -15,7 +15,7 @@ exec python3 -I - "$ROOT/docker/agent/docker-ro-proxy.py" <<'PY'
 import http.server, json, os, socket, socketserver, subprocess, sys, tempfile, threading, time, urllib.request
 
 proxy_py = sys.argv[1]
-work = tempfile.mkdtemp(prefix="occ-agent-proxy.")
+work = tempfile.mkdtemp(prefix="ihc-agent-proxy.")
 sock = os.path.join(work, "docker.sock")
 seen = []
 
@@ -24,7 +24,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
     def reply(self):
         seen.append("%s %s" % (self.command, self.path.split("?")[0]))
         cid = self.path.split("/")[2] if self.path.startswith("/containers/") else ""
-        project = "occ" if cid == "core" else "demo-app"
+        project = "ihc" if cid == "core" else "demo-app"
         body = json.dumps({"Id": cid, "Config": {"Env": ["PASSWORD=s3cret-value", "PLAIN"],
                            "Labels": {"com.docker.compose.project": project}}}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
@@ -46,7 +46,7 @@ def check(ok, what):
     if not ok: fails += 1
 
 def start(port, write):
-    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), OCC_PROJECT="occ", AGENT_ALLOW_WRITE=write)
+    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), IHC_PROJECT="ihc", AGENT_ALLOW_WRITE=write)
     p = subprocess.Popen([sys.executable, "-I", proxy_py], env=env, stdout=subprocess.DEVNULL)
     for _ in range(50):
         try:

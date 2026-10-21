@@ -2,15 +2,15 @@
 
 **Purpose.** Read, and when approved change, what puts a name on the air: the proxy host, the Authentik proxy provider and application, its group binding, and the embedded outpost that does forward auth.
 **Level.** 1 to read. 3 to create, change, disable or delete any of them: a route or a provider decides who reaches what.
-**Preconditions.** In this cloud `occ-app provision` creates and maintains each app's route and provider on every deploy, so a manual change is the exception: a retirement, a repair, an app made public on purpose.
+**Preconditions.** In this cloud `ihc-app provision` creates and maintains each app's route and provider on every deploy, so a manual change is the exception: a retirement, a repair, an app made public on purpose.
 
 ## What exists, per app
 
 | Object | Name | Made by |
 |---|---|---|
-| proxy host | `<slug>.<BASE_DOMAIN>`, forward host `<slug>`, the manifest's port | `occ-app provision` |
-| Authentik proxy provider | `app-<slug>`, external host the app URL, the health path left public | `occ-app provision` |
-| Authentik application | `<slug>`, bound to `occ-users` | `occ-app provision` |
+| proxy host | `<slug>.<BASE_DOMAIN>`, forward host `<slug>`, the manifest's port | `ihc-app provision` |
+| Authentik proxy provider | `app-<slug>`, external host the app URL, the health path left public | `ihc-app provision` |
+| Authentik application | `<slug>`, bound to `ihc-users` | `ihc-app provision` |
 | embedded outpost | serves every provider | first-run; provision adds the provider to it |
 
 ## Read first
@@ -30,9 +30,9 @@ curl -s -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" "http://127.0.0.1:
 These commands hold admin credentials in the shell; run them as the admin, not from a shared terminal.
 
 *(agent)* it has neither credential: it reads the behaviour instead, which is usually enough to locate the fault:
-`occ-ro http http://proxy/ <slug>.<BASE_DOMAIN>` (expect `302` to `/outpost.goauthentik.io/`) and `occ-ro http http://proxy<health path> <slug>.<BASE_DOMAIN>` (expect the manifest's status). Then it asks the admin to run the reads above.
+`ihc-ro http http://proxy/ <slug>.<BASE_DOMAIN>` (expect `302` to `/outpost.goauthentik.io/`) and `ihc-ro http http://proxy<health path> <slug>.<BASE_DOMAIN>` (expect the manifest's status). Then it asks the admin to run the reads above.
 
-Look for: a proxy host whose forward host is not `<slug>` (another app owns the name: `occ-app provision` refuses to touch it, and so should you); a provider missing from the outpost's list (forward auth answers 404, the proxy shows 500); an application with no binding (people sign in and are refused).
+Look for: a proxy host whose forward host is not `<slug>` (another app owns the name: `ihc-app provision` refuses to touch it, and so should you); a provider missing from the outpost's list (forward auth answers 404, the proxy shows 500); an application with no binding (people sign in and are refused).
 
 ## Act (level 3, after the ok for this name)
 

@@ -4,7 +4,7 @@ What an operator of a cloud box does, may do, and never does. "Operator" is whoe
 
 This document was derived from the operating record of an LLM agent that ran a production box of this same stack (proxy, Authentik, Gitea, shared Postgres and Redis, restic backup) for two weeks, and from the incidents it handled. Names, addresses and apps are left out; the lessons are kept. The [runbooks](runbooks/) turn each section into steps, and [`security.md`](security.md) says what the agent profile can see.
 
-The day-1 path does not need an operator agent. Provisioning, starting and routing an app is deterministic (`install.sh`, `occ-app provision` in the deploy job, push to `main`). The operator exists for what needs judgment (a diagnosis, a full disk, a stuck backup, "why did it go down") and for what needs a human's yes.
+The day-1 path does not need an operator agent. Provisioning, starting and routing an app is deterministic (`install.sh`, `ihc-app provision` in the deploy job, push to `main`). The operator exists for what needs judgment (a diagnosis, a full disk, a stuck backup, "why did it go down") and for what needs a human's yes.
 
 ## 1. The role
 
@@ -13,12 +13,12 @@ The operator is not a bot that runs Docker. It keeps seven layers reconciled and
 | Layer | Declared in | Observed in |
 |---|---|---|
 | Intent | `inventory.json` (apps, owners, repositories), each app's `company-app.yaml` | the brief, the portal |
-| Configuration | `config.yaml` → `.env` and the rendered `compose.yml`; `apps/<slug>/compose.occ.yml` | `docker compose config`, `docker inspect` |
-| Runtime | the Compose project `occ` and one project per app slug | `docker ps`, healthchecks, logs |
-| Edge | proxy hosts (created by first-run and `occ-app provision`), the tunnel or tailnet | a request through the proxy with the app's `Host` header |
+| Configuration | `config.yaml` → `.env` and the rendered `compose.yml`; `apps/<slug>/compose.ihc.yml` | `docker compose config`, `docker inspect` |
+| Runtime | the Compose project `ihc` and one project per app slug | `docker ps`, healthchecks, logs |
+| Edge | proxy hosts (created by first-run and `ihc-app provision`), the tunnel or tailnet | a request through the proxy with the app's `Host` header |
 | Identity | Authentik providers, applications, bindings, the embedded outpost | the SSO behaviour: `302` to the outpost on a protected root |
 | Data | the shared Postgres (one database and role per app), Redis ACL users, buckets, `app-data/<slug>` | a sign-in as the app's role, `pg_isready`, sizes |
-| Recovery | `backup.*` in the config | `reports/latest-status.json`, `occ-backup.sh verify` |
+| Recovery | `backup.*` in the config | `reports/latest-status.json`, `ihc-backup.sh verify` |
 
 Default behaviour, in this order:
 
@@ -44,7 +44,7 @@ Read, diagnose, and anything without a persistent effect on the box:
 - Proxy, Authentik and Gitea in read mode: routes, providers, runs, versions.
 - HTTP probes: health endpoints, a route through the proxy with a `Host` header.
 - The brief, the inventory, the backup status file.
-- `scripts/occ-backup.sh verify --latest` and `status`, `./install.sh status`, `scripts/smoke-tests.sh` (they read; test 16 pushes a commit to the smoke app, which is the cloud's own).
+- `scripts/ihc-backup.sh verify --latest` and `status`, `./install.sh status`, `scripts/smoke-tests.sh` (they read; test 16 pushes a commit to the smoke app, which is the cloud's own).
 - Building and testing code in a scratch checkout, without publishing anything.
 - Writing notes, analyses, incident records, drafts of changes for a human to apply.
 
@@ -83,21 +83,21 @@ Not every change needs all nine. The answer always carries the evidence for the 
 
 | # | Check | Evidence in the cloud |
 |---|---|---|
-| 1 | **Target**: right commit, image, Compose project; nobody else's work mixed in | the deploy run's `head_sha` in Gitea Actions equals the commit asked for; `docker compose -p <slug> ps` (an app's project **is its slug**; a core service's project is `occ`: never let a working directory pick the project name); `docker inspect -f '{{.Image}}' <slug>-app-1` |
+| 1 | **Target**: right commit, image, Compose project; nobody else's work mixed in | the deploy run's `head_sha` in Gitea Actions equals the commit asked for; `docker compose -p <slug> ps` (an app's project **is its slug**; a core service's project is `ihc`: never let a working directory pick the project name); `docker inspect -f '{{.Image}}' <slug>-app-1` |
 | 2 | **Reversal**: the way back exists; no secret was printed | previous image kept (`docker image ls <slug>-app`); a `pg_dump -Fc` taken before any migration, restorable, kept ([database-migration](runbooks/database-migration.md)); the output of the change reviewed for secrets |
-| 3 | **Effective configuration**: what will run, not what the file says | `dc config` or `docker compose -p <slug> -f docker-compose.yml -f $I/apps/<slug>/compose.occ.yml config`; ports, networks, mounts (read-only where expected); `python3 $H/scripts/lib/envfile.py keys $I/apps/<slug>/.env` (names, never values) |
+| 3 | **Effective configuration**: what will run, not what the file says | `dc config` or `docker compose -p <slug> -f docker-compose.yml -f $I/apps/<slug>/compose.ihc.yml config`; ports, networks, mounts (read-only where expected); `python3 $H/scripts/lib/envfile.py keys $I/apps/<slug>/.env` (names, never values) |
 | 4 | **Runtime**: running and healthy, restart policy set, a clean start | `docker ps --filter label=com.docker.compose.project=<slug>`; `docker inspect -f '{{.State.Health.Status}} {{.HostConfig.RestartPolicy.Name}}'`; `docker logs --since 10m`; `docker stats --no-stream` |
-| 5 | **The app's contract**: its health endpoint and a minimal real request, not an open port | the manifest's `healthcheck.path` from inside the network (`curl http://<slug>:<port><path>` from a container on `occ`); one request a user would make |
-| 6 | **Edge**: the route reaches the right upstream; the SSO behaves | `curl -H 'Host: <slug>.<BASE_DOMAIN>' http://127.0.0.1:<PROXY_HTTP_PORT><health path>` = the manifest's status; `/` = `302` to `/outpost.goauthentik.io/` when `auth.required`; `$H/scripts/occ-app.sh wait <slug>` does both. With private or public ingress, the same through the real name |
+| 5 | **The app's contract**: its health endpoint and a minimal real request, not an open port | the manifest's `healthcheck.path` from inside the network (`curl http://<slug>:<port><path>` from a container on `ihc`); one request a user would make |
+| 6 | **Edge**: the route reaches the right upstream; the SSO behaves | `curl -H 'Host: <slug>.<BASE_DOMAIN>' http://127.0.0.1:<PROXY_HTTP_PORT><health path>` = the manifest's status; `/` = `302` to `/outpost.goauthentik.io/` when `auth.required`; `$H/scripts/ihc-app.sh wait <slug>` does both. With private or public ingress, the same through the real name |
 | 7 | **Dependencies**: only the ones the change used, each answering | the app's role signs in to its database (smoke test 16 shows how); `redis-cli` as its ACL user; Gitea, a runner, the backup, only when the change touched them |
-| 8 | **Observability**: the signals agree with what you just proved | `$H/scripts/occ-backup.sh --install-dir $I status`; the portal status; the brief regenerated (`$H/scripts/occ-operator.sh brief`) shows the app and its runtime |
+| 8 | **Observability**: the signals agree with what you just proved | `$H/scripts/ihc-backup.sh --install-dir $I status`; the portal status; the brief regenerated (`$H/scripts/ihc-operator.sh brief`) shows the app and its runtime |
 | 9 | **Communication** | what was proved, what was not, the rollback that exists, the residual risk. Never "healthy" on the strength of an edge `200` |
 
 ## 4. What the operator receives on day 1
 
-An Open Company Cloud box hands its operator the context the first box's operator had to dig out of conversations:
+An InHouseCloud box hands its operator the context the first box's operator had to dig out of conversations:
 
-1. **The brief: the map of sources of truth.** `scripts/occ-operator.sh brief` (Markdown, or `--json`) generates it from `state.json`, the rendered `compose.yml`, `inventory.json` and `docker ps`; nobody writes it by hand. For each service: its role, where its configuration lives, how it is changed (the API, the script, never the volume), its Compose project, internal and published ports, networks, mounts, dependencies, healthcheck and the **semantics of healthy** (`302` on a protected root is right; a running runner proves nothing until a run is green). The install status and the commands. In the agent profile it is `reference/brief.md` in the agent's workspace, refreshed by every install and every deploy.
+1. **The brief: the map of sources of truth.** `scripts/ihc-operator.sh brief` (Markdown, or `--json`) generates it from `state.json`, the rendered `compose.yml`, `inventory.json` and `docker ps`; nobody writes it by hand. For each service: its role, where its configuration lives, how it is changed (the API, the script, never the volume), its Compose project, internal and published ports, networks, mounts, dependencies, healthcheck and the **semantics of healthy** (`302` on a protected root is right; a running runner proves nothing until a run is green). The install status and the commands. In the agent profile it is `reference/brief.md` in the agent's workspace, refreshed by every install and every deploy.
 2. **The inventory of apps**, in the same brief: slug, owner, URL, repository, last deployed commit, env variable names, data directory, Compose project, runtime. Containers that belong to nothing inventoried are listed apart.
 3. **The access matrix**, in the same brief: every credential by **name**, the file it lives in, what it opens, which services use it, how it rotates, who approves, and whether the agent gets it. Never a value; the brief generator refuses to write if a value of `.env` or of an app's env file would appear in it.
 4. **The runbooks**, [`docs/runbooks/`](runbooks/): one file per operation, read mode first, literal commands, post-checks, the level of autonomy.
@@ -136,5 +136,5 @@ Every new incident is written the same way: [incident-record](runbooks/incident-
 ## 7. Implementations
 
 - **The agent profile** ([`install-design.md`](install-design.md#the-agent-profile)): OpenClaw in a container, the workspace in `<install-dir>/agent/` with an `AGENTS.md` pointing here, the runbooks and the brief, the Docker API through a read-only filter, Slack or Telegram as the channel. Opt-in; needs an LLM key and a channel that a human provides.
-- **Any other agent** (Claude Code or Codex over `ssh`, as the install user): give it this file, the runbooks and `occ-operator.sh brief` as its first reads. It has the shell and the `docker` group, so the levels hold only as far as it follows them: nothing on the box enforces them.
+- **Any other agent** (Claude Code or Codex over `ssh`, as the install user): give it this file, the runbooks and `ihc-operator.sh brief` as its first reads. It has the shell and the `docker` group, so the levels hold only as far as it follows them: nothing on the box enforces them.
 - **A person**: the same files are a checklist.

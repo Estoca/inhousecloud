@@ -10,11 +10,12 @@ Usage: config.py FILE COMMAND
 Uses PyYAML when present; otherwise a small parser for the subset the example uses:
 nested maps by indentation, scalar lists ("- item"), quoted or bare scalars, comments.
 
-A config written before the rename from Open Company App Harness still loads: every
-*_env value HARNESS_<X> is read as OCC_<X>, and `flatten` warns on stderr about it and
-about values that keep the old defaults (docs/install-design.md, "Renamed from ...").
+A config written for Open Company Cloud (the name until 2026-10-21) still loads: every
+*_env value OCC_<X> is read as IHC_<X>, and `flatten` warns on stderr about it and
+about values that keep the old defaults (docs/install-design.md, "Renamed twice").
+The HARNESS_<X> names of the first rename are not read any more.
 """
-import hashlib, json, shlex, sys
+import hashlib, json, re, shlex, sys
 
 
 def parse_scalar(v):
@@ -114,6 +115,9 @@ def load(path):
 
 # Old names found by load(), reported by `flatten` (once per install run).
 OLD_ENV_NAMES, OLD_VALUES = [], []
+# The defaults of Open Company Cloud: the occ prefix as a whole word or before _ (groups,
+# databases, hostname, project) and its install directory. Not any "occ" inside a word.
+OLD_VALUE_RX = re.compile(r"(^|[^A-Za-z0-9])occ($|[^A-Za-z0-9])|open-company-cloud")
 
 
 def migrate_old_names(d, prefix=""):
@@ -121,21 +125,21 @@ def migrate_old_names(d, prefix=""):
         key = prefix + str(k)
         if isinstance(v, dict):
             migrate_old_names(v, key + ".")
-        elif isinstance(v, str) and str(k).endswith("_env") and v.startswith("HARNESS_"):
-            d[k] = "OCC_" + v[len("HARNESS_"):]
+        elif isinstance(v, str) and str(k).endswith("_env") and v.startswith("OCC_"):
+            d[k] = "IHC_" + v[len("OCC_"):]
             OLD_ENV_NAMES.append(key)
-        elif isinstance(v, str) and "harness" in v.lower():
+        elif isinstance(v, str) and OLD_VALUE_RX.search(v):
             OLD_VALUES.append(key)
 
 
 def report_old_names():
     if OLD_ENV_NAMES:
-        sys.stderr.write("[!!] config written before the rename from Open Company App Harness: %d *_env "
-                         "names HARNESS_<X> are read as OCC_<X> for this version only (%s); rename them\n"
+        sys.stderr.write("[!!] config written for Open Company Cloud (renamed to InHouseCloud): %d *_env "
+                         "names OCC_<X> are read as IHC_<X> for this version only (%s); rename them\n"
                          % (len(OLD_ENV_NAMES), ", ".join(OLD_ENV_NAMES)))
     if OLD_VALUES:
         sys.stderr.write("[!!] config keeps old default values, used as given (%s); new installs use "
-                         "the occ / cloud.localhost names (docs/install-design.md)\n" % ", ".join(OLD_VALUES))
+                         "the ihc / cloud.localhost names (docs/install-design.md)\n" % ", ".join(OLD_VALUES))
 
 
 def scalar(v):

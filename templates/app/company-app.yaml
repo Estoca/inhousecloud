@@ -1,5 +1,5 @@
 # The app's operational contract (docs/app-contract.md, schemas/company-app.schema.json).
-# occ-app provision reads it on every push to main.
+# ihc-app provision reads it on every push to main.
 schema_version: 1
 
 app:

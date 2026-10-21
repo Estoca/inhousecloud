@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Open Company Cloud: one-command installer (docs/install-design.md).
+# InHouseCloud: one-command installer (docs/install-design.md).
 #
 #   ./install.sh                                  ask the questions, show the plan, apply
 #   ./install.sh --plan [--config FILE]           print what would happen, change nothing
@@ -20,20 +20,20 @@
 set -eu
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-OCC_ROOT="$(cd "$(dirname "$0")" && pwd)"
+IHC_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
-. "$OCC_ROOT/scripts/lib/common.sh"
+. "$IHC_ROOT/scripts/lib/common.sh"
 # shellcheck source=scripts/lib/garage.sh
-. "$OCC_ROOT/scripts/lib/garage.sh"
+. "$IHC_ROOT/scripts/lib/garage.sh"
 # shellcheck source=scripts/lib/tls.sh
-. "$OCC_ROOT/scripts/lib/tls.sh"
+. "$IHC_ROOT/scripts/lib/tls.sh"
 
-DEFAULT_INSTALL_DIR="/opt/open-company-cloud"
+DEFAULT_INSTALL_DIR="/opt/inhousecloud"
 MODE=""              # plan | apply
 NON_INTERACTIVE=false
 CONFIG_ARG=""
 FROM_STAGE=""
-INSTALL_DIR="${OCC_INSTALL_DIR:-}"
+INSTALL_DIR="${IHC_INSTALL_DIR:-}"
 ASSUME_YES=false
 SUBCOMMAND=""
 VERBOSE=false; CONFIRM_ARG=""; REMOVE_IMAGES=false; REMOVE_DIR=false
@@ -106,23 +106,23 @@ ingress:
   tls_mode: "$A_TLS"
   tunnel_provider: $A_TUNNEL
   cloudflared:
-    tunnel_token_env: OCC_CLOUDFLARED_TUNNEL_TOKEN
+    tunnel_token_env: IHC_CLOUDFLARED_TUNNEL_TOKEN
   tailscale:
-    hostname: occ
+    hostname: ihc
     private_dns_zone: $A_DOMAIN
 admin:
   email: $A_EMAIL
   display_name: Platform Admin
 authentik:
   bootstrap_email: $A_EMAIL
-  bootstrap_password_env: OCC_AUTHENTIK_BOOTSTRAP_PASSWORD
-  bootstrap_token_env: OCC_AUTHENTIK_BOOTSTRAP_TOKEN
-  portal_group: occ-admins
-  app_group: occ-users
+  bootstrap_password_env: IHC_AUTHENTIK_BOOTSTRAP_PASSWORD
+  bootstrap_token_env: IHC_AUTHENTIK_BOOTSTRAP_TOKEN
+  portal_group: ihc-admins
+  app_group: ihc-users
 gitea:
   base_url: $A_SCHEME://git.$A_DOMAIN
   initial_admin_username: admin
-  initial_admin_password_env: OCC_GITEA_ADMIN_PASSWORD
+  initial_admin_password_env: IHC_GITEA_ADMIN_PASSWORD
   organization: $A_ORG
   enable_actions: true
   oidc_enabled: true
@@ -130,13 +130,13 @@ postgres:
   shared:
     enabled: true
   portal:
-    database: occ_platform
-    role: occ_platform
-    password_env: OCC_PLATFORM_DATABASE_PASSWORD
+    database: ihc_platform
+    role: ihc_platform
+    password_env: IHC_PLATFORM_DATABASE_PASSWORD
   authentik:
     database: authentik
     role: authentik
-    password_env: OCC_AUTHENTIK_DATABASE_PASSWORD
+    password_env: IHC_AUTHENTIK_DATABASE_PASSWORD
 storage:
   provider: $( [ "$A_STORAGE" = true ] && echo garage || echo none )
   endpoint_public_url: $A_SCHEME://s3.$A_DOMAIN
@@ -148,7 +148,7 @@ portal:
     - $A_EMAIL
 ci:
   gitea_runner:
-    registration_token_env: OCC_GITEA_RUNNER_TOKEN
+    registration_token_env: IHC_GITEA_RUNNER_TOKEN
 ops:
   agent:
     allow_write: false
@@ -169,8 +169,8 @@ backup:
   max_run_minutes: 240
   max_age_hours: 26
   destination: $A_BACKUP
-  destination_env: OCC_BACKUP_DESTINATION
-  encryption_key_env: OCC_BACKUP_ENCRYPTION_KEY
+  destination_env: IHC_BACKUP_DESTINATION
+  encryption_key_env: IHC_BACKUP_ENCRYPTION_KEY
   local_retention_daily: 7
   local_retention_weekly: 4
   local_retention_monthly: 12
@@ -195,7 +195,7 @@ same_disk() {
 interactive_config() {
   [ -t 0 ] || die "no terminal: use --non-interactive --config FILE (format: bootstrap/config.example.yaml)"
   _out ""
-  _out "Open Company Cloud: a few questions. Enter keeps the default."
+  _out "InHouseCloud: a few questions. Enter keeps the default."
   _out ""
   ask A_DIR "Install directory" "${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
   ask A_INGRESS "Ingress: local (this machine only), private (tailnet) or public" "local"
@@ -207,7 +207,7 @@ interactive_config() {
   esac
   ask A_EMAIL "Admin email (Authentik, Gitea and proxy admin)" "admin@example.com"
   ask A_ORG "Gitea organization" "company"
-  ask A_BACKUP "Backup destination (a path on another disk or mount)" "${OCC_BACKUP_DESTINATION:-${A_DIR%/}/backups}"
+  ask A_BACKUP "Backup destination (a path on another disk or mount)" "${IHC_BACKUP_DESTINATION:-${A_DIR%/}/backups}"
   case "$A_BACKUP" in /*) ;; *) die "the backup destination must be an absolute path" ;; esac
   same_disk "$A_BACKUP" "$(dirname "$A_DIR")" && warn "that is the same disk as the installation: a dead disk takes both. Fine for a try; for real use point it at another disk (docs/backup.md)"
   A_STORAGE=$(ask_yn "Enable object storage (S3-compatible, for apps that store files)?" n)
@@ -224,7 +224,7 @@ interactive_config() {
 resolve_config() {
   if [ -n "$CONFIG_ARG" ]; then
     [ -f "$CONFIG_ARG" ] || die "config file not found: $CONFIG_ARG"
-    [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$($PY "$OCC_LIB/config.py" "$CONFIG_ARG" get install.directory "$DEFAULT_INSTALL_DIR")"
+    [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$($PY "$IHC_LIB/config.py" "$CONFIG_ARG" get install.directory "$DEFAULT_INSTALL_DIR")"
     SOURCE_CONFIG="$CONFIG_ARG"
   elif [ -f "${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}/config.yaml" ]; then
     [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$DEFAULT_INSTALL_DIR"
@@ -233,15 +233,15 @@ resolve_config() {
     die "--non-interactive needs --config FILE (none found at ${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}/config.yaml)"
   else
     interactive_config
-    SOURCE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/occ-config.XXXXXX")"
+    SOURCE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/ihc-config.XXXXXX")"
     write_answers_config "$SOURCE_CONFIG"
   fi
   INSTALL_DIR="${INSTALL_DIR%/}"
   CONFIG_FILE="$INSTALL_DIR/config.yaml"
   STATE_FILE="$INSTALL_DIR/state.json"
   ENV_FILE="$INSTALL_DIR/.env"
-  CONFIG_SHA="$($PY "$OCC_LIB/config.py" "$SOURCE_CONFIG" sha)"
-  eval "$($PY "$OCC_LIB/config.py" "$SOURCE_CONFIG" flatten)"
+  CONFIG_SHA="$($PY "$IHC_LIB/config.py" "$SOURCE_CONFIG" sha)"
+  eval "$($PY "$IHC_LIB/config.py" "$SOURCE_CONFIG" flatten)"
 }
 
 # Derived values: everything the compose file and the scripts need, from the config.
@@ -275,13 +275,13 @@ derive() {
   [ "$BACKUP_ENABLED" = true ] && PROFILES="$PROFILES,backup"
   [ "${CFG_install__profile__agent:-false}" = true ] || [ "${CFG_ops__agent__enabled:-false}" = true ] && PROFILES="$PROFILES,agent"
   PROFILES="${PROFILES#,}"
-  BACKUP_DEST_ENV="${CFG_backup__destination_env:-${CFG_backup__remote__destination_env:-OCC_BACKUP_DESTINATION}}"
-  BACKUP_KEY_ENV="${CFG_backup__encryption_key_env:-${CFG_backup__remote__encryption_key_env:-OCC_BACKUP_ENCRYPTION_KEY}}"
+  BACKUP_DEST_ENV="${CFG_backup__destination_env:-${CFG_backup__remote__destination_env:-IHC_BACKUP_DESTINATION}}"
+  BACKUP_KEY_ENV="${CFG_backup__encryption_key_env:-${CFG_backup__remote__encryption_key_env:-IHC_BACKUP_ENCRYPTION_KEY}}"
   # Destination: the environment variable named in the config, else backup.destination,
   # else what .env already has, else <install-dir>/backups.
   eval "BACKUP_DEST=\${$BACKUP_DEST_ENV:-}"
   [ -z "$BACKUP_DEST" ] && BACKUP_DEST="${CFG_backup__destination:-}"
-  [ -z "$BACKUP_DEST" ] && [ -f "$INSTALL_DIR/.env" ] && BACKUP_DEST="$($PY "$OCC_LIB/envfile.py" get "$INSTALL_DIR/.env" BACKUP_DESTINATION)"
+  [ -z "$BACKUP_DEST" ] && [ -f "$INSTALL_DIR/.env" ] && BACKUP_DEST="$($PY "$IHC_LIB/envfile.py" get "$INSTALL_DIR/.env" BACKUP_DESTINATION)"
   [ -z "$BACKUP_DEST" ] && BACKUP_DEST="$INSTALL_DIR/backups"
   BACKUP_DEST="${BACKUP_DEST%/}"
   ADMIN_EMAIL="${CFG_admin__email:-admin@example.com}"
@@ -295,7 +295,7 @@ has_profile() { case ",$PROFILES," in *",$1,"*) return 0 ;; *) return 1 ;; esac;
 # ------------------------------------------------------------------- ops tools
 # The ops profile: Portainer, Glances, Wetty (web terminal on the host, over ssh) and
 # FileBrowser (app data and backup reports). All four are admin access to the machine,
-# behind forward auth bound to occ-admins (docs/security.md).
+# behind forward auth bound to ihc-admins (docs/security.md).
 
 # detect_sshd [PORT...]: the first port on 127.0.0.1 that answers with an SSH banner,
 # trying PORT, then the Port lines of sshd_config, then 22.
@@ -357,10 +357,10 @@ has_profile_ci() { return 0; }
 # The agent profile: an operator agent on the box (docs/operator-contract.md), opt-in.
 # Reference implementation OpenClaw, in <install-dir>/agent/: state/ (its config and
 # sessions), workspace/ (AGENTS.md and its notes), reference/ (the contract, the
-# runbooks, the brief, occ-ro; mounted read only). It sees the Docker API only through
+# runbooks, the brief, ihc-ro; mounted read only). It sees the Docker API only through
 # agent-docker-proxy (read only unless ops.agent.allow_write) and never the install
 # directory, its .env or the socket. Its LLM key and chat tokens are AGENT_* in .env, put
-# there by a human (or read from OCC_AGENT_* at install time): never generated.
+# there by a human (or read from IHC_AGENT_* at install time): never generated.
 AGENT_SECRETS="AGENT_ANTHROPIC_API_KEY AGENT_OPENAI_API_KEY AGENT_SLACK_BOT_TOKEN AGENT_SLACK_APP_TOKEN AGENT_TELEGRAM_BOT_TOKEN AGENT_GITEA_TOKEN"
 
 derive_agent() {
@@ -370,11 +370,11 @@ derive_agent() {
   AGENT_DIR="$INSTALL_DIR/agent"
 }
 
-# agent_var NAME: the value in .env, else OCC_<NAME> from the environment.
+# agent_var NAME: the value in .env, else IHC_<NAME> from the environment.
 agent_var() {
   local v=""
   [ -f "$ENV_FILE" ] && v="$(env_get "$1")"
-  [ -z "$v" ] && eval "v=\${OCC_$1:-}"
+  [ -z "$v" ] && eval "v=\${IHC_$1:-}"
   printf '%s' "$v"
 }
 
@@ -397,9 +397,9 @@ agent_preflight() {
 agent_env() {
   local k v
   for k in OPENCLAW_IMAGE AGENT_PROXY_IMAGE; do
-    v="$(envfile get "$OCC_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
+    v="$(envfile get "$IHC_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
   done
-  env_default OCC_AGENT_NETWORK occ-agent
+  env_default IHC_AGENT_NETWORK ihc-agent
   env_default AGENT_MEM_LIMIT 3g
   env_set AGENT_DIR "$AGENT_DIR"
   env_set AGENT_ALLOW_WRITE "$AGENT_ALLOW_WRITE"
@@ -469,14 +469,14 @@ agent_up() {
   local out probe llm chan
   mkdir -p "$AGENT_DIR/state/home" "$AGENT_DIR/workspace" "$AGENT_DIR/reference" "$INSTALL_DIR/agent-proxy" "$(env_get AGENT_BACKUP_REPORTS_DIR)" 2>/dev/null || true
   chmod 700 "$AGENT_DIR/state"
-  cp "$OCC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
+  cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
   chmod 644 "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
   render_agent_config || return 1
-  "$OCC_ROOT/scripts/occ-operator.sh" agent-sync --install-dir "$INSTALL_DIR" || return 1
+  "$IHC_ROOT/scripts/ihc-operator.sh" agent-sync --install-dir "$INSTALL_DIR" || return 1
   dc up -d agent-docker-proxy agent || return 1
   wait_healthy 240 agent-docker-proxy agent || return 1
   # The read-only path works end to end, and a write is refused.
-  out="$(dc exec -T agent occ-ro docker /_ping 2>&1 | tr -d '[:space:]')"
+  out="$(dc exec -T agent ihc-ro docker /_ping 2>&1 | tr -d '[:space:]')"
   [ "$out" = OK ] && ok "agent reads the Docker API through agent-docker-proxy" || { fail "agent cannot reach agent-docker-proxy: $out"; return 1; }
   llm=false; [ -n "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ] && llm=true
   chan=""; [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && chan=slack; [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan,}telegram"
@@ -493,7 +493,7 @@ agent_up() {
 }
 
 agent_handoff() {
-  "$OCC_ROOT/scripts/occ-operator.sh" agent-sync --install-dir "$INSTALL_DIR" >/dev/null 2>&1 || true
+  "$IHC_ROOT/scripts/ihc-operator.sh" agent-sync --install-dir "$INSTALL_DIR" >/dev/null 2>&1 || true
   _out "  agent      the operator agent reads $AGENT_DIR/reference/brief.md; contract docs/operator-contract.md"
   if [ -z "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ]; then
     _out "  The agent has no LLM key yet. Put AGENT_ANTHROPIC_API_KEY (or AGENT_OPENAI_API_KEY) and a channel"
@@ -584,13 +584,13 @@ ts_split_dns() {
 # tailnet_up: log the node in (the auth key only when it has no saved state), drop the key,
 # record the address, start the split-DNS server and check it answers.
 tailnet_up() {
-  local key="${OCC_TAILSCALE_AUTHKEY:-}" rc=0 ip name a
+  local key="${IHC_TAILSCALE_AUTHKEY:-}" rc=0 ip name a
   render_tailnet_serve
   # Without a key first: a node with saved state logs itself back in.
   TAILSCALE_AUTHKEY="" dc up -d tailscale >&2 || return 1
   ts_wait 60 || rc=$?
   if [ "$rc" -ne 0 ]; then
-    [ -n "$key" ] || { fail "tailscale: the node is not logged in (state '$(ts_backend)') and OCC_TAILSCALE_AUTHKEY is not set: export an auth key and resume"; return 1; }
+    [ -n "$key" ] || { fail "tailscale: the node is not logged in (state '$(ts_backend)') and IHC_TAILSCALE_AUTHKEY is not set: export an auth key and resume"; return 1; }
     # The key reaches compose from this process only (never .env), for this one container.
     TAILSCALE_AUTHKEY="$key" dc up -d --force-recreate tailscale >&2 || return 1
     rc=0; ts_wait 120 || rc=$?
@@ -642,7 +642,7 @@ private_handoff() {
 }
 
 # ------------------------------------------------------------------ stages
-STAGES="$($PY "$OCC_LIB/state.py" /dev/null stages | tr '\n' ' ')"
+STAGES="$($PY "$IHC_LIB/state.py" /dev/null stages | tr '\n' ' ')"
 
 stage_preflight() {
   local errors=0 probe='{}' os docker_v compose_v disk_kb mem_mb port
@@ -704,12 +704,12 @@ stage_preflight() {
     *) fail "refused ingress combination: INGRESS=$INGRESS TLS_MODE=$TLS_MODE TUNNEL_PROVIDER=$TUNNEL_PROVIDER (see the matrix in docs/install-design.md)"; errors=$((errors+1)) ;;
   esac
   case "$TUNNEL_PROVIDER" in
-    cloudflared) eval "t=\${${CFG_ingress__cloudflared__tunnel_token_env:-OCC_CLOUDFLARED_TUNNEL_TOKEN}:-}"; [ -n "$t" ] && ok "cloudflared tunnel token present in the environment" || { fail "set ${CFG_ingress__cloudflared__tunnel_token_env:-OCC_CLOUDFLARED_TUNNEL_TOKEN} in the environment"; errors=$((errors+1)); } ;;
+    cloudflared) eval "t=\${${CFG_ingress__cloudflared__tunnel_token_env:-IHC_CLOUDFLARED_TUNNEL_TOKEN}:-}"; [ -n "$t" ] && ok "cloudflared tunnel token present in the environment" || { fail "set ${CFG_ingress__cloudflared__tunnel_token_env:-IHC_CLOUDFLARED_TUNNEL_TOKEN} in the environment"; errors=$((errors+1)); } ;;
     tailscale)
       if [ -f "$ENV_FILE" ] && [ "$(ts_backend)" = Running ]; then ok "tailscale: node $(env_get TAILSCALE_HOSTNAME) logged in ($(env_get TAILSCALE_IP)); no auth key needed"
-      elif [ -n "${OCC_TAILSCALE_AUTHKEY:-}" ]; then ok "tailscale auth key present in the environment (first login only; never written to .env)"
-      elif [ -f "$ENV_FILE" ] && docker volume inspect "$(env_get COMPOSE_PROJECT_NAME)_tailscale-state" >/dev/null 2>&1; then warn "tailscale: no auth key in the environment; the node will try its saved state (volume tailscale-state). If it was removed from the tailnet, export OCC_TAILSCALE_AUTHKEY"
-      else fail "set OCC_TAILSCALE_AUTHKEY in the environment: an auth key from the Tailscale admin console (Settings > Keys), used for the first login only"; errors=$((errors+1)); fi
+      elif [ -n "${IHC_TAILSCALE_AUTHKEY:-}" ]; then ok "tailscale auth key present in the environment (first login only; never written to .env)"
+      elif [ -f "$ENV_FILE" ] && docker volume inspect "$(env_get COMPOSE_PROJECT_NAME)_tailscale-state" >/dev/null 2>&1; then warn "tailscale: no auth key in the environment; the node will try its saved state (volume tailscale-state). If it was removed from the tailnet, export IHC_TAILSCALE_AUTHKEY"
+      else fail "set IHC_TAILSCALE_AUTHKEY in the environment: an auth key from the Tailscale admin console (Settings > Keys), used for the first login only"; errors=$((errors+1)); fi
       [ -n "${CFG_ingress__tailscale__private_dns_zone:-}" ] && [ "$CFG_ingress__tailscale__private_dns_zone" != "$BASE_DOMAIN" ] && warn "ingress.tailscale.private_dns_zone ($CFG_ingress__tailscale__private_dns_zone) differs from base_domain: the split DNS zone is base_domain"
       if [ -f "$ENV_FILE" ] && [ -n "$(env_get TAILSCALE_IP)" ] && [ "$(ts_backend)" = Running ]; then
         a="$(ts_resolve "portal.$BASE_DOMAIN")"
@@ -739,7 +739,7 @@ stage_preflight() {
     if [ "$WETTY_ENABLED" != true ]; then log "ops: web terminal disabled (ops.wetty.enabled: false)"
     elif [ -n "$SSHD_PORT" ]; then ok "ops: sshd answers on port $SSHD_PORT: the web terminal signs in as $(id -un)"
     else warn "ops: no sshd answers on this host (tried ${CFG_ops__wetty__ssh_port:+$CFG_ops__wetty__ssh_port, }the sshd_config Port lines and 22): the ops tools come up without the web terminal. Install and start openssh-server, then re-run install.sh"; fi
-    if $PY "$OCC_LIB/opspaths.py" check "$INSTALL_DIR" "$BACKUP_DEST" "$FB_APP_DATA" "$FB_REPORTS"; then
+    if $PY "$IHC_LIB/opspaths.py" check "$INSTALL_DIR" "$BACKUP_DEST" "$FB_APP_DATA" "$FB_REPORTS"; then
       ok "ops: file browser paths $FB_APP_DATA and $FB_REPORTS (read only)"
     else
       fail "ops: refused ops.filebrowser.paths (see above)"; errors=$((errors+1))
@@ -770,12 +770,12 @@ stage_plan() {
   log "services          : $services"
   log "ingress           : $INGRESS, tls $TLS_MODE, tunnel $TUNNEL_PROVIDER, bind $BIND_ADDRESS"
   [ "$TLS_MODE" = internal ] && log "tls               : own CA in $INSTALL_DIR/local/ca (name-constrained to $BASE_DOMAIN), wildcard *.$BASE_DOMAIN on the proxy, HTTPS forced"
-  has_profile tailscale && log "tailnet           : node ${CFG_ingress__tailscale__hostname:-occ} (userspace); serve 80, 443 -> proxy, ${GITEA_SSH_PORT:-2222} -> gitea:22; split DNS for $BASE_DOMAIN on <tailnet address>:53"
+  has_profile tailscale && log "tailnet           : node ${CFG_ingress__tailscale__hostname:-ihc} (userspace); serve 80, 443 -> proxy, ${GITEA_SSH_PORT:-2222} -> gitea:22; split DNS for $BASE_DOMAIN on <tailnet address>:53"
   log "portal            : $PORTAL_BASE_URL (forward auth)"
   log "authentik         : $AUTHENTIK_BASE_URL"
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
   log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, ${REAL_STATE_FILE:-$STATE_FILE}, $CONFIG_FILE"
-  log "volumes           : named volumes of project $( [ -f "$ENV_FILE" ] && env_get COMPOSE_PROJECT_NAME || echo occ), network occ"
+  log "volumes           : named volumes of project $( [ -f "$ENV_FILE" ] && env_get COMPOSE_PROJECT_NAME || echo ihc), network ihc"
   if [ "$BACKUP_ENABLED" = true ]; then
     log "backup            : sidecar crond '${CFG_backup__schedule:-0 2 * * *}' ${CFG_backup__timezone:-UTC}, restic in $BACKUP_DEST/restic, status $BACKUP_DEST/reports/latest-status.json"
   else
@@ -783,15 +783,15 @@ stage_plan() {
   fi
   if [ "$OPS_ON" = true ]; then
     if [ "$WETTY_ON" = true ]; then
-      log "ops tools         : terminal, files, portainer, glances .$BASE_DOMAIN (occ-admins only); the terminal signs in as $(id -un) to sshd port $SSHD_PORT"
+      log "ops tools         : terminal, files, portainer, glances .$BASE_DOMAIN (ihc-admins only); the terminal signs in as $(id -un) to sshd port $SSHD_PORT"
     else
-      log "ops tools         : files, portainer, glances .$BASE_DOMAIN (occ-admins only); no web terminal ($( [ "$WETTY_ENABLED" = true ] && echo "no sshd found" || echo "ops.wetty.enabled: false"))"
+      log "ops tools         : files, portainer, glances .$BASE_DOMAIN (ihc-admins only); no web terminal ($( [ "$WETTY_ENABLED" = true ] && echo "no sshd found" || echo "ops.wetty.enabled: false"))"
     fi
     log "file browser      : $FB_APP_DATA (rw), $FB_REPORTS (ro)"
   fi
-  [ "$AGENT_ON" = true ] && log "operator agent    : $(envfile get "$OCC_ROOT/docker/.env.example" OPENCLAW_IMAGE) in $INSTALL_DIR/agent, Docker API read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo " + restart of app containers and build cache prune (ops.agent.allow_write)"); LLM key and chat channel from AGENT_* in .env (docs/operator-contract.md)"
+  [ "$AGENT_ON" = true ] && log "operator agent    : $(envfile get "$IHC_ROOT/docker/.env.example" OPENCLAW_IMAGE) in $INSTALL_DIR/agent, Docker API read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo " + restart of app containers and build cache prune (ops.agent.allow_write)"); LLM key and chat channel from AGENT_* in .env (docs/operator-contract.md)"
   log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
-  log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label occ-deploy, image $INSTALL_DIR/deployer)"
+  log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label ihc-deploy, image $INSTALL_DIR/deployer)"
   log "human afterwards  : seven day-zero steps printed at the end (install.sh handoff): portal, first password, MFA, backup key, first app, operator brief, stop/remove; DNS/tunnel for private/public"
   state stage plan set probe "$(jsonq build services="$services" profiles="core${PROFILES:+,$PROFILES}" portal_url="$PORTAL_BASE_URL" authentik_url="$AUTHENTIK_BASE_URL" gitea_url="$GITEA_BASE_URL" install_dir="$INSTALL_DIR")"
 }
@@ -820,10 +820,10 @@ stage_secrets() {
   [ "$SOURCE_CONFIG" -ef "$CONFIG_FILE" ] || cp "$SOURCE_CONFIG" "$CONFIG_FILE"
   if [ ! -f "$ENV_FILE" ]; then (umask 077; : > "$ENV_FILE"); ok ".env created (0600)"; else chmod 600 "$ENV_FILE"; ok ".env exists: missing keys are added, nothing is overwritten"; fi
   SECRET_FPS=""
-  env_default COMPOSE_PROJECT_NAME occ
+  env_default COMPOSE_PROJECT_NAME ihc
   env_set COMPOSE_PROFILES "$PROFILES"
-  env_default OCC_NETWORK occ
-  env_default OCC_OPS_NETWORK occ-ops
+  env_default IHC_NETWORK ihc
+  env_default IHC_OPS_NETWORK ihc-ops
   env_set INGRESS "$INGRESS"; env_set BASE_DOMAIN "$BASE_DOMAIN"; env_set PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
   env_set TLS_MODE "$TLS_MODE"; env_set TUNNEL_PROVIDER "$TUNNEL_PROVIDER"; env_set BIND_ADDRESS "$BIND_ADDRESS"
   env_default PROXY_HTTP_PORT 80; env_default PROXY_HTTPS_PORT 443; env_default PROXY_ADMIN_PORT 81
@@ -833,22 +833,22 @@ stage_secrets() {
   # Images: defaults from docker/.env.example, kept once written so upgrades are explicit.
   local k v
   for k in PROXY_IMAGE AUTHENTIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE GARAGE_IMAGE PORTAINER_IMAGE GLANCES_IMAGE WETTY_IMAGE FILEBROWSER_IMAGE CLOUDFLARED_IMAGE TAILSCALE_IMAGE COREDNS_IMAGE; do
-    v="$(envfile get "$OCC_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
+    v="$(envfile get "$IHC_ROOT/docker/.env.example" "$k")"; env_default "$k" "$v"
   done
   env_default PROXY_ADMIN_EMAIL "$ADMIN_EMAIL"
-  env_secret PROXY_ADMIN_PASSWORD OCC_PROXY_ADMIN_PASSWORD 32
-  env_secret AUTHENTIK_SECRET_KEY OCC_AUTHENTIK_SECRET_KEY 64
+  env_secret PROXY_ADMIN_PASSWORD IHC_PROXY_ADMIN_PASSWORD 32
+  env_secret AUTHENTIK_SECRET_KEY IHC_AUTHENTIK_SECRET_KEY 64
   env_default AUTHENTIK_PG_DB "${CFG_postgres__authentik__database:-authentik}"
   env_default AUTHENTIK_PG_USER "${CFG_postgres__authentik__role:-authentik}"
-  env_secret AUTHENTIK_PG_PASSWORD "${CFG_postgres__authentik__password_env:-OCC_AUTHENTIK_DATABASE_PASSWORD}" 32
+  env_secret AUTHENTIK_PG_PASSWORD "${CFG_postgres__authentik__password_env:-IHC_AUTHENTIK_DATABASE_PASSWORD}" 32
   env_default AUTHENTIK_BOOTSTRAP_EMAIL "${CFG_authentik__bootstrap_email:-$ADMIN_EMAIL}"
-  env_secret AUTHENTIK_BOOTSTRAP_PASSWORD "${CFG_authentik__bootstrap_password_env:-OCC_AUTHENTIK_BOOTSTRAP_PASSWORD}" 24
-  env_secret AUTHENTIK_BOOTSTRAP_TOKEN "${CFG_authentik__bootstrap_token_env:-OCC_AUTHENTIK_BOOTSTRAP_TOKEN}" 60
-  env_default AUTHENTIK_PORTAL_GROUP "${CFG_authentik__portal_group:-occ-admins}"
-  env_default AUTHENTIK_APP_GROUP "${CFG_authentik__app_group:-occ-users}"
+  env_secret AUTHENTIK_BOOTSTRAP_PASSWORD "${CFG_authentik__bootstrap_password_env:-IHC_AUTHENTIK_BOOTSTRAP_PASSWORD}" 24
+  env_secret AUTHENTIK_BOOTSTRAP_TOKEN "${CFG_authentik__bootstrap_token_env:-IHC_AUTHENTIK_BOOTSTRAP_TOKEN}" 60
+  env_default AUTHENTIK_PORTAL_GROUP "${CFG_authentik__portal_group:-ihc-admins}"
+  env_default AUTHENTIK_APP_GROUP "${CFG_authentik__app_group:-ihc-users}"
   env_default AUTHENTIK_OUTPOST_ID ""
   env_default GITEA_ADMIN_USERNAME "${CFG_gitea__initial_admin_username:-admin}"
-  env_secret GITEA_ADMIN_PASSWORD "${CFG_gitea__initial_admin_password_env:-OCC_GITEA_ADMIN_PASSWORD}" 24
+  env_secret GITEA_ADMIN_PASSWORD "${CFG_gitea__initial_admin_password_env:-IHC_GITEA_ADMIN_PASSWORD}" 24
   env_default GITEA_ADMIN_EMAIL "$ADMIN_EMAIL"
   env_default GITEA_ADMIN_TOKEN ""; env_default GITEA_READONLY_TOKEN ""
   env_default GITEA_ORGANIZATION "${CFG_gitea__organization:-company}"
@@ -858,38 +858,38 @@ stage_secrets() {
   env_default GITEA_OIDC_ENABLED "${CFG_gitea__oidc_enabled:-true}"
   env_default GITEA_OIDC_SOURCE_NAME authentik
   env_default GITEA_OIDC_CLIENT_ID "gitea-$(random_secret 16)"
-  env_secret GITEA_OIDC_CLIENT_SECRET OCC_GITEA_OIDC_CLIENT_SECRET 48
+  env_secret GITEA_OIDC_CLIENT_SECRET IHC_GITEA_OIDC_CLIENT_SECRET 48
   env_default GITEA_DB_NAME "${CFG_postgres__gitea__database:-gitea}"
   env_default GITEA_DB_USER "${CFG_postgres__gitea__role:-gitea}"
-  env_secret GITEA_DB_PASSWORD "${CFG_postgres__gitea__password_env:-OCC_GITEA_DATABASE_PASSWORD}" 32
-  env_default POSTGRES_DB occ; env_default POSTGRES_USER occ
-  env_secret POSTGRES_PASSWORD OCC_POSTGRES_PASSWORD 32
-  env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-occ_platform}"
-  env_default PORTAL_DB_ROLE "${CFG_postgres__portal__role:-occ_platform}"
-  env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-OCC_PLATFORM_DATABASE_PASSWORD}" 32
+  env_secret GITEA_DB_PASSWORD "${CFG_postgres__gitea__password_env:-IHC_GITEA_DATABASE_PASSWORD}" 32
+  env_default POSTGRES_DB ihc; env_default POSTGRES_USER ihc
+  env_secret POSTGRES_PASSWORD IHC_POSTGRES_PASSWORD 32
+  env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-ihc_platform}"
+  env_default PORTAL_DB_ROLE "${CFG_postgres__portal__role:-ihc_platform}"
+  env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-IHC_PLATFORM_DATABASE_PASSWORD}" 32
   env_default PORTAL_BUILD_CONTEXT ./portal-placeholder
   env_default PORTAL_SUPER_ADMIN_EMAILS "${CFG_portal__super_admin_emails:-$ADMIN_EMAIL}"
   # Garage: the RPC secret must be 32 bytes in hex. Generated even with storage off, so
   # turning the profile on later is only a config change.
   if [ -z "$(env_get GARAGE_RPC_SECRET)" ]; then
-    v="${OCC_GARAGE_RPC_SECRET:-}"; [ -n "$v" ] || v="$($PY -c 'import secrets;print(secrets.token_hex(32))')"
-    printf '%s' "$v" | grep -Eq '^[0-9a-f]{64}$' || die "OCC_GARAGE_RPC_SECRET must be 64 hex characters"
+    v="${IHC_GARAGE_RPC_SECRET:-}"; [ -n "$v" ] || v="$($PY -c 'import secrets;print(secrets.token_hex(32))')"
+    printf '%s' "$v" | grep -Eq '^[0-9a-f]{64}$' || die "IHC_GARAGE_RPC_SECRET must be 64 hex characters"
     env_set GARAGE_RPC_SECRET "$v"
   fi
   SECRET_FPS="$SECRET_FPS,\"GARAGE_RPC_SECRET\":\"$(sha_fp "$(env_get GARAGE_RPC_SECRET)")\""
-  env_secret GARAGE_ADMIN_TOKEN OCC_GARAGE_ADMIN_TOKEN 48
-  env_secret GARAGE_METRICS_TOKEN OCC_GARAGE_METRICS_TOKEN 48
+  env_secret GARAGE_ADMIN_TOKEN IHC_GARAGE_ADMIN_TOKEN 48
+  env_secret GARAGE_METRICS_TOKEN IHC_GARAGE_METRICS_TOKEN 48
   env_default GARAGE_S3_REGION garage
   env_set GARAGE_CAPACITY "${CFG_storage__capacity:-100G}"
   env_default GARAGE_LOG_LEVEL garage=info
-  env_default GITEA_RUNNER_TOKEN "$(eval "printf '%s' \"\${${CFG_ci__gitea_runner__registration_token_env:-OCC_GITEA_RUNNER_TOKEN}:-}\"")"
+  env_default GITEA_RUNNER_TOKEN "$(eval "printf '%s' \"\${${CFG_ci__gitea_runner__registration_token_env:-IHC_GITEA_RUNNER_TOKEN}:-}\"")"
   env_default GITEA_DEPLOY_RUNNER_TOKEN ""
   env_set DOCKER_SOCKET "$(detect_docker_socket)"
-  env_default GITEA_RUNNER_NAME occ-runner
+  env_default GITEA_RUNNER_NAME ihc-runner
   env_default GITEA_RUNNER_LABELS "ubuntu-latest:docker://node:22-bookworm"
-  eval "v=\${${CFG_ingress__cloudflared__tunnel_token_env:-OCC_CLOUDFLARED_TUNNEL_TOKEN}:-}"; env_default CLOUDFLARED_TUNNEL_TOKEN "$v"
+  eval "v=\${${CFG_ingress__cloudflared__tunnel_token_env:-IHC_CLOUDFLARED_TUNNEL_TOKEN}:-}"; env_default CLOUDFLARED_TUNNEL_TOKEN "$v"
   # The Tailscale auth key never goes to .env (tailnet_up); the hostname follows the config.
-  env_set TAILSCALE_HOSTNAME "${CFG_ingress__tailscale__hostname:-occ}"
+  env_set TAILSCALE_HOSTNAME "${CFG_ingress__tailscale__hostname:-ihc}"
   env_default TAILSCALE_IP ""; env_default TAILSCALE_DNS_NAME ""; env_default PROXY_CERTIFICATE_ID ""
   # Backup settings follow the config on every run (they are not secrets); the key is
   # generated once and never replaced: a new key cannot open the existing repository.
@@ -915,8 +915,8 @@ stage_secrets() {
   env_default WETTY_SSH_HOST host.docker.internal
   env_set FILEBROWSER_APP_DATA_DIR "$FB_APP_DATA"
   env_set FILEBROWSER_REPORTS_DIR "$FB_REPORTS"
-  env_default AUTHENTIK_SMOKE_USER occ-smoke-user
-  env_secret AUTHENTIK_SMOKE_USER_PASSWORD OCC_AUTHENTIK_SMOKE_USER_PASSWORD 32
+  env_default AUTHENTIK_SMOKE_USER ihc-smoke-user
+  env_secret AUTHENTIK_SMOKE_USER_PASSWORD IHC_AUTHENTIK_SMOKE_USER_PASSWORD 32
   agent_env
   mkdir -p "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"; chmod 700 "$INSTALL_DIR/app-data" "$WETTY_KEY_DIR"
   [ -e "$WETTY_KEY_DIR/known_hosts" ] || (umask 077; : > "$WETTY_KEY_DIR/known_hosts")
@@ -942,11 +942,11 @@ detect_docker_socket() {
 # act_runner daemons of the ci profile (docs/gitops-flow.md, "The runners").
 render_runner_configs() {
   local sock project net
-  sock="$(env_get DOCKER_SOCKET)"; project="$(env_get COMPOSE_PROJECT_NAME)"; net="$(env_get OCC_NETWORK)"
+  sock="$(env_get DOCKER_SOCKET)"; project="$(env_get COMPOSE_PROJECT_NAME)"; net="$(env_get IHC_NETWORK)"
   mkdir -p "$INSTALL_DIR/runner"
   cat > "$INSTALL_DIR/runner/ci.yaml" <<YAML
 # Generated by install.sh: the CI runner (label ubuntu-latest). Re-rendered on every run.
-# Jobs get no Docker socket, no occ network and no install directory.
+# Jobs get no Docker socket, no ihc network and no install directory.
 log:
   level: info
 runner:
@@ -964,9 +964,9 @@ container:
   valid_volumes: []
 YAML
   cat > "$INSTALL_DIR/runner/deploy.yaml" <<YAML
-# Generated by install.sh: the deploy runner (label occ-deploy), registered for the
+# Generated by install.sh: the deploy runner (label ihc-deploy), registered for the
 # organization $(env_get GITEA_ORGANIZATION) only. Re-rendered on every run. Its jobs run in
-# $project-deployer:local with the Docker socket, the occ network and the install
+# $project-deployer:local with the Docker socket, the ihc network and the install
 # directory mounted at the same path: a job here is root on the box.
 log:
   level: info
@@ -975,10 +975,10 @@ runner:
   capacity: 1
   timeout: 30m
   envs:
-    OCC_INSTALL_DIR: "$INSTALL_DIR"
-    OCC_ENDPOINTS: internal
+    IHC_INSTALL_DIR: "$INSTALL_DIR"
+    IHC_ENDPOINTS: internal
   labels:
-    - "occ-deploy:docker://$project-deployer:local"
+    - "ihc-deploy:docker://$project-deployer:local"
 cache:
   enabled: false
 container:
@@ -1027,20 +1027,20 @@ TOML
 # scripts and templates. Rebuilt on every foundation run so it follows the checkout.
 build_deployer() {
   local ctx="$INSTALL_DIR/deployer"
-  rm -rf "$ctx"; mkdir -p "$ctx/occ"
-  cp "$OCC_ROOT/docker/deployer/Dockerfile" "$ctx/"
-  cp -R "$OCC_ROOT/scripts" "$OCC_ROOT/templates" "$OCC_ROOT/schemas" "$ctx/occ/"
+  rm -rf "$ctx"; mkdir -p "$ctx/ihc"
+  cp "$IHC_ROOT/docker/deployer/Dockerfile" "$ctx/"
+  cp -R "$IHC_ROOT/scripts" "$IHC_ROOT/templates" "$IHC_ROOT/schemas" "$ctx/ihc/"
   docker build -q -t "$(env_get COMPOSE_PROJECT_NAME)-deployer:local" "$ctx" >/dev/null || return 1
   ok "deployer image $(env_get COMPOSE_PROJECT_NAME)-deployer:local built"
 }
 
 stage_foundation() {
-  cp "$OCC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
+  cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   rm -rf "$INSTALL_DIR/portal-placeholder"
-  cp -R "$OCC_ROOT/examples/minimal-web-app" "$INSTALL_DIR/portal-placeholder"
+  cp -R "$IHC_ROOT/examples/minimal-web-app" "$INSTALL_DIR/portal-placeholder"
   rm -rf "$INSTALL_DIR/backup-job"; mkdir -p "$INSTALL_DIR/backup-job"
-  cp "$OCC_ROOT/docker/backup/Dockerfile" "$OCC_ROOT/docker/backup/scheduler.sh" "$INSTALL_DIR/backup-job/"
-  cp "$OCC_ROOT/scripts/occ-backup.sh" "$INSTALL_DIR/backup-job/occ-backup.sh"
+  cp "$IHC_ROOT/docker/backup/Dockerfile" "$IHC_ROOT/docker/backup/scheduler.sh" "$INSTALL_DIR/backup-job/"
+  cp "$IHC_ROOT/scripts/ihc-backup.sh" "$INSTALL_DIR/backup-job/ihc-backup.sh"
   render_runner_configs
   render_garage_config
   render_tailnet_serve
@@ -1056,7 +1056,7 @@ stage_foundation() {
   build_deployer || { fail "deployer image build failed"; return 1; }
   dc up --no-start --quiet-pull >&2
   state stage foundation set resources "$(docker volume ls --filter "label=com.docker.compose.project=$(env_get COMPOSE_PROJECT_NAME)" --format '{{.Name}}' | $PY -c 'import json,sys;print(json.dumps(["volume:"+l.strip() for l in sys.stdin if l.strip()]))')"
-  state stage foundation set resources "[\"network:$(env_get OCC_NETWORK)\"]"
+  state stage foundation set resources "[\"network:$(env_get IHC_NETWORK)\"]"
 }
 
 stage_authentik() {
@@ -1127,10 +1127,10 @@ stage_portal() {
 stage_first_run() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
-  "$OCC_ROOT/scripts/first-run.sh" $args
+  "$IHC_ROOT/scripts/first-run.sh" $args
 }
 
-# The backup job: a sidecar container (docker/backup) whose crond runs occ-backup on
+# The backup job: a sidecar container (docker/backup) whose crond runs ihc-backup on
 # BACKUP_SCHEDULE. This stage starts it, runs the first backup and verifies it, so the
 # portal has a status file from day one and smoke test 14 has something to verify.
 stage_backup() {
@@ -1152,9 +1152,9 @@ stage_backup() {
     log "a successful backup already exists: not running a new one now"
   else
     step "first backup run"
-    "$OCC_ROOT/scripts/occ-backup.sh" --install-dir "$INSTALL_DIR" run || { fail "first backup run failed: see the output above and $dest/reports/latest-status.json"; return 1; }
+    "$IHC_ROOT/scripts/ihc-backup.sh" --install-dir "$INSTALL_DIR" run || { fail "first backup run failed: see the output above and $dest/reports/latest-status.json"; return 1; }
   fi
-  "$OCC_ROOT/scripts/occ-backup.sh" --install-dir "$INSTALL_DIR" verify --latest >/dev/null || { fail "backup verification failed"; return 1; }
+  "$IHC_ROOT/scripts/ihc-backup.sh" --install-dir "$INSTALL_DIR" verify --latest >/dev/null || { fail "backup verification failed"; return 1; }
   snap="$($PY -c 'import json,sys;print(json.load(open(sys.argv[1])).get("snapshot_id",""))' "$dest/reports/latest-success.json")"
   state stage backup set resources '["container:backup","volume:backup-cache"]'
   state stage backup set probe "$(jsonq build enabled:=true job="sidecar crond" schedule="$(env_get BACKUP_SCHEDULE)" timezone="$(env_get BACKUP_TZ)" destination="$dest" repository="$dest/restic" status_file="$dest/reports/latest-status.json" first_snapshot="$snap")"
@@ -1163,7 +1163,7 @@ stage_backup() {
 stage_smoke_tests() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
-  "$OCC_ROOT/scripts/smoke-tests.sh" $args
+  "$IHC_ROOT/scripts/smoke-tests.sh" $args
 }
 
 # Starts the Gitea Actions runners (core, but they need registration tokens Gitea can only
@@ -1202,10 +1202,10 @@ ensure_wetty_key() {
   [ -s "$k" ] && [ -s "$k.pub" ] && return 0
   rm -f "$k" "$k.pub"
   if have ssh-keygen; then
-    ssh-keygen -q -t ed25519 -N "" -C "occ-wetty@$(hostname -s 2>/dev/null || echo host)" -f "$k" </dev/null >/dev/null || return 1
+    ssh-keygen -q -t ed25519 -N "" -C "ihc-wetty@$(hostname -s 2>/dev/null || echo host)" -f "$k" </dev/null >/dev/null || return 1
   else
     # No ssh-keygen on the host: generate inside the Wetty image, which ships openssh.
-    out="$(docker run --rm --entrypoint sh "$(env_get WETTY_IMAGE)" -c 'ssh-keygen -q -t ed25519 -N "" -C "occ-wetty@$1" -f /tmp/k && cat /tmp/k && echo ===PUB=== && cat /tmp/k.pub' sh "$(hostname -s 2>/dev/null || echo host)")" || return 1
+    out="$(docker run --rm --entrypoint sh "$(env_get WETTY_IMAGE)" -c 'ssh-keygen -q -t ed25519 -N "" -C "ihc-wetty@$1" -f /tmp/k && cat /tmp/k && echo ===PUB=== && cat /tmp/k.pub' sh "$(hostname -s 2>/dev/null || echo host)")" || return 1
     (umask 077; printf '%s\n' "${out%%===PUB===*}" | sed '/^$/d' > "$k")
     printf '%s\n' "${out##*===PUB===}" | sed '/^$/d' > "$k.pub"
   fi
@@ -1320,13 +1320,13 @@ o["access"]=sys.argv[3]
 print(json.dumps(o))' "$SCHEME" "$BASE_DOMAIN" "$(env_get AUTHENTIK_PORTAL_GROUP) only (forward auth)"),"
     fi
     if [ "$(env_get BACKUP_ENABLED)" = true ]; then
-      echo "  \"backup\": {\"enabled\": true, \"job\": \"sidecar container 'backup' (crond)\", \"schedule\": \"$(env_get BACKUP_SCHEDULE)\", \"timezone\": \"$(env_get BACKUP_TZ)\", \"repository\": \"$(env_get BACKUP_DESTINATION)/restic\", \"status_file\": \"$(env_get BACKUP_DESTINATION)/reports/latest-status.json\", \"commands\": \"$OCC_ROOT/scripts/occ-backup.sh --install-dir $INSTALL_DIR run|verify --latest|status\"}"
+      echo "  \"backup\": {\"enabled\": true, \"job\": \"sidecar container 'backup' (crond)\", \"schedule\": \"$(env_get BACKUP_SCHEDULE)\", \"timezone\": \"$(env_get BACKUP_TZ)\", \"repository\": \"$(env_get BACKUP_DESTINATION)/restic\", \"status_file\": \"$(env_get BACKUP_DESTINATION)/reports/latest-status.json\", \"commands\": \"$IHC_ROOT/scripts/ihc-backup.sh --install-dir $INSTALL_DIR run|verify --latest|status\"}"
     else
       echo "  \"backup\": {\"enabled\": false, \"job\": \"none\"}"
     fi
     echo '}'
   } > "$inv.new"
-  # Apps registered by occ-app provision live under "apps": carried over, never dropped.
+  # Apps registered by ihc-app provision live under "apps": carried over, never dropped.
   $PY -c 'import json,sys
 new=json.load(open(sys.argv[1]))
 try: new["apps"]=json.load(open(sys.argv[2])).get("apps",{})
@@ -1338,7 +1338,7 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   state finish >/dev/null || true
   _out ""
   _out "Installed. URLs:"
-  _out "  portal     $PORTAL_BASE_URL   (a placeholder: it proves the SSO; to operate, Gitea + occ-operator brief)"
+  _out "  portal     $PORTAL_BASE_URL   (a placeholder: it proves the SSO; to operate, Gitea + ihc-operator brief)"
   _out "  authentik  $AUTHENTIK_BASE_URL   (user akadmin)"
   _out "  gitea      $GITEA_BASE_URL   (user $(env_get GITEA_ADMIN_USERNAME); SSH port $(env_get GITEA_SSH_PORT); sign in with Authentik)"
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
@@ -1400,11 +1400,11 @@ run_stage() {
 
 # day0_handoff: seven steps a person does once, in order, with the literal commands.
 day0_handoff() {
-  local envpy="python3 $OCC_ROOT/scripts/lib/envfile.py" d="--install-dir $INSTALL_DIR"
+  local envpy="python3 $IHC_ROOT/scripts/lib/envfile.py" d="--install-dir $INSTALL_DIR"
   _out ""
   _out "Day zero, in this order:"
   _out "1. Open the portal: $(env_get PORTAL_BASE_URL)"
-  _out "   It is a placeholder: it proves the SSO. To operate, use Gitea and occ-operator brief (step 6)."
+  _out "   It is a placeholder: it proves the SSO. To operate, use Gitea and ihc-operator brief (step 6)."
   _out "2. Read the first password here, in your own terminal (never paste it into a chat):"
   _out "     $envpy get $ENV_FILE AUTHENTIK_BOOTSTRAP_PASSWORD"
   [ "$(uname -s)" = Darwin ] && _out "   To copy it instead of showing it, add:  | pbcopy"
@@ -1418,9 +1418,9 @@ day0_handoff() {
     _out "4. Backup is off (backup.enabled: false): turn it on before anything here matters (docs/backup.md)."
   fi
   _out "5. Your first app: a folder here, a repository in Gitea, deployed by the push:"
-  _out "     $OCC_ROOT/scripts/occ-app.sh new my-first-app --owner $(env_get GITEA_ADMIN_EMAIL) --push $d"
+  _out "     $IHC_ROOT/scripts/ihc-app.sh new my-first-app --owner $(env_get GITEA_ADMIN_EMAIL) --push $d"
   _out "6. Operate: the map of services, apps, owners and commands:"
-  _out "     $OCC_ROOT/scripts/occ-operator.sh brief $d"
+  _out "     $IHC_ROOT/scripts/ihc-operator.sh brief $d"
   _out "   Short state: $SELF status $d"
   _out "7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):"
   _out "     $SELF stop $d"
@@ -1465,7 +1465,7 @@ out=d.get("status","unknown")
 if s.get("failed"): out+=", failed at "+",".join(s["failed"])
 elif s.get("pending") and d.get("status")!="completed": out+=", next stage "+s["pending"][0]
 print("%s (installation %s)"%(out,d.get("installation_id","?")))')"
-  _out "Open Company Cloud at $INSTALL_DIR: $line"
+  _out "InHouseCloud at $INSTALL_DIR: $line"
   if [ ! -r "$ENV_FILE" ]; then _out "  (no readable $ENV_FILE: run as the user who installed it for URLs, health, backup and apps)"; return "$rc"; fi
   _out "  portal     $(env_get PORTAL_BASE_URL)   (placeholder: proves the SSO)"
   _out "  sign-in    $(env_get AUTHENTIK_BASE_URL)"
@@ -1580,8 +1580,8 @@ cloud_remove() {
   done
   pub="$INSTALL_DIR/local/wetty/id_ed25519.pub"
   if [ -s "$pub" ] && [ -f "$HOME/.ssh/authorized_keys" ] && grep -qF "$(awk '{print $2}' "$pub")" "$HOME/.ssh/authorized_keys"; then
-    grep -vF "$(awk '{print $2}' "$pub")" "$HOME/.ssh/authorized_keys" > "$HOME/.ssh/authorized_keys.occ" || true
-    chmod 600 "$HOME/.ssh/authorized_keys.occ"; mv "$HOME/.ssh/authorized_keys.occ" "$HOME/.ssh/authorized_keys"
+    grep -vF "$(awk '{print $2}' "$pub")" "$HOME/.ssh/authorized_keys" > "$HOME/.ssh/authorized_keys.ihc" || true
+    chmod 600 "$HOME/.ssh/authorized_keys.ihc"; mv "$HOME/.ssh/authorized_keys.ihc" "$HOME/.ssh/authorized_keys"
     ok "the web terminal's key was taken out of $HOME/.ssh/authorized_keys (that line only)"
   fi
   if [ "$REMOVE_DIR" = true ]; then
@@ -1596,7 +1596,7 @@ cloud_remove() {
     done
   fi
   _out ""
-  _out "Removed. Left on purpose:$( [ "$REMOVE_DIR" = true ] || echo " $INSTALL_DIR;")$( [ "$REMOVE_IMAGES" = true ] || echo " the pulled images (docker image ls);")$( [ "$inside" = true ] || echo " the backups in $dest;") the repository checkout $OCC_ROOT."
+  _out "Removed. Left on purpose:$( [ "$REMOVE_DIR" = true ] || echo " $INSTALL_DIR;")$( [ "$REMOVE_IMAGES" = true ] || echo " the pulled images (docker image ls);")$( [ "$inside" = true ] || echo " the backups in $dest;") the repository checkout $IHC_ROOT."
   [ "$(uname -s)" = Darwin ] && _out "Docker Desktop keeps the space in its disk image: Settings > Resources > Disk usage limit, or Troubleshoot > Clean / Purge data (docs/cleanup.md)."
   return 0
 }
@@ -1611,7 +1611,7 @@ onboarding_main() {
       if [ "$JSON_OUTPUT" = true ]; then state status --json; return $?; fi
       if [ "$VERBOSE" = true ]; then
         local rc=0; state status || rc=$?
-        if [ -r "$ENV_FILE" ]; then _out ""; "$OCC_ROOT/scripts/occ-operator.sh" brief --install-dir "$INSTALL_DIR"; fi
+        if [ -r "$ENV_FILE" ]; then _out ""; "$IHC_ROOT/scripts/ihc-operator.sh" brief --install-dir "$INSTALL_DIR"; fi
         return "$rc"
       fi
       status_short ;;
@@ -1641,7 +1641,7 @@ DRY_RUN=false
 if [ "$MODE" = plan ] || { [ -z "$MODE" ] && [ "$ASSUME_YES" != true ]; }; then DRY_RUN=true; fi
 REAL_STATE_FILE="$STATE_FILE"
 if [ "$DRY_RUN" = true ]; then
-  PLAN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/occ-plan.XXXXXX")"
+  PLAN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/ihc-plan.XXXXXX")"
   trap 'rm -rf "$PLAN_TMP"' EXIT
   STATE_FILE="$PLAN_TMP/state.json"
   [ -f "$REAL_STATE_FILE" ] && cp "$REAL_STATE_FILE" "$STATE_FILE"
