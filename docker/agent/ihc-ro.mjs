@@ -15,7 +15,7 @@
 //   ihc-ro restart NAME             restart one app container (allow_write; never a core one)
 //   ihc-ro prune-build-cache        prune the Docker build cache (allow_write)
 //
-// Environment: IHC_DOCKER_API (http://agent-docker-proxy:2375), IHC_GITEA_URL,
+// Environment: IHC_DOCKER_API (http://agent-docker-proxy:2375: docker-ro, by its alias on the agent network), IHC_GITEA_URL,
 // GITEA_READONLY_TOKEN, IHC_BACKUP_REPORTS (/ihc/backup-reports),
 // IHC_AGENT_ALLOW_WRITE (true|false). The proxy enforces the writes, not this script.
 import { readFileSync } from "node:fs";

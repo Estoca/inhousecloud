@@ -11,12 +11,10 @@ import {
   inferAppsFromDockerMetadata,
   listApps,
   readInventory,
-  updateInventoryAppMetadata,
-  updateInventoryDockerMetadata,
 } from './inventory.js';
 import { enrichAppsWithDocker, listDockerContainers } from './docker-state.js';
-import { enrichAppsWithNpm, listNpmProxyHosts } from './npm-state.js';
 import { enrichAppsWithHealth, listHttpHealth } from './health-state.js';
+import { runMigrations } from './migrate.js';
 import { getGiteaState } from './gitea-state.js';
 import { getPlatformStatus } from './platform-status.js';
 import { createStatusCache, createSwrResource, statusCacheConfigFromEnv } from './status-cache.js';
@@ -48,11 +46,14 @@ function renderClient() {
   return readFileSync(clientIndexPath, 'utf8');
 }
 
-// Rotas /api que respondem sem autenticacao: so o healthcheck, que nao le
-// estado da plataforma nem aceita escrita.
+// Rotas /api que respondem sem autenticacao: so o healthcheck (/api/health, apelido
+// do /health da raiz), que nao le estado da plataforma nem aceita escrita.
 export const PUBLIC_API_PATHS = Object.freeze([
   '/health',
 ]);
+
+// Estado das migracoes do boot, para o /health e para o instalador (stage portal).
+export const bootState = { migrations: { ok: null, skipped: true } };
 
 export function isPublicApiPath(path, method = 'GET') {
   if (String(method).toUpperCase() !== 'GET') return false;
@@ -75,7 +76,6 @@ function constantTimeEqual(a, b) {
 
 export function createApp({
   listDockerContainersFn = listDockerContainers,
-  listNpmProxyHostsFn = listNpmProxyHosts,
   listHttpHealthFn = listHttpHealth,
   giteaState = getGiteaState(),
   platformStatus = getPlatformStatus(),
@@ -86,8 +86,6 @@ export function createApp({
   listPortalAdminsFn = listPortalAdmins,
   upsertPortalAdminFn = upsertPortalAdmin,
   deactivatePortalAdminFn = deactivatePortalAdmin,
-  updateInventoryAppMetadataFn = updateInventoryAppMetadata,
-  updateInventoryDockerMetadataFn = updateInventoryDockerMetadata,
   collectDockerDiskUsageFn = collectDockerDiskUsage,
   listDiskUsageSnapshotsFn = listDiskUsageSnapshots,
   recordDiskUsageSnapshotFn = recordDiskUsageSnapshot,
@@ -128,35 +126,20 @@ export function createApp({
       apps,
     };
   });
-  const appsNpmResource = swr('apps-npm', async () => {
-    const inventory = readInventory();
-    const npmState = await listNpmProxyHostsFn();
-    const apps = enrichAppsWithNpm(listApps(), npmState);
-    return {
-      source: inventory.source,
-      updated_at: inventory.updated_at,
-      count: apps.length,
-      npm_available: npmState.available,
-      apps,
-    };
-  });
   const runtimeDockerResource = swr('runtime-docker', async () => (
     enrichDockerContainersWithInventory(listDockerContainersFn(), readInventory())
   ));
-  const runtimeNpmResource = swr('runtime-npm', async () => listNpmProxyHostsFn());
   const runtimeHealthResource = swr('runtime-health', async () => listHttpHealthFn(listApps()));
   const platformStatusResource = swr('platform-status', async () => (
     typeof platformStatus.collect === 'function'
       ? platformStatus.collect()
       : platformStatus.status({ refresh: true })
   ), { ttlSeconds: statusCacheConfig.platformTtlSeconds });
-  // Tudo que deriva do inventario: invalidado quando um admin edita metadata.
+  // Tudo que deriva do inventario: descartado pelo Atualizar do dashboard.
   const inventoryResources = [
     appsStatusResource,
     appsRuntimeResource,
-    appsNpmResource,
     runtimeDockerResource,
-    runtimeNpmResource,
     runtimeHealthResource,
   ];
   async function invalidateStatusCaches() {
@@ -192,9 +175,20 @@ export function createApp({
     next();
   }
 
+  // Healthcheck do container e do proxy (location = /health e publica na forward
+  // auth): sem segredo na resposta. Diz se as migracoes do boot passaram.
+  const health = (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'inhousecloud-portal',
+      commit_hash: String(process.env.COMMIT_SHA || process.env.GIT_SHA || 'unknown').trim() || 'unknown',
+      migrations: bootState.migrations,
+    });
+  };
+  app.get('/health', health);
+
   // Toda rota /api exige a sessao do Authentik (headers da forward auth), menos
-  // /api/health (healthcheck do container e do proxy, sem segredo na resposta)
-  // e o provider do mcp-gateway, que tem token proprio.
+  // /api/health (o mesmo /health) e o provider do mcp-gateway, que tem token proprio.
   app.use('/api', async (req, res, next) => {
     if (req.path.startsWith('/internal/mcp/v1/')) {
       next();
@@ -208,13 +202,7 @@ export function createApp({
     await auth.requireApiAuth(req, res, next);
   });
 
-  app.get('/api/health', (_req, res) => {
-    res.json({
-      ok: true,
-      service: 'inhousecloud-portal',
-      commit_hash: String(process.env.COMMIT_SHA || process.env.GIT_SHA || 'unknown').trim() || 'unknown',
-    });
-  });
+  app.get('/api/health', health);
 
   // Configuracao publica da instalacao (sem segredo): dominios, Gitea, Authentik.
   app.get('/api/platform/config', (_req, res) => {
@@ -243,33 +231,13 @@ export function createApp({
     res.json({ app: appRecord });
   });
 
-  app.patch('/api/apps/:slug/metadata', auth.requireAdmin, async (req, res) => {
-    const result = updateInventoryAppMetadataFn(req.params.slug, req.body);
-    if (!result.ok) {
-      res.status(result.error === 'app_not_found' ? 404 : 400).json({
-        error: result.error,
-        details: result.errors,
-      });
-      return;
-    }
-
-    await invalidateStatusCaches();
-    res.json({ app: result.app });
-  });
-
-  app.patch('/api/runtime/docker/:name/metadata', auth.requireAdmin, async (req, res) => {
-    const result = updateInventoryDockerMetadataFn(req.params.name, req.body);
-    if (!result.ok) {
-      res.status(400).json({
-        error: result.error,
-        details: result.errors,
-      });
-      return;
-    }
-
-    await invalidateStatusCaches();
-    res.json({ container: result.container });
-  });
+  // So leitura: descricao, dono e categoria vivem no company-app.yaml do app e mudam por
+  // push; o inventario e do ihc-app. As rotas de edicao antigas respondem isso.
+  const readOnly = (_req, res) => {
+    res.status(405).json({ error: 'read_only', detail: 'edit company-app.yaml in the app repository and push to main' });
+  };
+  app.patch('/api/apps/:slug/metadata', readOnly);
+  app.patch('/api/runtime/docker/:name/metadata', readOnly);
 
   // Historico de deploys do app, lido do Gitea Actions (runs de push em main).
   app.get('/api/apps/:slug/deploys', async (req, res) => {
@@ -356,20 +324,13 @@ export function createApp({
     res.json(await appsRuntimeResource.get({}, { refresh: refreshRequested(req) }));
   });
 
-  app.get('/api/runtime/npm', async (req, res) => {
-    res.json(await runtimeNpmResource.get({}, { refresh: refreshRequested(req) }));
-  });
-
-  app.get('/api/apps-npm', async (req, res) => {
-    res.json(await appsNpmResource.get({}, { refresh: refreshRequested(req) }));
-  });
-
   app.get('/api/runtime/health', async (req, res) => {
     res.json(await runtimeHealthResource.get({}, { refresh: refreshRequested(req) }));
   });
 
-  // Saude dos servicos centrais da maquina (Gitea, Authentik, NPM, Postgres, Redis,
-  // MinIO, cloudflared, runner, backup). Mesmo JSON para a pagina e para LLMs.
+  // Saude dos servicos centrais do cloud (proxy, Authentik, Gitea, runners, Postgres,
+  // Redis, backup e, por perfil, Garage, ops, agente e tunnel). Mesmo JSON para a pagina
+  // e para agentes (com sessao; o token de servico para agentes vem depois).
   app.get('/api/platform/status', async (req, res) => {
     res.json(await platformStatusResource.get({}, { refresh: refreshRequested(req) }));
   });
@@ -498,13 +459,11 @@ export function createApp({
   async function buildAppsStatus({ category = 'all', ownerEmail = null } = {}) {
     const inventory = readInventory();
     const dockerState = listDockerContainersFn();
-    const npmState = await listNpmProxyHostsFn();
-    const inferredApps = inferAppsFromDockerMetadata({ inventory, dockerState, npmState });
+    const inferredApps = inferAppsFromDockerMetadata({ inventory, dockerState });
     const inventoryApps = appsForCategory([...(inventory.apps ?? []), ...inferredApps], category, ownerEmail);
     const withDocker = enrichAppsWithDocker(inventoryApps, dockerState);
-    const withNpm = enrichAppsWithNpm(withDocker, npmState);
-    const healthState = await listHttpHealthFn(withNpm);
-    const apps = enrichAppsWithHealth(withNpm, healthState);
+    const healthState = await listHttpHealthFn(withDocker);
+    const apps = enrichAppsWithHealth(withDocker, healthState);
     const statusEvents = recordStatusEvents
       ? await recordStatusChangesFn(apps)
       : { available: true, recorded: 0, events: [] };
@@ -512,10 +471,11 @@ export function createApp({
     return {
       source: inventory.source,
       updated_at: inventory.updated_at,
+      schema_version: inventory.schema_version ?? null,
+      inventory_error: inventory.error ?? null,
       count: apps.length,
       category,
       runtime_available: dockerState.available,
-      npm_available: npmState.available,
       health_available: healthState.available,
       status_events_available: statusEvents.available,
       status_events_recorded: statusEvents.recorded,
@@ -598,10 +558,18 @@ export function createApp({
   return app;
 }
 
-export function startServer({
-  port = process.env.PORT || 8006,
+// No boot: as migracoes do banco do portal (quando ha DATABASE_URL), depois o listen.
+// Migracao que falha nao impede o portal de subir: o /health diz qual, e o instalador
+// para no stage portal com a mensagem.
+export async function startServer({
+  port = process.env.PORT || 8080,
   host = resolveListenHost(),
+  migrate = process.env.DATABASE_URL && process.env.MIGRATE_ON_BOOT !== 'false',
 } = {}) {
+  if (migrate) {
+    bootState.migrations = await runMigrations({ log: (line) => console.log(line) });
+    if (!bootState.migrations.ok) console.error(`migrations failed: ${bootState.migrations.error}`);
+  }
   const app = createApp();
   const server = app.listen(Number(port), host, () => {
     console.log(`inhousecloud-portal listening on ${host}:${port}`);
@@ -611,5 +579,5 @@ export function startServer({
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer();
+  await startServer();
 }

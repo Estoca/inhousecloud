@@ -1,29 +1,35 @@
+# The portal's own manifest (docs/app-contract.md of the cloud). The portal is a core
+# service of the cloud, not an app of ihc-app: install.sh builds it from portal/ and starts
+# it with the core, before Gitea exists, so nothing deploys it by push (deploy.enabled is
+# false). The catalog reads this file to show the portal in its own list
+# (src/inventory.js, portalCoreApp).
 schema_version: 1
 
 app:
-  slug: inhousecloud-portal
-  name: InHouseCloud portal
+  slug: portal
+  name: Portal
   owner_email: admin@example.com
-  description: Portal do InHouseCloud: catalogo, saude, deploys e status dos apps e da plataforma.
+  description: "Catalog, app health and SSO, deploys and platform status of the cloud. Read only."
 
 runtime:
-  type: docker-compose
-  compose_file: docker-compose.prod.yml
-  service: app
+  type: core-service
+  service: portal
+  port: 8080
   healthcheck:
     type: http
-    path: /api/health
+    path: /health
     expected_status: 200
 
 deploy:
-  enabled: true
+  enabled: false
+  reason: "Core service of the cloud: install.sh builds and starts it with the core, not a push."
   domain: portal.cloud.localhost
-  port: 8016
-  env_file: .env
-  env_example: .env.example
+  port: auto
 
 auth:
   required: true
-  provider: authentik
-  allowed_domains:
-    - example.com
+  provider: forward-auth
+
+database:
+  required: true
+  engine: postgres

@@ -36,7 +36,12 @@ test('GET /api/health returns ok', async () => {
       ok: true,
       service: 'inhousecloud-portal',
       commit_hash: process.env.COMMIT_SHA || process.env.GIT_SHA || 'unknown',
+      migrations: { ok: null, skipped: true },
     });
+    // /health at the root is the same answer (the proxy keeps location = /health public)
+    const root = await fetch(`${baseUrl}/health`);
+    assert.equal(root.status, 200);
+    assert.equal((await root.json()).ok, true);
   } finally {
     server.close();
   }
@@ -228,123 +233,6 @@ test('GET /api/apps/:slug returns one app', async () => {
   }
 });
 
-test('PATCH /api/apps/:slug/metadata updates app metadata for portal admins', async () => {
-  let received = null;
-  const { server, baseUrl } = await listen(createApp({
-    auth: createAuth({
-        superAdminEmails: 'admin@example.com',
-      isPortalAdminFn: async () => ({
-        available: true,
-        allowed: true,
-        admin: {
-          email: 'admin@example.com',
-          role: 'admin',
-          active: true,
-        },
-      }),
-    }),
-    updateInventoryAppMetadataFn: (slug, input) => {
-      received = { slug, input };
-      return {
-        ok: true,
-        app: {
-          slug,
-          category: input.category,
-          owner_email: input.owner_email,
-          target: input.target,
-          docker_stack: input.docker_stack,
-        },
-      };
-    },
-  }));
-  try {
-    const response = await fetch(`${baseUrl}/api/apps/pedidos/metadata`, {
-      method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        'x-authentik-email': 'admin@example.com',
-      },
-      body: JSON.stringify({
-        category: 'infra',
-        owner_email: 'platform@example.com',
-        target: 'pedidos-app-1',
-        docker_stack: 'pedidos',
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.deepEqual(received, {
-      slug: 'pedidos',
-      input: {
-        category: 'infra',
-        owner_email: 'platform@example.com',
-        target: 'pedidos-app-1',
-        docker_stack: 'pedidos',
-      },
-    });
-    assert.equal(body.app.category, 'infra');
-    assert.equal(body.app.docker_stack, 'pedidos');
-  } finally {
-    server.close();
-  }
-});
-
-test('PATCH /api/runtime/docker/:name/metadata updates docker metadata for portal admins', async () => {
-  let received = null;
-  const { server, baseUrl } = await listen(createApp({
-    auth: createAuth({
-        superAdminEmails: 'admin@example.com',
-      isPortalAdminFn: async () => ({
-        available: true,
-        allowed: true,
-        admin: {
-          email: 'admin@example.com',
-          role: 'admin',
-          active: true,
-        },
-      }),
-    }),
-    updateInventoryDockerMetadataFn: (name, input) => {
-      received = { name, input };
-      return {
-        ok: true,
-        container: {
-          name,
-          category: input.category,
-          owner_email: input.owner_email,
-        },
-      };
-    },
-  }));
-  try {
-    const response = await fetch(`${baseUrl}/api/runtime/docker/nginx-app-1/metadata`, {
-      method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        'x-authentik-email': 'admin@example.com',
-      },
-      body: JSON.stringify({
-        category: 'infra',
-        owner_email: 'infra@example.com',
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json();
-    assert.deepEqual(received, {
-      name: 'nginx-app-1',
-      input: {
-        category: 'infra',
-        owner_email: 'infra@example.com',
-      },
-    });
-    assert.equal(body.container.category, 'infra');
-  } finally {
-    server.close();
-  }
-});
-
 test('GET /api/apps/:slug returns 404 for unknown app', async () => {
   const { server, baseUrl } = await listen(createApp({ auth: adminAuth() }));
   try {
@@ -482,7 +370,8 @@ test('GET /api/platform/config exposes the installation names without secrets', 
     assert.equal(body.base_domain, 'cloud.localhost');
     assert.equal('agent_name' in body, false);
     assert.equal('gitops_repo' in body, false);
-    assert.equal(body.port_range.label, '8100-8999');
+    assert.equal(body.read_only, true);
+    assert.equal('deploy_root' in body, false);
     assert.equal(JSON.stringify(body).includes('TOKEN'), false);
   } finally {
     server.close();
@@ -664,17 +553,6 @@ test('GET /api/apps-status includes health and overall status', async () => {
         ports: '0.0.0.0:8200->8000/tcp',
       }],
     }),
-    listNpmProxyHostsFn: async () => ({
-      available: true,
-      proxy_hosts: [{
-        id: 1,
-        domain_names: ['pedidos.cloud.localhost'],
-        enabled: true,
-        forward_scheme: 'http',
-        forward_host: '127.0.0.1',
-        forward_port: 8200,
-      }],
-    }),
     listHttpHealthFn: async (apps) => ({
       available: true,
       checked_at: '2026-06-08T00:00:00.000Z',
@@ -687,6 +565,8 @@ test('GET /api/apps-status includes health and overall status', async () => {
         status: app.slug === 'pedidos' ? 200 : 503,
         latency_ms: 1,
         error: app.slug === 'pedidos' ? null : 'unavailable',
+        sso_checked: true,
+        route_ok: true,
       })),
     }),
     recordStatusChangesFn: async (apps) => ({
@@ -713,41 +593,30 @@ test('GET /api/apps-status includes health and overall status', async () => {
 });
 
 test('GET /api/apps-status caches the consolidated dashboard payload', async () => {
-  let npmCalls = 0;
+  let healthCalls = 0;
   const { server, baseUrl } = await listen(createApp({
     auth: adminAuth(),
     listDockerContainersFn: () => ({
       available: true,
       containers: [],
     }),
-    listNpmProxyHostsFn: async () => {
-      npmCalls += 1;
+    listHttpHealthFn: async (apps) => {
+      healthCalls += 1;
       return {
         available: true,
-        proxy_hosts: [{
-          id: npmCalls,
-          domain_names: ['pedidos.cloud.localhost'],
-          enabled: true,
-          forward_scheme: 'http',
-          forward_host: '127.0.0.1',
-          forward_port: 8200,
-        }],
+        checked_at: '2026-06-08T00:00:00.000Z',
+        timeout_ms: 100,
+        checks: apps.map((app) => ({
+          slug: app.slug,
+          checked: true,
+          ok: true,
+          url: `https://${app.domain.split(',')[0]}`,
+          status: 200,
+          latency_ms: healthCalls,
+          error: null,
+        })),
       };
     },
-    listHttpHealthFn: async (apps) => ({
-      available: true,
-      checked_at: '2026-06-08T00:00:00.000Z',
-      timeout_ms: 100,
-      checks: apps.map((app) => ({
-        slug: app.slug,
-        checked: true,
-        ok: true,
-        url: `https://${app.domain.split(',')[0]}`,
-        status: 200,
-        latency_ms: 1,
-        error: null,
-      })),
-    }),
   }));
   try {
     const first = await fetch(`${baseUrl}/api/apps-status`, asAdmin);
@@ -761,14 +630,14 @@ test('GET /api/apps-status caches the consolidated dashboard payload', async () 
     const secondBody = await second.json();
     const refreshedBody = await refreshed.json();
 
-    assert.equal(npmCalls, 2);
+    assert.equal(healthCalls, 2);
     assert.equal(firstBody.cached, false);
     assert.equal(secondBody.cached, true);
     assert.equal(refreshedBody.cached, false);
     assert.equal(firstBody.cache_expires_at, secondBody.cache_expires_at);
-    assert.equal(firstBody.apps.find((app) => app.slug === 'pedidos').proxy.host.id, 1);
-    assert.equal(secondBody.apps.find((app) => app.slug === 'pedidos').proxy.host.id, 1);
-    assert.equal(refreshedBody.apps.find((app) => app.slug === 'pedidos').proxy.host.id, 2);
+    assert.equal(firstBody.apps.find((app) => app.slug === 'pedidos').health.latency_ms, 1);
+    assert.equal(secondBody.apps.find((app) => app.slug === 'pedidos').health.latency_ms, 1);
+    assert.equal(refreshedBody.apps.find((app) => app.slug === 'pedidos').health.latency_ms, 2);
   } finally {
     server.close();
   }
@@ -779,17 +648,6 @@ test('GET /api/apps-status caches the consolidated dashboard payload', async () 
 function statusFixtures() {
   return {
     listDockerContainersFn: () => ({ available: true, containers: [] }),
-    listNpmProxyHostsFn: async () => ({
-      available: true,
-      proxy_hosts: [{
-        id: 1,
-        domain_names: ['pedidos.cloud.localhost'],
-        enabled: true,
-        forward_scheme: 'http',
-        forward_host: '127.0.0.1',
-        forward_port: 8200,
-      }],
-    }),
     listHttpHealthFn: async (apps) => ({
       available: true,
       checked_at: '2026-06-08T00:00:00.000Z',
@@ -866,10 +724,10 @@ test('GET /api/apps-status serves stale data at once and refreshes once in the b
   const { server, baseUrl } = await listen(createApp({
     auth: adminAuth(),
     ...fixtures,
-    listNpmProxyHostsFn: async () => {
+    listHttpHealthFn: async (apps) => {
       builds += 1;
       if (builds > 1) await gate;
-      return fixtures.listNpmProxyHostsFn();
+      return fixtures.listHttpHealthFn(apps);
     },
     statusCacheConfig: { redisUrl: null, appsTtlSeconds: 1, platformTtlSeconds: 1, redisTimeoutMs: 100 },
   }));
@@ -900,14 +758,12 @@ test('GET /api/apps-status serves stale data at once and refreshes once in the b
 
 test('runtime and platform views are cached with age metadata and admin refresh', async () => {
   let dockerCalls = 0;
-  let npmCalls = 0;
   let healthCalls = 0;
   let platformCollects = 0;
   const fixtures = statusFixtures();
   const { server, baseUrl } = await listen(createApp({
     auth: adminAuth(),
     listDockerContainersFn: () => { dockerCalls += 1; return fixtures.listDockerContainersFn(); },
-    listNpmProxyHostsFn: async () => { npmCalls += 1; return fixtures.listNpmProxyHostsFn(); },
     listHttpHealthFn: async (apps) => { healthCalls += 1; return fixtures.listHttpHealthFn(apps); },
     platformStatus: {
       async collect() {
@@ -923,7 +779,7 @@ test('runtime and platform views are cached with age metadata and admin refresh'
     },
   }));
   try {
-    for (const path of ['/api/runtime/docker', '/api/apps-runtime', '/api/runtime/npm', '/api/apps-npm', '/api/runtime/health', '/api/platform/status']) {
+    for (const path of ['/api/runtime/docker', '/api/apps-runtime', '/api/runtime/health', '/api/platform/status']) {
       const first = await (await fetch(`${baseUrl}${path}`, asAdmin)).json();
       const second = await (await fetch(`${baseUrl}${path}`, asAdmin)).json();
       assert.equal(first.cached, false, path);
@@ -933,7 +789,6 @@ test('runtime and platform views are cached with age metadata and admin refresh'
       assert.equal(typeof second.age_seconds, 'number', path);
     }
     assert.equal(dockerCalls, 2, 'runtime/docker e apps-runtime, uma leitura cada');
-    assert.equal(npmCalls, 2, 'runtime/npm e apps-npm, uma leitura cada');
     assert.equal(healthCalls, 1);
     assert.equal(platformCollects, 1);
 
@@ -983,7 +838,7 @@ test('status views survive a broken Redis and share entries through a working on
   try {
     const fromA = await (await fetch(`${appA.baseUrl}/api/apps-status`, asAdmin)).json();
     assert.equal(fromA.cached, false);
-    assert.ok([...store.keys()].some((key) => key === 'deploy-platform:apps-status:all:*'));
+    assert.ok([...store.keys()].some((key) => key === 'ihc-portal:apps-status:all:*'));
     const fromB = await (await fetch(`${appB.baseUrl}/api/apps-status`, asAdmin)).json();
     assert.equal(fromB.cached, true, 'outro processo le o mesmo Redis');
     assert.equal(fromB.generated_at, fromA.generated_at);

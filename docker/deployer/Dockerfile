@@ -5,7 +5,8 @@
 # builds it as <project>-deployer:local on every foundation run. Jobs get the Docker
 # socket, the ihc network and the install directory from the runner config.
 FROM alpine:3.22
-RUN apk add --no-cache bash python3 curl git ca-certificates coreutils tar \
+# py3-yaml: company-app.yaml is read with PyYAML (agent_interface.mcp has lists of maps).
+RUN apk add --no-cache bash python3 py3-yaml curl git ca-certificates coreutils tar \
       docker-cli docker-cli-compose docker-cli-buildx
 COPY ihc /opt/ihc
 RUN chmod 755 /opt/ihc/scripts/*.sh \

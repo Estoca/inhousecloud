@@ -104,7 +104,7 @@ Completed stages are skipped; every action probes before it creates. Never delet
 python3 scripts/lib/envfile.py keys "$DIR/.env"    # names of the credentials, never the values
 ```
 
-Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the day-zero steps that `handoff` prints, which only they can do: open the portal (a placeholder that proves the SSO; to operate, Gitea + `ihc-operator brief`), read the first password on their own screen, sign in as `akadmin` and enroll MFA and change the password, copy `BACKUP_ENCRYPTION_KEY` off the box, the first app, the operator brief, and how to stop or remove a test install ([`cleanup.md`](cleanup.md)). Adding people: [`first-user.md`](first-user.md). DNS or tunnel for non-local ingress.
+Tell the human: the URLs, where `.env` lives and the names of the credentials in it, and the day-zero steps that `handoff` prints, which only they can do: open the portal (the catalog with each app's health, SSO and deploys, and the platform status; read only; to operate, Gitea + `ihc-operator brief`), read the first password on their own screen, sign in as `akadmin` and enroll MFA and change the password, copy `BACKUP_ENCRYPTION_KEY` off the box, the first app, the operator brief, and how to stop or remove a test install ([`cleanup.md`](cleanup.md)). Adding people: [`first-user.md`](first-user.md). DNS or tunnel for non-local ingress.
 
 **Passwords stay off the chat.** Do not read them, and do not paste them. Give the human the command that prints one on their own screen, for example `ssh <box> 'python3 ~/inhousecloud/scripts/lib/envfile.py get /opt/inhousecloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD'`, and say it is theirs to run.
 
@@ -186,7 +186,7 @@ Success: `<slug> is up at http://<slug>.<BASE_DOMAIN>`. It polls the healthcheck
 
 ### 3.1 Platform status
 
-The real portal will serve `GET http(s)://portal.<BASE_DOMAIN>/api/platform/status`, one entry per core service and the newest backup. The portal is still a placeholder without that endpoint; use:
+The portal serves `GET http(s)://portal.<BASE_DOMAIN>/api/platform/status`, one entry per core service and the newest backup, behind the sign-in: a person's browser session opens it, an agent without a browser has no token for it yet. On the box, use:
 
 ```bash
 scripts/ihc-doctor.sh --install-dir "$DIR" --json   # every check (containers, routes, sign-in, runners, data, backup, each app): ok, warn or fail, and what to do

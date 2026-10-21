@@ -258,33 +258,13 @@ env_example_defaults() {
   done
 }
 
+# The app's record in inventory.json (scripts/lib/inventory.py has the contract the
+# portal reads). Values travel in the environment, never on a command line.
 inventory_record() {
-  $PY - "$INVENTORY" "$SLUG" "$M_NAME" "$M_OWNER" "$APP_URL" "${GITHUB_REPOSITORY:-}" "${GITHUB_SHA:-}" "$APP_ENV" "$APP_DIR/compose.ihc.yml" "$RESOURCES" "$M_SERVICE" "$M_PORT" "$M_HEALTH_PATH" "$M_HEALTH_STATUS" "$M_AUTH" <<'PY'
-import datetime, json, os, sys, tempfile
-path, slug, name, owner, url, repo, sha, envf, overlay, res, svc, port, hpath, hstatus, auth = sys.argv[1:16]
-now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-try:
-    inv = json.load(open(path))
-except (OSError, ValueError):
-    inv = {}
-apps = inv.setdefault("apps", {})
-cur = apps.get(slug, {})
-cur.update({"slug": slug, "name": name, "owner_email": owner, "url": url, "env_file": envf,
-            "compose_overlay": overlay, "resources": sorted(set(res.split())),
-            "provisioned_at": now,
-            # What "up" means for this app, from its company-app.yaml: ihc-doctor reads it.
-            "runtime": {"service": svc, "port": int(port), "health_path": hpath,
-                        "health_status": int(hstatus), "auth_required": auth == "true"}})
-cur.setdefault("created_at", now)
-if repo: cur["repository"] = repo
-if sha: cur["last_commit"] = sha
-apps[slug] = cur
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".inventory.")
-with os.fdopen(fd, "w") as f:
-    json.dump(inv, f, indent=2); f.write("\n")
-os.chmod(tmp, 0o644)
-os.replace(tmp, path)
-PY
+  SLUG="$SLUG" APP_URL="$APP_URL" APP_ENV="$APP_ENV" APP_OVERLAY="$APP_DIR/compose.ihc.yml" RESOURCES="$RESOURCES" \
+  M_NAME="$M_NAME" M_OWNER="$M_OWNER" M_SERVICE="$M_SERVICE" M_PORT="$M_PORT" M_HEALTH_PATH="$M_HEALTH_PATH" \
+  M_HEALTH_STATUS="$M_HEALTH_STATUS" M_AUTH="$M_AUTH" M_DESCRIPTION="$M_DESCRIPTION" M_MCP="$M_MCP" \
+    $PY "$IHC_LIB/inventory.py" record "$INVENTORY"
 }
 
 cmd_provision() {
@@ -529,14 +509,13 @@ print("%s\t%s\t%s"%(a.get("kind","app"),a.get("repository","")," ".join(a.get("r
     [ -e "$d" ] && left="$left dir:$d"
   done
   [ -n "$left" ] && die "$SLUG not completely removed; left:$left. Its inventory record stays (kind system-test, hidden from ihc-app list)"
-  $PY - "$INVENTORY" "$SLUG" <<'PY'
-import json, os, sys, tempfile
-path, slug = sys.argv[1:3]
-inv = json.load(open(path)); (inv.get("apps") or {}).pop(slug, None)
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".inventory.")
-with os.fdopen(fd, "w") as f:
-    json.dump(inv, f, indent=2); f.write("\n")
-os.chmod(tmp, 0o644); os.replace(tmp, path)
+  $PY - "$IHC_LIB" "$INVENTORY" "$SLUG" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import inventory
+path, slug = sys.argv[2:4]
+inv = inventory.load(path); (inv.get("apps") or {}).pop(slug, None)
+inventory.save(path, inv)
 PY
   ok "$SLUG removed from inventory.json"
   [ -d "$INSTALL_DIR/agent/reference" ] && { "$IHC_ROOT/scripts/ihc-operator.sh" brief --install-dir "$INSTALL_DIR" --out "$INSTALL_DIR/agent/reference" >/dev/null 2>&1 || true; }

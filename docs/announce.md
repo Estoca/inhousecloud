@@ -9,7 +9,7 @@ Three texts in Portuguese, for review before anyone posts them. Every number com
 > Em 10 minutos dá para ver funcionando: sobe uma VM com o Lima, um comando instala (uns 5 min) e `ihc-app new <nome> --push` põe o primeiro app no ar em uns 30 s. Passo a passo: docs/try-it.md.
 > Ou pede ao Claude Code "instala a company cloud nesse servidor": num teste com uma VM limpa, ele instalou sozinho em uns 8 min, fez 6 perguntas em linguagem simples e não mostrou nenhuma senha.
 > Depois, "cria um app de registro de despesas e coloca no ar" levou uns 2 min, com banco próprio e login.
-> O que ainda não está pronto: no Mac roda só dentro de uma VM; acesso pela internet (ingress `public`) está no instalador, mas não foi testado de ponta a ponta; pela rede da empresa no Tailscale (ingress `private`, com CA própria e split DNS) já foi testado de ponta a ponta, com login de outro dispositivo; o portal ainda é um placeholder.
+> O que ainda não está pronto: no Mac roda só dentro de uma VM; acesso pela internet (ingress `public`) está no instalador, mas não foi testado de ponta a ponta; pela rede da empresa no Tailscale (ingress `private`, com CA própria e split DNS) já foi testado de ponta a ponta, com login de outro dispositivo; o portal já mostra o catálogo, a saúde e o SSO de cada app, os deploys e o status da plataforma, só leitura, e ainda não lê pessoas e grupos do Authentik.
 > Os testes, com tempos e o que quebrou: docs/first-run.md.
 > Se testar, me conta onde travou.
 

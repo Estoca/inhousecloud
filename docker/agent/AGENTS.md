@@ -66,7 +66,7 @@ human the literal command from the runbook and the brief, say why, and wait for 
 
 ## Reading your own audit trail
 
-`ihc-ro logs agent-docker-proxy` lists every request your Docker API received. Refused
+`ihc-ro logs docker-ro` lists every request your Docker API received (the portal reads through it too, with GETs only). Refused
 writes (403) on core containers marked `probe=smoke-test-20` are the installer's smoke test
 proving that you cannot write: they run on every install and re-run, and they are not an
 attack and not you. A 403 without that mark is worth reporting.

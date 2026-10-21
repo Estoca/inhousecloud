@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The agent's read-only Docker API (docker/agent/docker-ro-proxy.py), checked without Docker:
+# The read-only Docker API, docker-ro (docker/agent/docker-ro-proxy.py), checked without Docker:
 #
 #   scripts/tests/agent-proxy.sh
 #
@@ -8,7 +8,7 @@
 # in front of it, read only and then with AGENT_ALLOW_WRITE=true. Checks that GETs on the
 # allowlist pass with Env reduced to names, that everything else is refused before it
 # reaches the daemon, and that with writes on only a restart of an app container and a
-# build cache prune get through. Needs python3 only. Exit 1 on any surprise.
+# build cache prune get through, and only from a host named in WRITE_CLIENTS. Needs python3 only. Exit 1 on any surprise.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 exec python3 -I - "$ROOT/docker/agent/docker-ro-proxy.py" <<'PY'
@@ -45,8 +45,8 @@ def check(ok, what):
     print(("[ok] " if ok else "[xx] ") + what)
     if not ok: fails += 1
 
-def start(port, write):
-    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), IHC_PROJECT="ihc", AGENT_ALLOW_WRITE=write)
+def start(port, write, clients="localhost"):
+    env = dict(os.environ, DOCKER_SOCKET_PATH=sock, PORT=str(port), IHC_PROJECT="ihc", AGENT_ALLOW_WRITE=write, WRITE_CLIENTS=clients)
     p = subprocess.Popen([sys.executable, "-I", proxy_py], env=env, stdout=subprocess.DEVNULL)
     for _ in range(50):
         try:
@@ -89,6 +89,15 @@ try:
           "allow_write: only the allowlisted writes (and their inspect) reached the daemon")
 finally:
     rw.terminate()
+
+# Writes on, but the caller is not a write client (the portal, on the same proxy).
+other = start(23753, "true", "write-client.invalid")
+try:
+    seen.clear()
+    check(call(23753, "POST", "/containers/app1/restart")[0] == 403 and not seen, "allow_write: a caller outside WRITE_CLIENTS is refused before the daemon")
+    check(call(23753, "GET", "/containers/json")[0] == 200, "allow_write: a caller outside WRITE_CLIENTS still reads")
+finally:
+    other.terminate()
 srv.shutdown()
 print("agent proxy: %s" % ("all checks passed" if not fails else "%d failed" % fails))
 sys.exit(1 if fails else 0)

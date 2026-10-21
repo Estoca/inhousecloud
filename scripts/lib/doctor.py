@@ -157,7 +157,7 @@ class Box:
     def services(self):
         """The cloud's own services for the profiles in .env (install.sh core_services)."""
         s = ["proxy", "authentik-postgres", "authentik-server", "authentik-worker", "postgres", "redis",
-             "gitea", "portal", "gitea-runner", "gitea-deployer"]
+             "gitea", "docker-ro", "portal", "gitea-runner", "gitea-deployer"]
         if self.has("storage"): s += ["garage"]
         if self.has("ops"):
             s += ["portainer", "glances", "filebrowser"]
@@ -165,7 +165,7 @@ class Box:
         if self.has("backup"): s += ["backup"]
         if self.has("cloudflared"): s += ["cloudflared"]
         if self.has("tailscale"): s += ["tailscale", "tailnet-dns"]
-        if self.has("agent"): s += ["agent-docker-proxy", "agent"]
+        if self.has("agent"): s += ["agent"]
         return s
 
     def apps(self):
@@ -789,7 +789,7 @@ def c_app(box, slug, a, hosts):
 def c_agent(box):
     c = Check("agent")
     bad = []
-    for s in ("agent-docker-proxy", "agent"):
+    for s in ("docker-ro", "agent"):
         r = box.container(s)
         c.see("%s: %s" % (s, "%s, health %s" % (r["status"], r["health"]) if r else "no container"))
         if not r or r["status"] != "running" or r["health"] == "unhealthy":
@@ -802,7 +802,7 @@ def c_agent(box):
     c.see("from the agent: ihc-ro's Docker API /_ping and /containers/json: %s" % (out.strip() or err.strip()[:120]))
     if out.strip() != "200 200":
         return c.fail("the agent cannot read Docker through its read-only proxy (ihc-ro): %s" % (out.strip() or "no answer"),
-                      "read the proxy's log: %s logs --tail 50 agent-docker-proxy" % box.dc_shown, "restart-service")
+                      "read the proxy's log: %s logs --tail 50 docker-ro" % box.dc_shown, "restart-service")
     return c.ok("agent running; its read-only Docker API (ihc-ro) answers")
 
 

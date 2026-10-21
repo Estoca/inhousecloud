@@ -7,14 +7,14 @@
       "slug": "portal",
       "domain": "portal.cloud.localhost",
       "category": "internal_app",
-      "port": 8006,
+      "port": 8080,
       "target": "inhousecloud-portal-app",
       "status": [
         "OK"
       ],
       "owner_email": "admin@example.com",
       "repo_url": "http://git.cloud.localhost/company/inhousecloud-portal",
-      "healthcheck_path": "/api/health"
+      "healthcheck_path": "/health"
     },
     {
       "slug": "pedidos",

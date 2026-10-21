@@ -167,11 +167,12 @@ sudo install -d -o $(id -un) -g $(id -gn) /opt/inhousecloud
 Without the first command the installer stops in one second and prints that same command. The example config means: everything on this machine only (`local` ingress, names under `cloud.localhost`), admin `admin@example.com`, Gitea organization `company`, backup on the same disk, no optional profiles. The installer generates every password into `/opt/inhousecloud/.env` (mode 0600) and never prints one. Add `--plan` first to see what it would do; it creates nothing. The install ends with the URLs and seven day-zero steps (from the run of 2026-10-20; `~` is the VM user's home):
 
 ```text
-smoke tests: 17 passed, 0 failed, 4 skipped
+smoke tests: 18 passed, 0 failed, 4 skipped
 ...
 Day zero, in this order:
 1. Open the portal: http://portal.cloud.localhost
-   It is a placeholder: it proves the SSO. To operate, use Gitea and ihc-operator brief (step 6).
+   The catalog shows each app with its health, SSO and deploys; Platform shows the core services and the backup.
+   It only reads. To change something: Gitea (push to main deploys) and ihc-operator brief (step 6).
 2. Read the first password here, in your own terminal (never paste it into a chat):
      python3 ~/inhousecloud/scripts/lib/envfile.py get /opt/inhousecloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD
 3. Sign in at http://auth.cloud.localhost/if/user/ as akadmin. Settings > MFA Devices > Enroll: an authenticator app,
@@ -202,7 +203,7 @@ On the Mac, in Chrome, Edge or Firefox: <http://portal.cloud.localhost>. It send
 python3 ~/inhousecloud/scripts/lib/envfile.py get /opt/inhousecloud/.env AUTHENTIK_BOOTSTRAP_PASSWORD
 ```
 
-The portal is a placeholder today: it proves the SSO. To operate, use Gitea (<http://git.cloud.localhost>, "Sign in with authentik") and `ihc-operator brief` (step 6 of the day-zero list). Before anything else, do steps 3 and 4 of that list: MFA and a new password for `akadmin`, and the backup key off the machine.
+The portal (<http://portal.cloud.localhost>, as `akadmin`) is the catalog: every app with its health, whether the SSO protects it, its deploys, and the platform's services and backup. It only reads; to change something, use Gitea (<http://git.cloud.localhost>, "Sign in with authentik"; a push to `main` deploys) and `ihc-operator brief` (step 6 of the day-zero list). Before anything else, do steps 3 and 4 of that list: MFA and a new password for `akadmin`, and the backup key off the machine.
 
 - `*.cloud.localhost` names resolve to `127.0.0.1` on their own in Chrome, Edge, Firefox and `curl` (tested on macOS 26.7). If one does not resolve (Safari, some older systems), add `127.0.0.1 portal.cloud.localhost auth.cloud.localhost git.cloud.localhost` (and each app's name) to `/etc/hosts` on the Mac, or use another browser.
 - On a VPS or a VM with no port forwarding, keep `sudo ssh -N -L 80:127.0.0.1:80 <user>@<box>` open on your laptop first. It must be port 80: the sign-in redirect drops any other port.
@@ -266,5 +267,5 @@ Mac with Docker Desktop: [Mac 5](#mac-5-operate-check-stop-remove). Any other bo
 ## What this does not show yet
 
 - **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (Cloudflare tunnel or DNS) exists in the installer and is not tested end to end. `local`, used here, answers on the box (and on the Mac through Lima's forward).
-- **The portal.** A placeholder answers today; the read-only portal with inventory, deploy runs, health and backups is next ([`../README.md`](../README.md#roadmap)).
+- **The portal, beyond reading.** It shows the catalog, health, SSO, deploys and the platform status; people and groups from Authentik, a token for agents on its status API and the MCP gateway are next ([`../README.md`](../README.md#roadmap)).
 - **Mail.** Authentik and Gitea are installed with SMTP off: no password recovery and no invitations; an admin creates each person and sets the first password ([`first-user.md`](first-user.md)).

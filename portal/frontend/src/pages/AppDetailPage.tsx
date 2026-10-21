@@ -19,6 +19,7 @@ import {
   formatDateTime,
   formatPercent,
   statusVariant,
+  METADATA_EDITABLE,
 } from '../lib/format';
 import { useAppMetadata } from '../lib/useAppMetadata';
 import { MetricCard, RefreshButton } from '../components/portal';
@@ -220,7 +221,7 @@ export function AppDetailPage({
                 <XCircle className="h-4 w-4" />
               </Button>
             </div>
-          ) : canManage ? (
+          ) : canManage && METADATA_EDITABLE ? (
             <Button size="icon" variant="ghost" type="button" onClick={() => metadata.start(app)} title="Editar dados do app">
               <Pencil className="h-4 w-4" />
             </Button>

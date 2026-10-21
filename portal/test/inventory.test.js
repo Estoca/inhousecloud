@@ -1,147 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   enrichDockerContainersWithInventory,
   inferAppsFromDockerMetadata,
-  updateInventoryAppMetadata,
-  updateInventoryDockerMetadata,
-  upsertInventoryApp,
-  validateAppMetadata,
 } from '../src/inventory.js';
-
-test('validateAppMetadata accepts category and owner email', () => {
-  const result = validateAppMetadata({
-    category: 'internal_app',
-    owner_email: 'Dono@Example.com',
-    repo_url: 'https://github.com/example-org/app',
-    target: 'app-1',
-    docker_stack: 'app-stack',
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.metadata, {
-    category: 'internal_app',
-    owner_email: 'dono@example.com',
-    repo_url: 'https://github.com/example-org/app',
-    target: 'app-1',
-    docker_stack: 'app-stack',
-  });
-});
-
-test('validateAppMetadata rejects invalid category and owner email', () => {
-  const result = validateAppMetadata({
-    category: 'Infra App',
-    owner_email: 'sem-email',
-    repo_url: 'https://example.com/app',
-    target: 'bad name',
-  });
-
-  assert.equal(result.ok, false);
-  assert.deepEqual(result.errors.map((error) => error.path), ['category', 'owner_email', 'repo_url', 'target']);
-});
-
-test('updateInventoryAppMetadata persists app category and owner', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'ihc-inventory-'));
-  const inventoryPath = path.join(dir, 'apps.json');
-  writeFileSync(inventoryPath, JSON.stringify({
-    source: 'test',
-    updated_at: '2026-06-10',
-    apps: [{
-      slug: 'pedidos',
-      domain: 'pedidos.cloud.localhost',
-      category: 'internal_app',
-    }],
-  }, null, 2));
-
-  const result = updateInventoryAppMetadata('pedidos', {
-    category: 'infra',
-    owner_email: 'platform@example.com',
-    repo_url: 'https://git.cloud.localhost/company/pedidos',
-    target: 'pedidos-app-1',
-    docker_stack: 'pedidos',
-  }, { inventoryPath });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.app.category, 'infra');
-  assert.equal(result.app.owner_email, 'platform@example.com');
-  assert.equal(result.app.repo_url, 'https://git.cloud.localhost/company/pedidos');
-  assert.equal(result.app.target, 'pedidos-app-1');
-  assert.equal(result.app.docker_stack, 'pedidos');
-
-  const persisted = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  assert.equal(persisted.apps[0].category, 'infra');
-  assert.equal(persisted.apps[0].owner_email, 'platform@example.com');
-  assert.equal(persisted.apps[0].repo_url, 'https://git.cloud.localhost/company/pedidos');
-  assert.equal(persisted.apps[0].target, 'pedidos-app-1');
-  assert.equal(persisted.apps[0].docker_stack, 'pedidos');
-});
-
-test('updateInventoryDockerMetadata persists container category and owner', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'ihc-inventory-'));
-  const inventoryPath = path.join(dir, 'apps.json');
-  writeFileSync(inventoryPath, JSON.stringify({
-    source: 'test',
-    updated_at: '2026-06-10',
-    apps: [],
-  }, null, 2));
-
-  const result = updateInventoryDockerMetadata('nginx-app-1', {
-    category: 'infra',
-    owner_email: 'infra@example.com',
-  }, { inventoryPath });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.container.category, 'infra');
-
-  const persisted = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  assert.equal(persisted.docker_containers[0].name, 'nginx-app-1');
-  assert.equal(persisted.docker_containers[0].owner_email, 'infra@example.com');
-});
-
-test('upsertInventoryApp creates and updates app entries', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'ihc-inventory-'));
-  const inventoryPath = path.join(dir, 'apps.json');
-  writeFileSync(inventoryPath, JSON.stringify({
-    source: 'test',
-    updated_at: '2026-06-10',
-    apps: [],
-  }, null, 2));
-
-  const created = upsertInventoryApp('novo-app', {
-    domain: 'novo-app.cloud.localhost',
-    category: 'internal_app',
-    owner_email: 'dono@example.com',
-    repo_url: 'https://git.cloud.localhost/company/novo-app',
-    target: 'novo-app-app-1',
-    docker_stack: 'novo-app',
-    port: 8123,
-    status: ['OK', 'REDIRECT'],
-  }, { inventoryPath });
-
-  assert.equal(created.ok, true);
-  assert.equal(created.app.slug, 'novo-app');
-  assert.equal(created.app.port, 8123);
-
-  const updated = upsertInventoryApp('novo-app', {
-    domain: 'novo.cloud.localhost',
-    category: 'internal_app',
-    owner_email: 'dono@example.com',
-    repo_url: 'https://git.cloud.localhost/company/novo-app',
-    target: 'novo-app-app-1',
-    docker_stack: 'novo-app',
-    port: 8124,
-    status: ['OK'],
-  }, { inventoryPath });
-
-  assert.equal(updated.ok, true);
-  const persisted = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  assert.equal(persisted.apps.length, 1);
-  assert.equal(persisted.apps[0].domain, 'novo.cloud.localhost');
-  assert.equal(persisted.apps[0].port, 8124);
-});
 
 test('enrichDockerContainersWithInventory links containers by docker stack', () => {
   const result = enrichDockerContainersWithInventory({
@@ -357,18 +222,22 @@ test('inferAppsFromDockerMetadata skips stack compatible with an existing app sl
   assert.equal(apps.length, 0);
 });
 
-test('readInventory falls back to the example inventory when INVENTORY_PATH is missing', async () => {
+test('readInventory uses the example only without INVENTORY_PATH; a missing real file is an empty catalog', async () => {
   const { getInventoryPath, readInventory, resolveInventoryPath } = await import('../src/inventory.js');
-  const missing = path.join(tmpdir(), `inventario-inexistente-${Date.now()}.json`);
-  const resolved = resolveInventoryPath({ INVENTORY_PATH: missing });
-  assert.equal(resolved.example, true);
-  assert.match(resolved.path, /inventory\/apps\.example\.json$/);
-  assert.equal(getInventoryPath({ INVENTORY_PATH: missing }), missing);
-
-  const inventory = readInventory({ INVENTORY_PATH: missing });
+  const example = resolveInventoryPath({});
+  assert.equal(example.example, true);
+  assert.match(example.path, /inventory\/apps\.example\.json$/);
+  const inventory = readInventory({});
   assert.equal(inventory.example, true);
   assert.match(inventory.source, /exemplo; defina INVENTORY_PATH/);
   assert.ok(inventory.apps.some((app) => app.slug === 'pedidos'));
+
+  const missing = path.join(tmpdir(), `inventario-inexistente-${Date.now()}.json`);
+  assert.equal(getInventoryPath({ INVENTORY_PATH: missing }), missing);
+  const empty = readInventory({ INVENTORY_PATH: missing, PORTAL_MANIFEST_PATH: '/nonexistent.yaml' });
+  assert.equal(empty.example, undefined);
+  assert.equal(empty.error, 'inventory_missing');
+  assert.deepEqual(empty.apps, []);
 
   const real = path.join(tmpdir(), `inventario-real-${Date.now()}.json`);
   writeFileSync(real, JSON.stringify({ source: 'teste', apps: [{ slug: 'so-aqui' }] }));

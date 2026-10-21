@@ -1,0 +1,34 @@
+# The portal (portal/): the private names check, its tests and its build, on every push
+# and pull request that touches it, plus the inventory contract on the cloud's side.
+# CI only: the portal is deployed by the installer (install.sh, stage portal).
+name: portal
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+      - name: private names
+        run: scripts/check-private-names.sh
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: inventory contract (cloud side)
+        working-directory: .
+        run: scripts/tests/inventory-contract.sh

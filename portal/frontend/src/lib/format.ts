@@ -3,6 +3,10 @@ import type { AppStatus } from './api';
 // Formatacao e rotulos compartilhados pelas paginas do portal.
 
 export type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning';
+// O portal do InHouseCloud so le: descricao, dono e categoria vivem no company-app.yaml
+// de cada app e mudam por push; o servidor responde 405 as rotas de edicao antigas.
+export const METADATA_EDITABLE = false;
+
 export type CategoryFilter = 'internal_app' | 'infra' | 'pending_investigation' | 'disabled' | 'all';
 export type AppSort = 'status' | 'cpu' | 'memory';
 
@@ -21,6 +25,7 @@ export const categoryOptions = [
   { value: 'infra', label: 'Infra' },
   { value: 'pending_investigation', label: 'Pendente' },
   { value: 'disabled', label: 'Desativado' },
+  { value: 'system_test', label: 'Teste do sistema' },
   { value: 'uncategorized', label: 'Sem categoria' },
 ];
 

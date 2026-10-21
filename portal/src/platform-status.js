@@ -1,23 +1,27 @@
-// Visao da plataforma: saude dos servicos centrais da maquina, lida de onde
-// cada um vive. Nada aqui escreve; cada checagem e uma leitura curta com timeout.
+// Visao da plataforma: saude dos servicos centrais do cloud, lida de onde cada um vive.
+// Nada aqui escreve; cada checagem e uma leitura curta com timeout.
 //
 // Servicos (na ordem em que aparecem):
-//   gitea       GET {GITEA_URL}/api/v1/version
-//   authentik   GET {AUTHENTIK_URL}/-/health/ready/
-//   npm         POST {NPM_URL}/api/tokens com NPM_EMAIL/NPM_PASSWORD (login funciona)
-//   postgres    SELECT 1 e tamanho dos bancos via PLATFORM_PG_READONLY_URL
-//   redis       PING em REDIS_URL (RESP cru, sem biblioteca)
-//   minio       GET {MINIO_ENDPOINT}/minio/health/live
-//   cloudflared container CLOUDFLARED_CONTAINER rodando
-//   gitea-runner container GITEA_RUNNER_CONTAINER rodando
-//   backup      idade do arquivo mais novo que casa com BACKUP_MANIFEST_GLOB
+//   proxy        GET {NPM_HEALTH_URL} (http://proxy:81/api/, sem login: so health; o portal
+//                nao recebe a senha de admin do proxy)
+//   authentik    GET {AUTHENTIK_INTERNAL_URL}/-/health/ready/
+//   gitea        GET {GITEA_URL}/api/v1/version com o token so leitura
+//   runners      containers gitea-runner e gitea-deployer do projeto do cloud
+//   docker-ro    a API Docker so leitura respondeu (lista de containers)
+//   postgres     SELECT 1 e tamanho dos bancos via PLATFORM_PG_READONLY_URL, ou o banco do
+//                proprio portal (DATABASE_URL)
+//   redis        PING em REDIS_URL (RESP cru, sem biblioteca)
+//   backup       latest-status.json e latest-success.json em BACKUP_REPORTS_DIR (docs/backup.md
+//                do cloud): status da ultima execucao e idade do ultimo sucesso
+//   por perfil   garage (storage), portainer/glances/filebrowser/wetty (ops), agent (agent),
+//                tunnel conforme TUNNEL_PROVIDER (cloudflared; tailscale e tailnet-dns)
 //
 // Cada item sai como { name, kind, healthy, detail, checked_at, ... }. O mesmo
-// JSON serve para a pagina "Plataforma" e para um LLM ler o estado da maquina.
+// JSON serve para a pagina "Plataforma" e para um agente ler o estado da maquina.
 
 import net from 'node:net';
 import path from 'node:path';
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { listDockerContainers } from './docker-state.js';
 import { publicPlatformConfig, readPlatformConfig } from './config.js';
@@ -39,21 +43,23 @@ export function platformConfigFromEnv(env = process.env) {
   return {
     platform,
     baseDomain,
+    project: platform.project,
+    profiles: platform.profiles,
+    tunnelProvider: platform.tunnelProvider,
     giteaUrl: platform.giteaUrl,
     giteaToken: cleanText(env.GITEA_TOKEN),
-    authentikUrl: platform.authentikUrl,
-    npmUrl: stripSlash(env.NPM_URL),
-    npmEmail: cleanText(env.NPM_EMAIL),
-    npmPassword: cleanText(env.NPM_PASSWORD),
+    authentikUrl: platform.authentikInternalUrl,
+    proxyHealthUrl: stripSlash(env.NPM_HEALTH_URL) ? `${stripSlash(env.NPM_HEALTH_URL)}/` : null,
     pgReadonlyUrl: cleanText(env.PLATFORM_PG_READONLY_URL),
+    databaseUrl: cleanText(env.DATABASE_URL),
     redisUrl: cleanText(env.REDIS_URL) || cleanText(env.SHARED_REDIS_URL),
-    minioEndpoint: stripSlash(env.MINIO_ENDPOINT),
-    cloudflaredContainer: cleanText(env.CLOUDFLARED_CONTAINER) || 'cloudflared',
-    giteaRunnerContainer: cleanText(env.GITEA_RUNNER_CONTAINER) || 'gitea-runner',
-    backupManifestGlob: cleanText(env.BACKUP_MANIFEST_GLOB),
+    garageHealthUrl: stripSlash(env.GARAGE_HEALTH_URL),
+    backupEnabled: cleanText(env.BACKUP_ENABLED) ? env.BACKUP_ENABLED === 'true' : null,
+    backupReportsDir: stripSlash(env.BACKUP_REPORTS_DIR),
     backupMaxAgeHours: Number(env.BACKUP_MAX_AGE_HOURS) > 0 ? Number(env.BACKUP_MAX_AGE_HOURS) : 26,
-    portainerUrl: stripSlash(env.PORTAINER_URL) || `https://portainer.${baseDomain}`,
-    glancesUrl: stripSlash(env.GLANCES_URL) || `https://monitor.${baseDomain}`,
+    portainerUrl: stripSlash(env.PORTAINER_URL) || `${platform.scheme}://portainer.${baseDomain}`,
+    glancesUrl: stripSlash(env.GLANCES_URL) || `${platform.scheme}://glances.${baseDomain}`,
+    filesUrl: `${platform.scheme}://files.${baseDomain}`,
     timeoutMs: Number(env.PLATFORM_STATUS_TIMEOUT_MS) > 0 ? Number(env.PLATFORM_STATUS_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS,
   };
 }
@@ -125,20 +131,10 @@ export async function checkAuthentik(config, { fetchImpl }) {
   });
 }
 
-export async function checkNpm(config, { fetchImpl }) {
-  if (!config.npmUrl) return notConfigured('Nginx Proxy Manager', 'proxy', 'NPM_URL nao configurado');
-  if (!config.npmEmail || !config.npmPassword) {
-    return notConfigured('Nginx Proxy Manager', 'proxy', 'NPM_EMAIL/NPM_PASSWORD nao configurados; login nao testado');
-  }
-  const url = `${config.npmUrl}/api/tokens`;
-  const probe = await httpProbe(fetchImpl, url, {
-    timeoutMs: config.timeoutMs,
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: config.npmEmail, secret: config.npmPassword }),
-  });
-  return result('Nginx Proxy Manager', 'proxy', probe.ok, probe.ok ? 'login da API funciona' : (probe.error ? `sem resposta: ${probe.error}` : `login falhou: HTTP ${probe.status}`), {
-    url: config.npmUrl,
+export async function checkProxy(config, { fetchImpl }) {
+  if (!config.proxyHealthUrl) return notConfigured('Proxy (Nginx Proxy Manager)', 'proxy', 'NPM_HEALTH_URL nao configurado');
+  const probe = await httpProbe(fetchImpl, config.proxyHealthUrl, { timeoutMs: config.timeoutMs });
+  return result('Proxy (Nginx Proxy Manager)', 'proxy', probe.ok, probe.ok ? 'respondendo' : (probe.error ? `sem resposta: ${probe.error}` : `HTTP ${probe.status}`), {
     latency_ms: probe.latency_ms,
   });
 }
@@ -166,19 +162,27 @@ export async function defaultPgQuery(connectionString, sql, { timeoutMs }) {
   }
 }
 
+// Tamanho so dos bancos que o papel pode abrir: pg_database_size pede CONNECT, e o
+// instalador tira o CONNECT publico de cada banco.
+const DATABASES_SQL = `SELECT datname,
+  CASE WHEN has_database_privilege(datname, 'CONNECT') THEN pg_database_size(datname) END AS size_bytes
+  FROM pg_database WHERE NOT datistemplate ORDER BY datname`;
+
 export async function checkPostgres(config, { pgQueryFn }) {
-  if (!config.pgReadonlyUrl) return notConfigured('Postgres compartilhado', 'database', 'PLATFORM_PG_READONLY_URL nao configurado');
+  const url = config.pgReadonlyUrl || config.databaseUrl;
+  if (!url) return notConfigured('Postgres compartilhado', 'database', 'PLATFORM_PG_READONLY_URL e DATABASE_URL nao configurados');
   const started = Date.now();
   try {
-    await withTimeout(pgQueryFn(config.pgReadonlyUrl, 'SELECT 1 AS ok', { timeoutMs: config.timeoutMs }), config.timeoutMs);
-    const rows = await withTimeout(pgQueryFn(
-      config.pgReadonlyUrl,
-      'SELECT datname, pg_database_size(datname) AS size_bytes FROM pg_database WHERE NOT datistemplate ORDER BY pg_database_size(datname) DESC',
-      { timeoutMs: config.timeoutMs },
-    ), config.timeoutMs);
-    const databases = rows.map((row) => ({ name: row.datname, size_bytes: Number(row.size_bytes), size: formatBytes(row.size_bytes) }));
+    await withTimeout(pgQueryFn(url, 'SELECT 1 AS ok', { timeoutMs: config.timeoutMs }), config.timeoutMs);
+    const rows = await withTimeout(pgQueryFn(url, DATABASES_SQL, { timeoutMs: config.timeoutMs }), config.timeoutMs);
+    const databases = rows.map((row) => ({
+      name: row.datname,
+      size_bytes: row.size_bytes == null ? null : Number(row.size_bytes),
+      size: row.size_bytes == null ? null : formatBytes(row.size_bytes),
+    }));
     const total = databases.reduce((sum, item) => sum + (item.size_bytes || 0), 0);
-    return result('Postgres compartilhado', 'database', true, `${databases.length} bancos, ${formatBytes(total)}`, {
+    const measured = databases.filter((item) => item.size_bytes != null).length;
+    return result('Postgres compartilhado', 'database', true, `${databases.length} bancos${measured ? `, ${formatBytes(total)} nos ${measured} que este papel abre` : ''}`, {
       latency_ms: Date.now() - started,
       databases,
       total_bytes: total,
@@ -255,33 +259,33 @@ export async function checkRedis(config, { redisPingFn }) {
   }
 }
 
-export async function checkMinio(config, { fetchImpl }) {
-  if (!config.minioEndpoint) return notConfigured('MinIO', 'storage', 'MINIO_ENDPOINT nao configurado');
-  const url = `${config.minioEndpoint}/minio/health/live`;
-  const probe = await httpProbe(fetchImpl, url, { timeoutMs: config.timeoutMs });
-  return result('MinIO', 'storage', probe.ok, probe.ok ? 'live' : (probe.error ? `sem resposta: ${probe.error}` : `HTTP ${probe.status}`), {
-    url,
+export async function checkGarage(config, { fetchImpl }) {
+  if (!config.garageHealthUrl) return notConfigured('Garage (S3)', 'storage', 'GARAGE_HEALTH_URL nao configurado');
+  const probe = await httpProbe(fetchImpl, config.garageHealthUrl, { timeoutMs: config.timeoutMs });
+  return result('Garage (S3)', 'storage', probe.ok, probe.ok ? 'operacional' : (probe.error ? `sem resposta: ${probe.error}` : `HTTP ${probe.status}`), {
     latency_ms: probe.latency_ms,
   });
 }
 
-function findContainer(dockerState, name) {
+// Um servico do cloud pelo label do Compose (projeto + servico); sem labels, pelo nome.
+function findContainer(dockerState, name, project = null) {
   const wanted = String(name).toLowerCase();
-  return dockerState.containers.find((container) => String(container.name).toLowerCase() === wanted)
+  return dockerState.containers.find((container) => container.docker_service === name && (!project || container.docker_stack === project))
+    ?? dockerState.containers.find((container) => String(container.name).toLowerCase() === wanted)
     ?? dockerState.containers.find((container) => String(container.name).toLowerCase().startsWith(`${wanted}-`))
     ?? null;
 }
 
-export function checkContainer(label, kind, containerName, dockerState) {
+export function checkContainer(label, kind, containerName, dockerState, project = null) {
   if (!dockerState.available) {
     return result(label, kind, null, `Docker indisponivel: ${dockerState.error || 'erro desconhecido'}`, { container: containerName, configured: true });
   }
-  const container = findContainer(dockerState, containerName);
+  const container = findContainer(dockerState, containerName, project);
   if (!container) {
     return result(label, kind, false, `container ${containerName} nao encontrado`, { container: containerName });
   }
-  const running = container.state === 'running';
-  return result(label, kind, running, running ? (container.status || 'rodando') : `container ${container.name} em estado ${container.state}`, {
+  const running = container.state === 'running' && !/\(unhealthy\)/.test(String(container.status));
+  return result(label, kind, running, running ? (container.status || 'rodando') : `container ${container.name} em estado ${container.state}${/unhealthy/.test(String(container.status)) ? ' (unhealthy)' : ''}`, {
     container: container.name,
     state: container.state,
     status: container.status,
@@ -289,53 +293,48 @@ export function checkContainer(label, kind, containerName, dockerState) {
   });
 }
 
-// Glob minimo: o diretorio e literal e o nome do arquivo aceita `*` e `?`.
-export function globToRegExp(pattern) {
-  const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${escaped}$`);
-}
-
-export function newestFileMatching(globPattern, { readdir = readdirSync, stat = statSync } = {}) {
-  const directory = path.dirname(globPattern);
-  const filePattern = globToRegExp(path.basename(globPattern));
-  let entries;
+function readJson(file, readFile = readFileSync) {
   try {
-    entries = readdir(directory);
+    return { value: JSON.parse(readFile(file, 'utf8')), error: null };
   } catch (error) {
-    return { error: error.code === 'ENOENT' ? `diretorio nao existe: ${directory}` : error.message, file: null };
+    return { value: null, error: error.code === 'ENOENT' ? 'missing' : error.message };
   }
-  let newest = null;
-  for (const entry of entries) {
-    if (!filePattern.test(entry)) continue;
-    let info;
-    try {
-      info = stat(path.join(directory, entry));
-    } catch {
-      continue;
-    }
-    if (!info.isFile?.() && info.isFile !== undefined) continue;
-    if (!newest || info.mtimeMs > newest.mtimeMs) {
-      newest = { path: path.join(directory, entry), mtimeMs: info.mtimeMs, size: info.size };
-    }
-  }
-  return { error: null, file: newest, directory };
 }
 
-export function checkBackup(config, { now = () => Date.now(), readdir, stat } = {}) {
-  if (!config.backupManifestGlob) return notConfigured('Backup', 'backup', 'no backup configured');
-  const found = newestFileMatching(config.backupManifestGlob, { readdir, stat });
-  if (found.error) return result('Backup', 'backup', false, found.error, { glob: config.backupManifestGlob });
-  if (!found.file) return result('Backup', 'backup', false, `nenhum arquivo casa com ${config.backupManifestGlob}`, { glob: config.backupManifestGlob });
-  const ageMs = Math.max(0, now() - found.file.mtimeMs);
-  const ageHours = ageMs / 3_600_000;
-  const healthy = ageHours <= config.backupMaxAgeHours;
-  return result('Backup', 'backup', healthy, `${healthy ? 'ultimo backup' : 'backup atrasado'} ha ${ageHours < 1 ? `${Math.round(ageMs / 60_000)} min` : `${ageHours.toFixed(1)} h`}`, {
-    glob: config.backupManifestGlob,
-    newest_file: found.file.path,
-    newest_at: new Date(found.file.mtimeMs).toISOString(),
-    age_hours: Math.round(ageHours * 10) / 10,
-    max_age_hours: config.backupMaxAgeHours,
-    size_bytes: found.file.size,
+function ageText(ms) {
+  const hours = ms / 3_600_000;
+  return hours < 1 ? `${Math.round(ms / 60_000)} min` : `${hours.toFixed(1)} h`;
+}
+
+// O contrato do job de backup do cloud (docs/backup.md): latest-status.json diz como foi
+// a ultima execucao; latest-success.json, copia do ultimo sucesso, da a idade que importa.
+export function checkBackup(config, { now = () => Date.now(), readFile } = {}) {
+  if (config.backupEnabled === false) return notConfigured('Backup', 'backup', 'backup desligado (backup.enabled: false)');
+  if (!config.backupReportsDir) return notConfigured('Backup', 'backup', 'BACKUP_REPORTS_DIR nao configurado');
+  const latest = readJson(path.join(config.backupReportsDir, 'latest-status.json'), readFile);
+  const success = readJson(path.join(config.backupReportsDir, 'latest-success.json'), readFile);
+  if (!latest.value && !success.value) {
+    return result('Backup', 'backup', false, latest.error === 'missing' ? 'nenhum backup rodou ainda' : `status ilegivel: ${latest.error}`, { reports_dir: config.backupReportsDir });
+  }
+  const maxAgeHours = Number(success.value?.max_age_hours ?? latest.value?.max_age_hours) || config.backupMaxAgeHours;
+  const finished = Date.parse(success.value?.finished_at ?? '');
+  const ageMs = Number.isFinite(finished) ? Math.max(0, now() - finished) : null;
+  const lastStatus = latest.value?.status ?? null;
+  const fresh = ageMs !== null && ageMs <= maxAgeHours * 3_600_000;
+  const healthy = fresh && lastStatus !== 'failed';
+  let detail;
+  if (ageMs === null) detail = `nenhum backup com sucesso; ultima execucao: ${lastStatus ?? 'desconhecida'}`;
+  else if (lastStatus === 'failed') detail = `ultima execucao falhou (${latest.value?.error ?? 'sem detalhe'}); ultimo sucesso ha ${ageText(ageMs)}`;
+  else if (!fresh) detail = `backup atrasado: ultimo sucesso ha ${ageText(ageMs)} (limite ${maxAgeHours} h)`;
+  else detail = `ultimo backup ha ${ageText(ageMs)}${lastStatus === 'running' ? '; um backup esta rodando agora' : ''}`;
+  return result('Backup', 'backup', healthy, detail, {
+    last_status: lastStatus,
+    last_run_id: latest.value?.run_id ?? null,
+    last_error: latest.value?.error ?? null,
+    newest_at: success.value?.finished_at ?? null,
+    snapshot_id: success.value?.snapshot_id ?? null,
+    age_hours: ageMs === null ? null : Math.round((ageMs / 3_600_000) * 10) / 10,
+    max_age_hours: maxAgeHours,
   });
 }
 
@@ -347,25 +346,39 @@ export function createPlatformStatus({
   listDockerContainersFn = listDockerContainers,
   now = () => Date.now(),
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
-  readdir,
-  stat,
+  readFile,
 } = {}) {
   let cached = null;
 
   async function collect() {
     const config = platformConfigFromEnv(env);
     const dockerState = listDockerContainersFn();
-    const services = await Promise.all([
-      checkGitea(config, { fetchImpl }),
+    const has = (profile) => config.profiles.includes(profile);
+    const container = (label, kind, service) => Promise.resolve(checkContainer(label, kind, service, dockerState, config.project));
+    const checks = [
+      checkProxy(config, { fetchImpl }),
       checkAuthentik(config, { fetchImpl }),
-      checkNpm(config, { fetchImpl }),
+      checkGitea(config, { fetchImpl }),
+      container('Runner de CI (gitea-runner)', 'ci', 'gitea-runner'),
+      container('Runner de deploy (gitea-deployer)', 'ci', 'gitea-deployer'),
+      Promise.resolve(dockerState.available
+        ? result('API Docker so leitura (docker-ro)', 'docker', true, `${dockerState.containers.length} containers visiveis`)
+        : result('API Docker so leitura (docker-ro)', 'docker', false, `sem resposta: ${dockerState.error || 'erro desconhecido'}`)),
       checkPostgres(config, { pgQueryFn }),
       checkRedis(config, { redisPingFn }),
-      checkMinio(config, { fetchImpl }),
-      Promise.resolve(checkContainer('Cloudflare Tunnel', 'tunnel', config.cloudflaredContainer, dockerState)),
-      Promise.resolve(checkContainer('Gitea runner', 'ci', config.giteaRunnerContainer, dockerState)),
-      Promise.resolve(checkBackup(config, { now, readdir, stat })),
-    ]);
+      Promise.resolve(checkBackup(config, { now, readFile })),
+    ];
+    if (has('storage')) checks.push(checkGarage(config, { fetchImpl }));
+    if (has('ops')) {
+      checks.push(container('Portainer', 'ops', 'portainer'), container('Glances', 'ops', 'glances'), container('FileBrowser', 'ops', 'filebrowser'));
+      if (dockerState.containers.some((item) => item.docker_service === 'wetty')) checks.push(container('Terminal web (Wetty)', 'ops', 'wetty'));
+    }
+    if (has('agent')) checks.push(container('Agente operador', 'agent', 'agent'));
+    if (config.tunnelProvider === 'cloudflared') checks.push(container('Cloudflare Tunnel', 'tunnel', 'cloudflared'));
+    if (config.tunnelProvider === 'tailscale') {
+      checks.push(container('Tailscale', 'tunnel', 'tailscale'), container('DNS do tailnet', 'tunnel', 'tailnet-dns'));
+    }
+    const services = await Promise.all(checks);
     const unhealthy = services.filter((service) => service.healthy === false).length;
     const unknown = services.filter((service) => service.healthy === null).length;
     return {
@@ -379,10 +392,11 @@ export function createPlatformStatus({
       },
       services,
       links: {
-        portainer: config.portainerUrl,
-        glances: config.glancesUrl,
+        portainer: config.profiles.includes('ops') ? config.portainerUrl : null,
+        glances: config.profiles.includes('ops') ? config.glancesUrl : null,
+        files: config.profiles.includes('ops') ? config.filesUrl : null,
         gitea: config.platform.giteaPublicUrl,
-        authentik: config.authentikUrl,
+        authentik: config.platform.authentikUrl,
       },
       // Topologia da instalacao, para quem le o JSON saber onde cada coisa esta.
       topology: publicPlatformConfig(config.platform),

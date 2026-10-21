@@ -1,5 +1,9 @@
 import { spawnSync } from 'node:child_process';
 
+// Docker pelo CLI. No cloud o container do portal nao tem o socket: DOCKER_HOST aponta
+// para docker-ro (tcp://docker-ro:2375), a API so leitura do cloud, onde `docker ps -a`,
+// `docker ps --size` e `docker stats --no-stream` caem em rotas permitidas.
+
 export function parseDockerPsJsonLines(output) {
   return output
     .split(/\r?\n/)
@@ -235,8 +239,11 @@ export function enrichAppsWithDocker(apps, dockerState) {
       ? stackNames.find((stack) => stackMatchesApp(stack, app))
       : null;
     const stackName = app.docker_stack || targetContainer?.docker_stack || inferredStackName || null;
-    const stackContainers = stackName ? byStack.get(stackName) ?? [] : [];
+    // Um servico core (o portal) vive no projeto do cloud: so os containers do seu servico.
+    const stackContainers = (stackName ? byStack.get(stackName) ?? [] : [])
+      .filter((item) => app.kind !== 'core' || !app.docker_service || item.docker_service === app.docker_service);
     const container = targetContainer
+      ?? (app.docker_service ? stackContainers.find((item) => item.docker_service === app.docker_service) : null)
       ?? stackContainers.find((item) => ['app', 'frontend', 'web', 'server'].includes(item.docker_service))
       ?? stackContainers[0]
       ?? null;

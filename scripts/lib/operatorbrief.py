@@ -63,9 +63,9 @@ SERVICES = {
         change="install.sh for configuration; the web UI or API for repositories and users",
         health="GET /api/healthz = 200"),
     "portal": dict(
-        role="the app portal (placeholder until the real portal replaces it)",
-        internal="8080", config="build context PORTAL_BUILD_CONTEXT; its database on the shared Postgres",
-        change="install.sh", health="/health = 200 through the proxy; / = 302 to the SSO"),
+        role="the app portal (portal/): catalog, app health and SSO, deploys, platform status; read only",
+        internal="8080", config="build context PORTAL_BUILD_CONTEXT (portal/ copied by install.sh); its database on the shared Postgres (migrations at boot); reads catalog/inventory.json and the backup reports read only, Docker through docker-ro",
+        change="install.sh (a new checkout rebuilds it)", health="/health = 200 through the proxy; / = 302 to the SSO; GET /api/platform/status behind the SSO"),
     "gitea-runner": dict(
         role="CI runner (label ubuntu-latest): jobs get no Docker socket, no ihc network, no install directory",
         internal="-", config="runner/ci.yaml (rendered by install.sh); registration in its /data/.runner",
@@ -101,9 +101,9 @@ SERVICES = {
     "agent": dict(role="the operator agent (reference implementation: OpenClaw)", internal="18789 (gateway, loopback only)",
                   config="agent/state/openclaw.json (rendered by install.sh); workspace agent/workspace",
                   change="config.yaml ops.agent.* then install.sh --apply", health="Docker healthcheck"),
-    "agent-docker-proxy": dict(role="read-only Docker API for the agent (allowlist; Env as names only)", internal="2375",
-                               config="agent-proxy/docker-ro-proxy.py; AGENT_ALLOW_WRITE",
-                               change="config.yaml ops.agent.allow_write then install.sh --apply", health="GET /_ping"),
+    "docker-ro": dict(role="read-only Docker API for the portal and the agent (allowlist; Env as names only; the agent knows it as agent-docker-proxy)", internal="2375",
+                      config="docker-ro/docker-ro-proxy.py; AGENT_ALLOW_WRITE (writes for the agent container only)",
+                      change="config.yaml ops.agent.allow_write then install.sh --apply", health="GET /_ping"),
 }
 
 # Where each credential comes from and what it opens. `agent`: what the operator agent of
