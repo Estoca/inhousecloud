@@ -4,7 +4,7 @@
 // - createStatusCache: get/set/del com TTL, em Redis quando ha URL configurada
 //   (STATUS_CACHE_REDIS_URL ou REDIS_URL) e sempre em memoria. O Redis e o
 //   compartilhado da maquina, por isso toda chave leva o prefixo
-//   `deploy-platform:`. Falha de Redis nunca derruba o pedido: a leitura cai
+//   `ihc-portal:`. Falha de Redis nunca derruba o pedido: a leitura cai
 //   para a memoria e o Redis fica em quarentena por alguns segundos.
 // - createSwrResource: stale-while-revalidate. O pedido devolve o que esta no
 //   cache na hora (com cached, generated_at e age_seconds) e, se a entrada
@@ -15,7 +15,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 
-export const KEY_PREFIX = 'deploy-platform:';
+export const KEY_PREFIX = 'ihc-portal:';
 export const DEFAULT_APPS_STATUS_TTL_SECONDS = 300;
 export const DEFAULT_PLATFORM_STATUS_TTL_SECONDS = 60;
 const DEFAULT_REDIS_TIMEOUT_MS = 1500;

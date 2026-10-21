@@ -34,7 +34,7 @@ cp bootstrap/config.example.yaml local/config.yaml   # edit, then:
 
 What comes up, as Compose profiles of `docker/compose.yml` (`docs/install-design.md`):
 
-- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea with its two Actions runners (CI, and deploys by push to `main`), the shared Postgres and Redis for apps, and the app portal (a placeholder in this repository, behind forward auth);
+- `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea with its two Actions runners (CI, and deploys by push to `main`), the shared Postgres and Redis for apps, and the app portal (`portal/`, read only, behind forward auth);
 - `storage`: Garage, S3-compatible object storage (a bucket and key per app);
 - `ops`: Portainer and Glances;
 - `cloudflared` or `tailscale`, chosen by the ingress mode.

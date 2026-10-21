@@ -359,7 +359,7 @@ has_profile_ci() { return 0; }
 # Reference implementation OpenClaw, in <install-dir>/agent/: state/ (its config and
 # sessions), workspace/ (AGENTS.md and its notes), reference/ (the contract, the
 # runbooks, the brief, ihc-ro; mounted read only). It sees the Docker API only through
-# agent-docker-proxy (read only unless ops.agent.allow_write) and never the install
+# docker-ro (read only unless ops.agent.allow_write) and never the install
 # directory, its .env or the socket. Its LLM key and chat tokens are AGENT_* in .env, put
 # there by a human (or read from IHC_AGENT_* at install time): never generated.
 AGENT_SECRETS="AGENT_ANTHROPIC_API_KEY AGENT_OPENAI_API_KEY AGENT_SLACK_BOT_TOKEN AGENT_SLACK_APP_TOKEN AGENT_TELEGRAM_BOT_TOKEN AGENT_GITEA_TOKEN"
@@ -468,17 +468,16 @@ PY
 
 agent_up() {
   local out probe llm chan
-  mkdir -p "$AGENT_DIR/state/home" "$AGENT_DIR/workspace" "$AGENT_DIR/reference" "$INSTALL_DIR/agent-proxy" "$(env_get AGENT_BACKUP_REPORTS_DIR)" 2>/dev/null || true
+  mkdir -p "$AGENT_DIR/state/home" "$AGENT_DIR/workspace" "$AGENT_DIR/reference" "$(env_get AGENT_BACKUP_REPORTS_DIR)" 2>/dev/null || true
   chmod 700 "$AGENT_DIR/state"
-  cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
-  chmod 644 "$INSTALL_DIR/agent-proxy/docker-ro-proxy.py"
+  rm -rf "$INSTALL_DIR/agent-proxy"   # the proxy is core now: docker-ro, from $INSTALL_DIR/docker-ro
   render_agent_config || return 1
   "$IHC_ROOT/scripts/ihc-operator.sh" agent-sync --install-dir "$INSTALL_DIR" || return 1
-  dc up -d agent-docker-proxy agent || return 1
-  wait_healthy 240 agent-docker-proxy agent || return 1
+  dc up -d docker-ro agent || return 1
+  wait_healthy 240 docker-ro agent || return 1
   # The read-only path works end to end, and a write is refused.
   out="$(dc exec -T agent ihc-ro docker /_ping 2>&1 | tr -d '[:space:]')"
-  [ "$out" = OK ] && ok "agent reads the Docker API through agent-docker-proxy" || { fail "agent cannot reach agent-docker-proxy: $out"; return 1; }
+  [ "$out" = OK ] && ok "agent reads the Docker API through docker-ro" || { fail "agent cannot reach docker-ro (agent-docker-proxy on its network): $out"; return 1; }
   llm=false; [ -n "$(env_get AGENT_ANTHROPIC_API_KEY)$(env_get AGENT_OPENAI_API_KEY)" ] && llm=true
   chan=""; [ -n "$(env_get AGENT_SLACK_BOT_TOKEN)" ] && chan=slack; [ -n "$(env_get AGENT_TELEGRAM_BOT_TOKEN)" ] && chan="${chan:+$chan,}telegram"
   # After a few restarts in a row (an OOM kill, say) OpenClaw's crash-loop breaker stops
@@ -490,7 +489,7 @@ agent_up() {
   done
   probe="$(jsonq build enabled:=true image="$(env_get OPENCLAW_IMAGE)" workspace="$AGENT_DIR/workspace" brief="$AGENT_DIR/reference/brief.md" docker_api="read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo ' + app restart, build cache prune')" llm_key:="$llm" channel="${chan:-none}")"
   state stage optional_profiles set probe "{\"agent\":$probe}"
-  state stage optional_profiles set resources "[\"dir:$AGENT_DIR\",\"container:agent\",\"container:agent-docker-proxy\"]"
+  state stage optional_profiles set resources "[\"dir:$AGENT_DIR\",\"container:agent\"]"
 }
 
 agent_handoff() {
@@ -757,7 +756,7 @@ stage_preflight() {
 }
 
 stage_plan() {
-  local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal"
+  local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal"
   has_profile storage && services="$services garage"
   services="$services gitea-runner gitea-deployer"
   has_profile ops && services="$services portainer glances filebrowser"
@@ -765,14 +764,14 @@ stage_plan() {
   has_profile cloudflared && services="$services cloudflared"
   has_profile tailscale && services="$services tailscale tailnet-dns"
   has_profile backup && services="$services backup"
-  has_profile agent && services="$services agent-docker-proxy agent"
+  has_profile agent && services="$services agent"
   log "install directory : $INSTALL_DIR"
   log "profiles          : core${PROFILES:+,$PROFILES}"
   log "services          : $services"
   log "ingress           : $INGRESS, tls $TLS_MODE, tunnel $TUNNEL_PROVIDER, bind $BIND_ADDRESS"
   [ "$TLS_MODE" = internal ] && log "tls               : own CA in $INSTALL_DIR/local/ca (name-constrained to $BASE_DOMAIN), wildcard *.$BASE_DOMAIN on the proxy, HTTPS forced"
   has_profile tailscale && log "tailnet           : node ${CFG_ingress__tailscale__hostname:-ihc} (userspace); serve 80, 443 -> proxy, ${GITEA_SSH_PORT:-2222} -> gitea:22; split DNS for $BASE_DOMAIN on <tailnet address>:53"
-  log "portal            : $PORTAL_BASE_URL (forward auth)"
+  log "portal            : $PORTAL_BASE_URL (forward auth; built from $IHC_ROOT/portal, migrations at boot; reads catalog/inventory.json, the backup reports and Docker through docker-ro, all read only)"
   log "authentik         : $AUTHENTIK_BASE_URL"
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
   log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, ${REAL_STATE_FILE:-$STATE_FILE}, $CONFIG_FILE"
@@ -825,6 +824,7 @@ stage_secrets() {
   env_set COMPOSE_PROFILES "$PROFILES"
   env_default IHC_NETWORK ihc
   env_default IHC_OPS_NETWORK ihc-ops
+  env_default IHC_DOCKER_NETWORK ihc-docker
   env_set INGRESS "$INGRESS"; env_set BASE_DOMAIN "$BASE_DOMAIN"; env_set PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
   env_set TLS_MODE "$TLS_MODE"; env_set TUNNEL_PROVIDER "$TUNNEL_PROVIDER"; env_set BIND_ADDRESS "$BIND_ADDRESS"
   env_default PROXY_HTTP_PORT 80; env_default PROXY_HTTPS_PORT 443; env_default PROXY_ADMIN_PORT 81
@@ -868,7 +868,7 @@ stage_secrets() {
   env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-ihc_platform}"
   env_default PORTAL_DB_ROLE "${CFG_postgres__portal__role:-ihc_platform}"
   env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-IHC_PLATFORM_DATABASE_PASSWORD}" 32
-  env_default PORTAL_BUILD_CONTEXT ./portal-placeholder
+  env_default PORTAL_BUILD_CONTEXT ./portal   # portal/ of this checkout, copied by the foundation stage
   env_default PORTAL_SUPER_ADMIN_EMAILS "${CFG_portal__super_admin_emails:-$ADMIN_EMAIL}"
   # Garage: the RPC secret must be 32 bytes in hex. Generated even with storage off, so
   # turning the profile on later is only a config change.
@@ -1035,10 +1035,33 @@ build_deployer() {
   ok "deployer image $(env_get COMPOSE_PROJECT_NAME)-deployer:local built"
 }
 
+# copy_portal: the portal's build context, from portal/ of this checkout, without what a
+# developer may have built or installed in it. Recopied on every foundation run.
+copy_portal() {
+  local ctx="$INSTALL_DIR/portal"
+  rm -rf "$ctx" "$INSTALL_DIR/portal-placeholder"; mkdir -p "$ctx"
+  (cd "$IHC_ROOT/portal" && tar --exclude=./node_modules --exclude=./dist --exclude='./.env' -cf - .) | (cd "$ctx" && tar -xf -) || return 1
+}
+
 stage_foundation() {
   cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
-  rm -rf "$INSTALL_DIR/portal-placeholder"
-  cp -R "$IHC_ROOT/examples/minimal-web-app" "$INSTALL_DIR/portal-placeholder"
+  copy_portal || { fail "could not copy $IHC_ROOT/portal into $INSTALL_DIR/portal"; return 1; }
+  # Set here, not with the other values: updating the cloud is `--apply --from foundation`,
+  # which runs no secrets stage. An install made before the real portal had the placeholder
+  # as its build context. The portal reads the backup status files (docs/backup.md) from
+  # the reports directory, read only; it exists even with backup off, so the mount never
+  # creates it as root.
+  case "$(env_get PORTAL_BUILD_CONTEXT)" in ""|./portal-placeholder) env_set PORTAL_BUILD_CONTEXT ./portal ;; esac
+  env_set PORTAL_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
+  mkdir -p "$BACKUP_DEST/reports" 2>/dev/null && chmod 755 "$BACKUP_DEST/reports" 2>/dev/null || warn "cannot create $BACKUP_DEST/reports: the portal shows no backup status until it exists"
+  mkdir -p "$INSTALL_DIR/docker-ro"
+  cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
+  chmod 755 "$INSTALL_DIR/docker-ro"; chmod 644 "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
+  # inventory.json moves into catalog/ (the portal mounts that directory read only) and
+  # stays reachable at its old path as a symlink.
+  $PY "$IHC_LIB/inventory.py" migrate "$INSTALL_DIR" || { fail "could not set up $INSTALL_DIR/catalog/inventory.json"; return 1; }
+  # Before the read-only Docker API was core it was the agent profile's agent-docker-proxy.
+  docker ps -aq --filter "label=com.docker.compose.project=$(env_get COMPOSE_PROJECT_NAME)" --filter label=com.docker.compose.service=agent-docker-proxy | xargs docker rm -f >/dev/null 2>&1 || true
   rm -rf "$INSTALL_DIR/backup-job"; mkdir -p "$INSTALL_DIR/backup-job"
   cp "$IHC_ROOT/docker/backup/Dockerfile" "$IHC_ROOT/docker/backup/scheduler.sh" "$INSTALL_DIR/backup-job/"
   cp "$IHC_ROOT/scripts/ihc-backup.sh" "$INSTALL_DIR/backup-job/ihc-backup.sh"
@@ -1048,11 +1071,12 @@ stage_foundation() {
   # Gitea mounts local/ca/ca.crt: the cloud CA with TLS internal, an empty file otherwise.
   if [ "$TLS_MODE" = internal ]; then ensure_internal_ca "$BASE_DOMAIN" || { fail "tls internal: could not make the CA and certificate in $(ca_dir)"; return 1; }
   else (umask 077; mkdir -p "$(ca_dir)"); [ -e "$(ca_dir)/ca.crt" ] || : > "$(ca_dir)/ca.crt"; chmod 644 "$(ca_dir)/ca.crt"; fi
-  ok "rendered compose.yml, portal-placeholder/, backup-job/, runner/, garage/ and tailscale/ into $INSTALL_DIR"
+  ok "rendered compose.yml, portal/, docker-ro/, catalog/, backup-job/, runner/, garage/ and tailscale/ into $INSTALL_DIR"
   dc config --quiet || die "compose file does not validate"
   ok "compose file validates"
-  step "pulling images and creating containers, network and volumes (first run takes a few minutes)"
-  dc build --quiet portal >&2 || return 1
+  step "pulling images, building the portal and creating containers, network and volumes (first run takes a few minutes)"
+  dc build --quiet portal >&2 || { fail "the portal image did not build (docker compose build portal)"; return 1; }
+  docker image rm "$(env_get COMPOSE_PROJECT_NAME)-portal:placeholder" >/dev/null 2>&1 && ok "the placeholder portal's image removed" || true
   has_profile backup && dc build --quiet backup >&2
   build_deployer || { fail "deployer image build failed"; return 1; }
   dc up --no-start --quiet-pull >&2
@@ -1118,17 +1142,27 @@ stage_gitea() {
   ok "Gitea API healthy"
 }
 
+# The portal applies its own migrations at boot (portal/src/migrate.js) and reports them
+# on /health; its Docker reads go through docker-ro.
 stage_portal() {
-  dc up -d portal || return 1
-  wait_healthy 120 portal || return 1
-  log "placeholder portal: no migrations to apply"
-  state stage portal set probe '{"health":"ok","migrations":"none (placeholder)"}'
+  local h
+  dc up -d docker-ro portal || return 1
+  wait_healthy 240 docker-ro portal || { dc logs --tail 30 portal >&2; return 1; }
+  h="$(dc exec -T portal wget -qO- http://127.0.0.1:8080/health 2>/dev/null)"
+  [ "$(printf '%s' "$h" | jsonq get migrations.ok)" = true ] || { fail "portal migrations did not apply: $(printf '%s' "$h" | jsonq get migrations.error)"; dc logs --tail 30 portal >&2; return 1; }
+  ok "portal healthy; migrations applied ($(printf '%s' "$h" | jsonq get migrations.applied) now, $(printf '%s' "$h" | jsonq get migrations.total) in all)"
+  state stage portal set probe "$(jsonq build health=ok migrations_total="$(printf '%s' "$h" | jsonq get migrations.total)" migrations_applied_now="$(printf '%s' "$h" | jsonq get migrations.applied)" docker_api=docker-ro)"
+  state stage portal set resources '["container:portal","container:docker-ro","image:portal"]'
 }
 
 stage_first_run() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
-  "$IHC_ROOT/scripts/first-run.sh" $args
+  "$IHC_ROOT/scripts/first-run.sh" $args || return 1
+  # first-run generates the read-only Gitea token the portal lists deploys with: recreate
+  # the portal so it gets it (Compose recreates only when its environment changed).
+  dc up -d portal >&2 || return 1
+  wait_healthy 120 portal || return 1
 }
 
 # The backup job: a sidecar container (docker/backup) whose crond runs ihc-backup on
@@ -1193,7 +1227,7 @@ stage_optional_profiles() {
   if has_profile storage; then COMPOSE_PROJECT_NAME="$(env_get COMPOSE_PROJECT_NAME)" garage_layout_init "$(env_get GARAGE_CAPACITY)" || return 1; fi
   OPS_PROBE='{"enabled":false}'
   if has_profile ops; then ops_terminal; else dc rm -sf wetty filebrowser portainer glances >/dev/null 2>&1 || true; fi
-  if has_profile agent; then agent_up || return 1; else dc rm -sf agent agent-docker-proxy >/dev/null 2>&1 || true; fi
+  if has_profile agent; then agent_up || return 1; else dc rm -sf agent >/dev/null 2>&1 || true; fi
   state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }" ops:="$OPS_PROBE")"
 }
 
@@ -1329,19 +1363,20 @@ print(json.dumps(o))' "$SCHEME" "$BASE_DOMAIN" "$(env_get AUTHENTIK_PORTAL_GROUP
     echo '}'
   } > "$inv.new"
   # Apps registered by ihc-app provision live under "apps": carried over, never dropped.
+  # The file itself lives in catalog/ (the portal mounts it read only); save() keeps the link.
   $PY -c 'import json,sys
-new=json.load(open(sys.argv[1]))
-try: new["apps"]=json.load(open(sys.argv[2])).get("apps",{})
-except (OSError,ValueError): new["apps"]={}
-json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
-  mv "$inv.new" "$inv"
+sys.path.insert(0,sys.argv[1]); import inventory
+new=json.load(open(sys.argv[2]))
+new["apps"]=inventory.load(sys.argv[3]).get("apps",{})
+inventory.save(sys.argv[3],new)' "$IHC_LIB" "$inv.new" "$inv"
+  rm -f "$inv.new"
   write_shortcut
   state stage handoff set probe "$(jsonq build inventory="$inv" status_command="$SELF status --install-dir $INSTALL_DIR")"
   state stage handoff complete
   state finish >/dev/null || true
   _out ""
   _out "Installed. URLs:"
-  _out "  portal     $PORTAL_BASE_URL   (a placeholder: it proves the SSO; to operate, Gitea + ihc-operator brief)"
+  _out "  portal     $PORTAL_BASE_URL   (catalog, app health and SSO, deploys, platform status; read only; admins: $(env_get AUTHENTIK_PORTAL_GROUP))"
   _out "  authentik  $AUTHENTIK_BASE_URL   (user akadmin)"
   _out "  gitea      $GITEA_BASE_URL   (user $(env_get GITEA_ADMIN_USERNAME); SSH port $(env_get GITEA_SSH_PORT); sign in with Authentik)"
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
@@ -1430,7 +1465,8 @@ day0_handoff() {
   _out ""
   _out "Day zero, in this order:"
   _out "1. Open the portal: $(env_get PORTAL_BASE_URL)"
-  _out "   It is a placeholder: it proves the SSO. To operate, use Gitea and ihc-operator brief (step 6)."
+  _out "   The catalog shows each app with its health, SSO and deploys; Platform shows the core services and the backup."
+  _out "   It only reads. To change something: Gitea (push to main deploys) and ihc-operator brief (step 6)."
   _out "2. Read the first password here, in your own terminal (never paste it into a chat):"
   _out "     $envpy get $ENV_FILE AUTHENTIK_BOOTSTRAP_PASSWORD"
   [ "$(uname -s)" = Darwin ] && _out "   To copy it instead of showing it, add:  | pbcopy"
@@ -1471,7 +1507,7 @@ for s,a in sorted(apps.items()):
 
 # core_services: the cloud's own services for the profiles in .env.
 core_services() {
-  local s="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer" p
+  local s="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal gitea-runner gitea-deployer" p
   p=",$(env_get COMPOSE_PROFILES),"
   case "$p" in *,storage,*) s="$s garage" ;; esac
   case "$p" in *,ops,*) s="$s portainer glances filebrowser" ;; esac
@@ -1479,7 +1515,7 @@ core_services() {
   case "$p" in *,backup,*) s="$s backup" ;; esac
   case "$p" in *,cloudflared,*) s="$s cloudflared" ;; esac
   case "$p" in *,tailscale,*) s="$s tailscale tailnet-dns" ;; esac
-  case "$p" in *,agent,*) s="$s agent-docker-proxy agent" ;; esac
+  case "$p" in *,agent,*) s="$s agent" ;; esac
   printf '%s' "$s"
 }
 
@@ -1495,7 +1531,7 @@ elif s.get("pending") and d.get("status")!="completed": out+=", next stage "+s["
 print("%s (installation %s)"%(out,d.get("installation_id","?")))')"
   _out "InHouseCloud at $INSTALL_DIR: $line"
   if [ ! -r "$ENV_FILE" ]; then _out "  (no readable $ENV_FILE: run as the user who installed it for URLs, health, backup and apps)"; return "$rc"; fi
-  _out "  portal     $(env_get PORTAL_BASE_URL)   (placeholder: proves the SSO)"
+  _out "  portal     $(env_get PORTAL_BASE_URL)   (catalog, health, deploys, platform status)"
   _out "  sign-in    $(env_get AUTHENTIK_BASE_URL)"
   _out "  gitea      $(env_get GITEA_BASE_URL)"
   scheme="$(env_get PORTAL_BASE_URL)"; scheme="${scheme%%://*}"
@@ -1604,7 +1640,7 @@ cloud_remove() {
   ok "cloud containers, volumes and networks removed"
   # act_runner keeps the job tool cache in a volume of its own, outside the project's labels.
   docker volume rm act-toolcache >/dev/null 2>&1 && ok "volume act-toolcache (the runners' job tool cache) removed"
-  for img in "$project-portal:placeholder" "$project-backup:local" "$project-deployer:local"; do
+  for img in "$project-portal:local" "$project-portal:placeholder" "$project-backup:local" "$project-deployer:local"; do
     docker image rm -f "$img" >/dev/null 2>&1 && ok "image $img removed"
   done
   pub="$INSTALL_DIR/local/wetty/id_ed25519.pub"

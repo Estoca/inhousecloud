@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Boxes, CheckCircle2, Pencil, Save, Search, Server, XCircle } from 'lucide-react';
 import { DockerContainer, getDockerContainers, updateDockerMetadata } from '../lib/api';
-import { CategoryFilter, categoryLabel, categoryOptions, errorMessage, formatBytes, formatPercent } from '../lib/format';
+import { CategoryFilter, categoryLabel, categoryOptions, errorMessage, formatBytes, formatPercent, METADATA_EDITABLE } from '../lib/format';
 import { MetricCard, PageHeader, RefreshButton } from '../components/portal';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -275,11 +275,11 @@ export function DockersPage({ emailDomain }: { emailDomain: string }) {
                               <XCircle className="h-4 w-4" />
                             </Button>
                           </div>
-                        ) : (
+                        ) : METADATA_EDITABLE ? (
                           <Button size="icon" variant="ghost" type="button" onClick={() => startEdit(container)} title="Editar metadata">
                             <Pencil className="h-4 w-4" />
                           </Button>
-                        )}
+                        ) : null}
                       </td>
                     </tr>
                   ))}

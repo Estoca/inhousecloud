@@ -18,13 +18,16 @@ Recommended target:
 
 ## Migration
 
-Initial migration:
+The portal applies `db/migrations/` itself at boot (`src/migrate.js`, called by
+`startServer`): each file once, in order, in a transaction, recorded in
+`deploy_platform.schema_migrations`; `/health` reports the result. By hand:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/001_deploy_platform_schema.sql
+DATABASE_URL=... node src/migrate.js
 ```
 
-Apply every file in `db/migrations/` in order. After `009_drop_write_surface.sql`
+In the cloud the database and its role (`ihc_platform`, LOGIN NOSUPERUSER, owner of the
+database, no public connect) are created by `install.sh` (stage `shared_data`). After `009_drop_write_surface.sql`
 the schema has only what the read-only portal uses:
 
 - `deploy_platform.deploy_events`: pedidos de deploy do fluxo GitOps antigo. No ramo `export` o portal nao le nem grava esta tabela; ela fica ate uma migracao que a remova.

@@ -57,7 +57,7 @@ export function createDiskUsageScheduler({
     state.running = true;
     state.last_error = null;
     try {
-      const collection = collectDockerDiskUsageFn();
+      const collection = await collectDockerDiskUsageFn();
       if (!collection.available) {
         throw new Error(collection.error || 'disk usage collection unavailable');
       }

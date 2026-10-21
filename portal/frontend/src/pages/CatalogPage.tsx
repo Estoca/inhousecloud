@@ -11,6 +11,7 @@ import {
   lifecycleVariant,
   sortAppsBy,
   statusVariant,
+  METADATA_EDITABLE,
 } from '../lib/format';
 import { useAppMetadata } from '../lib/useAppMetadata';
 import { CacheAge, MetricCard, PageHeader, RefreshButton } from '../components/portal';
@@ -279,7 +280,7 @@ export function CatalogPage({
                         </td>
                         <td className="px-4 py-3">
                           {app.health?.sso_checked ? (
-                            <Badge variant={app.health.sso_protected ? 'success' : 'secondary'}>{app.health.sso_protected ? 'Sim' : 'Não'}</Badge>
+                            <Badge variant={app.health.sso_protected ? 'success' : 'secondary'} title={app.health.sso_effective === false ? 'Diferente do que o company-app.yaml pede (auth.required)' : undefined}>{app.health.sso_protected ? 'Sim' : 'Não'}{app.health.sso_effective === false ? ' (!)' : ''}</Badge>
                           ) : (
                             <span className="text-xs text-muted-foreground">Não verificado</span>
                           )}
@@ -304,7 +305,7 @@ export function CatalogPage({
                                 <XCircle className="h-4 w-4" />
                               </Button>
                             </div>
-                          ) : canManage ? (
+                          ) : canManage && METADATA_EDITABLE ? (
                             <Button size="icon" variant="ghost" type="button" onClick={() => metadata.start(app)} title="Editar metadata">
                               <Pencil className="h-4 w-4" />
                             </Button>

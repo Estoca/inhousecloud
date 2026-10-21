@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only Docker API for the operator agent (docs/operator-contract.md, docs/security.md).
+"""Read-only Docker API: the docker-ro service (docs/security.md, docs/operator-contract.md).
 
-Listens on 0.0.0.0:2375 on the agent's internal network and forwards an allowlist of
-requests to the Docker socket mounted at /var/run/docker.sock. Standard library only.
+Listens on 0.0.0.0:2375 on two internal networks (the portal's `docker` network and the
+agent's `agent` network) and forwards an allowlist of requests to the Docker socket
+mounted at /var/run/docker.sock. Standard library only.
 
 Allowed (GET and HEAD; an optional /v1.NN prefix is accepted):
   /_ping /version /info /system/df
@@ -13,12 +14,14 @@ Every Env list in a container or image inspect comes back as variable NAMES only
 inspect is where the platform's passwords would otherwise leak. Logs and stats never
 stream (follow and stream are forced off).
 
-Writes, only when AGENT_ALLOW_WRITE=true (ops.agent.allow_write in the config):
+Writes, only when AGENT_ALLOW_WRITE=true (ops.agent.allow_write in the config) and only
+from a host named in WRITE_CLIENTS (default `agent`: the request's source address must be
+one that name resolves to; the portal never writes):
   POST /containers/ID/restart   only for a container of an app's Compose project, never
                                 one of the ihc project (IHC_PROJECT)
   POST /build/prune             the build cache, never images or volumes
 Everything else is refused with 403 and logged. Each request is logged to stdout as one
-line (method, path, status): `docker compose logs agent-docker-proxy` is the audit trail.
+line (method, path, status): `docker compose logs docker-ro` is the audit trail.
 """
 import http.client
 import http.server
@@ -33,6 +36,7 @@ SOCKET = os.environ.get("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
 IHC_PROJECT = os.environ.get("IHC_PROJECT", "ihc")
 ALLOW_WRITE = os.environ.get("AGENT_ALLOW_WRITE", "false").lower() == "true"
 PORT = int(os.environ.get("PORT", "2375"))
+WRITE_CLIENTS = [h.strip() for h in os.environ.get("WRITE_CLIENTS", "agent").split(",") if h.strip()]
 
 ID = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
 NAME = r"[A-Za-z0-9][A-Za-z0-9_./:@-]*"
@@ -91,6 +95,17 @@ def redact(path, body):
     return json.dumps(d).encode()
 
 
+def write_client(addr):
+    """True when addr is one of the addresses the WRITE_CLIENTS names resolve to now."""
+    for host in WRITE_CLIENTS:
+        try:
+            if addr in {i[4][0] for i in socket.getaddrinfo(host, None)}:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def compose_project(cid):
     status, _, body = docker("GET", "/containers/%s/json" % cid)
     if status != 200:
@@ -100,7 +115,7 @@ def compose_project(cid):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "ihc-agent-docker-ro"
+    server_version = "ihc-docker-ro"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -119,7 +134,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def refuse(self, status, why):
-        self.send(status, json.dumps({"message": "refused by the cloud's agent proxy: %s" % why}).encode())
+        self.send(status, json.dumps({"message": "refused by the cloud's read-only Docker API: %s" % why}).encode())
 
     def split(self):
         u = urllib.parse.urlsplit(self.path)
@@ -166,6 +181,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.refuse(403, "path not allowed")
         if not ALLOW_WRITE:
             return self.refuse(403, "read only (ops.agent.allow_write is false); a human runs this")
+        if not write_client(self.client_address[0]):
+            return self.refuse(403, "writes are for the operator agent only (WRITE_CLIENTS)")
         m = RESTART_RE.match(path)
         if m:
             project, status = compose_project(m.group(1))

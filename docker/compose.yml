@@ -8,7 +8,8 @@
 #   cloudflared  Cloudflare Tunnel (ingress public + tls edge/acme)
 #   tailscale    Tailscale node and its split-DNS server (ingress private)
 #   backup       the backup job (on when BACKUP_ENABLED=true; docs/backup.md)
-#   agent        the operator agent and its read-only Docker API (docs/operator-contract.md)
+#   agent        the operator agent (docs/operator-contract.md); the read-only Docker API
+#                it uses, docker-ro, is core (the portal uses it too)
 # The Gitea Actions runners (gitea-runner, gitea-deployer) are core: push to main deploys.
 # A leftover `ci` in COMPOSE_PROFILES selects nothing and does no harm.
 #
@@ -242,12 +243,21 @@ services:
       start_period: 30s
 
   portal:
-    # Placeholder for the app portal: the minimal example app, behind forward auth.
-    # The real portal is a separate project; it takes this service's place with the
-    # same name, port, network and healthcheck path.
+    # The app portal (portal/ of this repository, portal/README.md): catalog, state of each
+    # app, deploys and the platform status, read only. install.sh copies portal/ into
+    # PORTAL_BUILD_CONTEXT and builds it; the container applies its own migrations to its
+    # database on the shared Postgres at boot. It reads:
+    #   the inventory        <install-dir>/catalog/ mounted read only (never the install
+    #                        directory, its .env or the apps' env files)
+    #   the backup status    <BACKUP_DESTINATION>/reports, read only
+    #   Docker               through docker-ro on its own internal network, never the socket
+    #   apps and routes      through the proxy with the app's Host header, as ihc doctor does
+    #   Gitea                with the read-only token; Authentik, the proxy, Garage: health only
+    # Who the person is comes from the forward auth headers, trusted only from the proxy;
+    # admin is the AUTHENTIK_PORTAL_GROUP group.
     build:
       context: ${PORTAL_BUILD_CONTEXT}
-    image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:placeholder
+    image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:local
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -255,19 +265,88 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      docker-ro:
+        condition: service_started
     environment:
+      HOST: 0.0.0.0
       PORT: "8080"
+      PUBLIC_BASE_URL: ${PORTAL_BASE_URL}
       PORTAL_BASE_URL: ${PORTAL_BASE_URL}
+      PORTAL_HOST: ${PORTAL_HOST}
+      BASE_DOMAIN: ${BASE_DOMAIN}
       DATABASE_URL: postgres://${PORTAL_DB_ROLE}:${PORTAL_DB_PASSWORD}@postgres:5432/${PORTAL_DB_NAME}
       REDIS_URL: redis://redis:6379/0
       SUPER_ADMIN_EMAILS: ${PORTAL_SUPER_ADMIN_EMAILS}
-    networks: [ihc]
+      ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
+      USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
+      PORTAL_ALLOW_DOMAIN_USERS: "false"
+      TRUSTED_PROXY_HOSTS: proxy
+      INVENTORY_PATH: /ihc/catalog/inventory.json
+      PORTAL_MANIFEST_PATH: /app/company-app.yaml
+      IHC_PROXY_URL: http://proxy:80
+      NPM_HEALTH_URL: http://proxy:81/api/
+      DOCKER_HOST: tcp://docker-ro:2375
+      IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+      INGRESS: ${INGRESS:-local}
+      TUNNEL_PROVIDER: ${TUNNEL_PROVIDER:-none}
+      GITEA_URL: http://gitea:3000
+      GITEA_PUBLIC_URL: ${GITEA_BASE_URL}
+      GITEA_ORG: ${GITEA_ORGANIZATION}
+      GITEA_TOKEN: ${GITEA_READONLY_TOKEN:-}
+      AUTHENTIK_URL: ${AUTHENTIK_BASE_URL}
+      AUTHENTIK_HOST: ${AUTHENTIK_HOST}
+      AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
+      GARAGE_HEALTH_URL: http://garage:3903/health
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      BACKUP_REPORTS_DIR: /ihc/backup-reports
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+      TIMEZONE: ${BACKUP_TZ:-UTC}
+    volumes:
+      - ./catalog:/ihc/catalog:ro
+      - ${PORTAL_BACKUP_REPORTS_DIR:-./backups/reports}:/ihc/backup-reports:ro
+    networks: [ihc, docker]
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: 20s
+
+  docker-ro:
+    # The Docker API, read only (docker/agent/docker-ro-proxy.py, docs/security.md): GET on
+    # an allowlist, Env as names only, logs and stats never stream. The portal and the
+    # operator agent read Docker through it and never get the socket. It sits on two
+    # internal networks, `docker` (the portal) and `agent` (the agent, which knows it as
+    # agent-docker-proxy); apps join neither. Writes (restart of an app container, build
+    # cache prune) exist only with ops.agent.allow_write and only for the agent container.
+    image: ${AGENT_PROXY_IMAGE:-python:3.13-alpine}
+    command: ["python3", "-I", "/app/docker-ro-proxy.py"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
+      AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
+      WRITE_CLIENTS: agent
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./docker-ro:/app:ro
+    networks:
+      docker: {}
+      agent:
+        aliases: [agent-docker-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:2375/_ping',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   # --------------------------------------------------------------- storage
   garage:
@@ -588,32 +667,9 @@ services:
   # ----------------------------------------------------------------- agent
   # The operator agent (docs/operator-contract.md, docs/security.md), off unless the
   # `agent` profile is on. Reference implementation: OpenClaw. It reads the Docker API
-  # through agent-docker-proxy only (GET allowlist, Env as names only; writes only with
+  # through docker-ro only (core; GET allowlist, Env as names only; writes only with
   # ops.agent.allow_write), never the socket, the install directory or its .env. Its LLM
   # key and chat tokens are AGENT_* variables a human puts in .env.
-  agent-docker-proxy:
-    profiles: ["agent"]
-    image: ${AGENT_PROXY_IMAGE:-python:3.13-alpine}
-    command: ["python3", "-I", "/app/docker-ro-proxy.py"]
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
-      AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
-    volumes:
-      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
-      - ./agent-proxy:/app:ro
-    networks: [agent]
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:2375/_ping',timeout=4)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
   agent:
     profiles: ["agent"]
     image: ${OPENCLAW_IMAGE:-openclaw/openclaw:latest}
@@ -627,7 +683,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      agent-docker-proxy:
+      docker-ro:
         condition: service_healthy
     environment:
       HOME: /agent/state/home
@@ -675,8 +731,12 @@ networks:
     # Ops tools and the proxy only. Not internal: Wetty needs the route to the host's sshd.
     name: ${IHC_OPS_NETWORK:-ihc-ops}
   agent:
-    # The agent and its read-only Docker API only. Internal: the proxy has no way out.
+    # The agent and the read-only Docker API only. Internal: the proxy has no way out.
     name: ${IHC_AGENT_NETWORK:-ihc-agent}
+    internal: true
+  docker:
+    # The portal and the read-only Docker API only. Internal; apps never join it.
+    name: ${IHC_DOCKER_NETWORK:-ihc-docker}
     internal: true
 
 volumes:

@@ -61,7 +61,14 @@ export type AppStatus = {
     host?: { forward_host?: string; forward_port?: number };
     disabled_host?: { forward_host?: string; forward_port?: number };
   };
-  health?: { checked?: boolean; ok?: boolean; status?: number; error?: string; url?: string; sso_checked?: boolean; sso_protected?: boolean | null };
+  health?: {
+    checked?: boolean; ok?: boolean; status?: number; expected_status?: number | null; error?: string; url?: string;
+    sso_checked?: boolean; sso_protected?: boolean | null; sso_expected?: boolean | null; sso_effective?: boolean | null;
+    route_ok?: boolean | null;
+  };
+  kind?: 'app' | 'core' | 'system-test';
+  auth_required?: boolean;
+  mcp?: { tools?: { name: string; access?: string }[] } | null;
 };
 
 export type AppStatusMetrics = {
@@ -202,11 +209,11 @@ export type PlatformConfig = {
   gitea_url: string;
   gitea_org: string;
   authentik_url: string;
-  upstream_host: string;
-  outpost_host: string;
   outpost_port: number;
-  deploy_root: string;
-  port_range: { start: number; end: number; label: string };
+  ingress?: string;
+  tunnel_provider?: string;
+  profiles?: string[];
+  read_only?: boolean;
   timezone: string;
   manifest_filename: string;
   manifest_aliases: string[];

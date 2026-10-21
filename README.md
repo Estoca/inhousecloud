@@ -29,7 +29,7 @@ sudo install -d -o $(id -un) -g $(id -gn) /opt/inhousecloud
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-About a minute for the VM and five for the install. The install ends with seven day-zero steps, with the literal commands: open <http://portal.cloud.localhost> and sign in (the portal is a placeholder: it proves the SSO; to operate, Gitea + `ihc-operator brief`), turn on MFA, copy the backup key off the machine, put a first app on the air with `scripts/ihc-app.sh new <name> --owner <email> --push` (about 30 seconds later behind the same sign-in), and stop or remove a test install ([`docs/cleanup.md`](docs/cleanup.md)). Both paths, with the times measured: [`docs/try-it.md`](docs/try-it.md).
+About a minute for the VM and five for the install. The install ends with seven day-zero steps, with the literal commands: open <http://portal.cloud.localhost> and sign in (the portal: every app with its health, SSO and deploys, and the platform status; read only), turn on MFA, copy the backup key off the machine, put a first app on the air with `scripts/ihc-app.sh new <name> --owner <email> --push` (about 30 seconds later behind the same sign-in), and stop or remove a test install ([`docs/cleanup.md`](docs/cleanup.md)). Both paths, with the times measured: [`docs/try-it.md`](docs/try-it.md).
 
 Or ask a coding agent. Below, Claude Code gets one sentence in Portuguese ("create an internal expense log app on our company cloud and put it on the air") and `ssh` to a box it has never seen; recordings and how they were made are in [`docs/demo/`](docs/demo/).
 
@@ -80,7 +80,7 @@ That machine runs the control plane, the support plane, and the apps:
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);
 - an optional operator agent answers "why is it down" in Slack or Telegram from a generated map of the box, read only by default, inside a written contract (the `agent` profile, [`docs/operator-contract.md`](docs/operator-contract.md));
-- an app portal shows what should exist, what is running, and what changed (next on the roadmap; today a placeholder proves the SSO; to operate, Gitea + `ihc-operator brief`);
+- an app portal shows what should exist, what is running, and what changed: the catalog from the inventory, each app's health and SSO, its deploys, the platform's services and the backup (read only; to change something, Gitea + `ihc-operator brief`);
 - coding agents connect to the same machine and use the same contracts as humans.
 
 This is not meant to replace AWS, Kubernetes, or a mature platform team. It is meant to cover the first, surprisingly large stage where a company needs internal software to be real, authenticated, observable, and repeatable, but does not yet need a distributed platform.
@@ -103,7 +103,7 @@ What a terminal-connected agent does with them, today:
 
 The test of this is a cold run: an agent given only the repository and a one-line request in a layperson's words. Results in `docs/first-run.md`, "Cold agent run".
 
-Not yet: the read-only portal with `GET /api/platform/status` for agents (a placeholder answers today), and tested `public` ingress. `private` ingress (Tailscale, own CA, split DNS, `https://<app>.<domain>` on the tailnet only) is tested end to end: `docs/install-design.md`, "Private ingress".
+Not yet: a service token for agents on the portal's `GET /api/platform/status` (today it answers behind the sign-in), and tested `public` ingress. `private` ingress (Tailscale, own CA, split DNS, `https://<app>.<domain>` on the tailnet only) is tested end to end: `docs/install-design.md`, "Private ingress".
 
 The cloud should also expose live app-building rules for day-to-day app creation. See `docs/app-rules-example.md` for a generalized example based on a real internal app platform rules file.
 
@@ -148,7 +148,7 @@ The support plane keeps the environment operable:
 - Gitea stores repositories and runs the deploy workflows on the box.
 - Portainer gives visibility into containers, images, volumes, and stacks.
 - Glances exposes host-level resource usage.
-- The app portal shows app inventory, deploy runs, health checks, and backups (planned; a placeholder today).
+- The app portal shows app inventory, deploy runs, health checks, SSO, and backups (`portal/`, read only).
 - Postgres and Redis are shared by every app, each app with its own database, role and key prefix; S3-compatible object storage (Garage) is the optional `storage` profile, a bucket and key per app.
 - Portainer and Glances, with a web terminal and a file browser, are the optional `ops` profile, for admins only.
 
@@ -309,7 +309,8 @@ docs/llm-bootstrap.md, docs/agent-setup-contract.md   The agent path
 docs/operator-contract.md, docs/runbooks/             The operator agent (agent profile)
 schemas/               JSON schema for company-app.yaml
 templates/app/         The app template ihc-app new copies: runnable app, manifest, deploy workflow
-examples/minimal-web-app/  The placeholder portal
+portal/                The app portal (core service, read only; portal/README.md)
+examples/minimal-web-app/  A minimal web app
 docker/                compose.yml (core with the Actions runners; profiles storage, ops, backup, agent,
                        cloudflared, tailscale), .env.example, backup/ and deployer/ images
 install.sh             One-command installer: plan, apply, resume, status
@@ -327,7 +328,7 @@ packages/cli/          Placeholder for validation and workflow tooling
 
 ## Status
 
-Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `ihc-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the cloud installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). `private` ingress (Tailscale) is tested end to end too, with a sign-in from another device on the tailnet. Not there yet: the real portal (a placeholder answers), `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
+Usable on one box, with `local` ingress. Proven on clean VMs and recorded in [`docs/first-run.md`](docs/first-run.md): `install.sh` brings up the core cloud with 16 smoke tests (19 with the `storage` and `ops` profiles), `ihc-app` takes an app from `new` to the air behind the sign-in by a push to `main`, and a coding agent that has never seen the cloud installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes). `private` ingress (Tailscale) is tested end to end too, with a sign-in from another device on the tailnet. Not there yet: the portal's people and groups, its token for agents and the MCP gateway, `public` ingress tested end to end, the off-site backup copy and the monthly restore rehearsal.
 
 ## Roadmap
 
@@ -347,11 +348,12 @@ Done:
 - PR 12 and PR 17: the renames, to Open Company Cloud and then to InHouseCloud (`ihc-*` commands, `IHC_*` variables). Only the `OCC_*` variables still load, with a warning, for one version; the old command names do not, and an installation made under an old name is detected and not operated: remove it and install fresh ([`docs/cleanup.md`](docs/cleanup.md#an-installation-made-under-a-previous-name)).
 - PR 13: onboarding after the install: the day-zero handoff, `--plan` as a dry run, stop, start and remove.
 - PR 14: the operator agent in conversation (Telegram), with a memory limit and the writes it can use.
+- PR 20 and PR 22: the real portal, from the internal portal of the reference installation, in `portal/` (one commit, no history), then wired into the installer: built by the `portal` stage, migrations at boot, the inventory read through a read-only mount with a `schema_version` and a contract test on both sides, each app's health and SSO through the proxy, Docker through the read-only API (now core, `docker-ro`), the backup status files, admin by the `ihc-admins` group, smoke test 22 and CI on GitHub Actions.
 - PR 18: `ihc doctor`: one command that checks the box the way the smoke tests do (containers, disk and memory, routes, DNS and TLS for the ingress, the sign-in, Gitea and its runners, Postgres, Redis, the backup, every app's health path, the agent) in about 3 seconds, and says what is wrong and what to do: plain text for a person, `--json` for an agent; `ihc-ro doctor` for the operator agent inside its container.
 
 Next:
 
-- The real portal, ported from the internal portal already running in the reference installation: read-only inventory, deploy runs, health, backups, the people who can sign in and their groups (read from Authentik), and `GET /api/platform/status` for agents.
+- The portal, next steps: the people who can sign in and their groups, read from Authentik with a read-only service account (and opening the portal to `ihc-users`); a read-only service token for agents on `GET /api/platform/status`; the MCP gateway as a second entrypoint of the portal's image.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
 - **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `ihc-app new` and the agent path produce it by default; a company can make it mandatory.

@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appHealthPath, checkHttpHealth, checkSsoProtection, enrichAppsWithHealth, isAuthRedirect, listHttpHealth } from '../src/health-state.js';
+import http from 'node:http';
+import { appHealthPath, checkHttpHealth, checkSsoProtection, enrichAppsWithHealth, isAuthRedirect, listHttpHealth, proxyGet } from '../src/health-state.js';
 
-test('checkHttpHealth checks the first app domain', async () => {
+test('checkHttpHealth goes through the proxy with the Host of the first app domain', async () => {
   const result = await checkHttpHealth({
     slug: 'arquivos-sftp',
     domain: 'arquivos.cloud.localhost, sftp.cloud.localhost',
   }, {
     fetchImpl: async (url, options) => {
-      assert.equal(url, 'https://arquivos.cloud.localhost');
+      assert.equal(url, 'http://proxy:80/');
+      assert.equal(options.headers.host, 'arquivos.cloud.localhost');
       assert.equal(options.method, 'GET');
       assert.equal(options.redirect, 'manual');
       return { status: 200, headers: new Headers() };
@@ -16,6 +18,7 @@ test('checkHttpHealth checks the first app domain', async () => {
   });
 
   assert.equal(result.slug, 'arquivos-sftp');
+  assert.equal(result.url, 'http://arquivos.cloud.localhost');
   assert.equal(result.ok, true);
   assert.equal(result.status, 200);
   assert.equal(result.error, null);
@@ -124,10 +127,10 @@ test('checkHttpHealth probes the healthcheck path declared for the app', async (
   await probe({ slug: 'd', domain: 'd.cloud.localhost' });
 
   assert.deepEqual(urls, [
-    'https://a.cloud.localhost/api/health',
-    'https://b.cloud.localhost/health',
-    'https://c.cloud.localhost/healthz',
-    'https://d.cloud.localhost',
+    'http://proxy:80/api/health',
+    'http://proxy:80/health',
+    'http://proxy:80/healthz',
+    'http://proxy:80/',
   ]);
   assert.equal(appHealthPath({ healthcheck_path: ' /x ' }), '/x');
   assert.equal(appHealthPath({}), '/');
@@ -167,8 +170,9 @@ test('checkHttpHealth treats a redirect to Authentik as unknown, not healthy', a
 test('checkSsoProtection reports the effective Authentik redirect at the app root', async () => {
   const protectedApp = await checkSsoProtection({ slug: 'protegido', domain: 'protegido.cloud.localhost' }, {
     authHost: 'auth.cloud.localhost',
-    fetchImpl: async (url) => {
-      assert.equal(url, 'https://protegido.cloud.localhost');
+    fetchImpl: async (url, options) => {
+      assert.equal(url, 'http://proxy:80/');
+      assert.equal(options.headers.host, 'protegido.cloud.localhost');
       return { status: 302, headers: new Headers({ location: 'http://auth.cloud.localhost/outpost.goauthentik.io/start' }) };
     },
   });
@@ -176,8 +180,62 @@ test('checkSsoProtection reports the effective Authentik redirect at the app roo
     fetchImpl: async () => ({ status: 200, headers: new Headers() }),
   });
 
-  assert.deepEqual(protectedApp, { checked: true, protected: true });
-  assert.deepEqual(publicApp, { checked: true, protected: false });
+  assert.deepEqual(protectedApp, { checked: true, protected: true, status: 302 });
+  assert.deepEqual(publicApp, { checked: true, protected: false, status: 200 });
+});
+
+test('the expected status of the manifest decides health; SSO is effective only as the manifest asks', async () => {
+  const outpost = { status: 302, headers: new Headers({ location: 'http://app.cloud.localhost/outpost.goauthentik.io/start?rd=x' }) };
+  const fetchImpl = async (url) => (url.endsWith('/health') ? { status: 204, headers: new Headers() } : outpost);
+  const { checks } = await listHttpHealth([
+    { slug: 'app', domain: 'app.cloud.localhost', healthcheck: { path: '/health', expected_status: 204 }, auth_required: true },
+    { slug: 'strict', domain: 'strict.cloud.localhost', healthcheck: { path: '/health', expected_status: 200 }, auth_required: true },
+    { slug: 'open', domain: 'open.cloud.localhost', healthcheck: { path: '/health' }, auth_required: false },
+  ], { fetchImpl });
+  const [app, strict, open] = checks;
+  assert.equal(app.ok, true);
+  assert.equal(app.sso_effective, true);
+  assert.equal(app.route_ok, true);
+  assert.equal(strict.ok, false);
+  assert.equal(strict.expected_status, 200);
+  // public by its manifest, but the proxy still sends visitors to the sign-in
+  assert.equal(open.sso_expected, false);
+  assert.equal(open.sso_effective, false);
+});
+
+test('a route the proxy does not know answers 404 at the root: proxy.matched is false', async () => {
+  const fetchImpl = async () => ({ status: 404, headers: new Headers() });
+  const health = await listHttpHealth([{ slug: 'gone', domain: 'gone.cloud.localhost', runtime: { matched: true } }], { fetchImpl });
+  const [app] = enrichAppsWithHealth([{ slug: 'gone', runtime: { matched: true } }], health);
+  assert.equal(app.proxy.matched, false);
+  assert.equal(app.proxy.source, 'proxy-probe');
+  assert.equal(app.overall_status, 'error');
+});
+
+test('a host the proxy does not know: root 200 (its default page) and health 404 is no route', async () => {
+  const fetchImpl = async (url) => ({ status: url.endsWith('/health') ? 404 : 200, headers: new Headers() });
+  const health = await listHttpHealth([{ slug: 'nada', domain: 'nada.cloud.localhost', healthcheck: { path: '/health' }, auth_required: false }], { fetchImpl });
+  assert.equal(health.checks[0].route_ok, false);
+  const [app] = enrichAppsWithHealth([{ slug: 'nada' }], health);
+  assert.equal(app.proxy.matched, false);
+});
+
+test('proxyGet sends the Host header and does not follow redirects', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push({ host: req.headers.host, url: req.url });
+    res.writeHead(302, { location: '/outpost.goauthentik.io/start' });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await proxyGet(`http://127.0.0.1:${server.address().port}/health`, { headers: { host: 'app.cloud.localhost' } });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('Location'), '/outpost.goauthentik.io/start');
+    assert.deepEqual(seen, [{ host: 'app.cloud.localhost', url: '/health' }]);
+  } finally {
+    server.close();
+  }
 });
 
 test('isAuthRedirect distinguishes auth redirects from same-host redirects', () => {

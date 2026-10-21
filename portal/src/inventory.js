@@ -1,9 +1,22 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import YAML from 'yaml';
 import { fromRoot } from './paths.js';
 import { readPlatformConfig } from './config.js';
 
-const CATEGORY_RE = /^[a-z][a-z0-9_]{1,63}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Inventario dos apps, so leitura.
+//
+// No InHouseCloud a fonte e <install-dir>/inventory.json, que so `ihc-app provision`
+// escreve (scripts/lib/inventory.py tem o contrato, schema_version 1): um objeto `apps`
+// indexado por slug. O portal monta o diretorio catalog/ so leitura e le esse arquivo
+// por um adaptador (readInventory), que devolve a forma que o resto do portal usa:
+// `apps` como lista, com domain, repo_url, docker_stack, healthcheck e auth. O proprio
+// portal entra no catalogo como servico core, a partir do seu company-app.yaml
+// (PORTAL_MANIFEST_PATH). O formato antigo (lista de apps, inventory/apps.example.json)
+// continua lido, para desenvolvimento sem o cloud.
+//
+// Nada aqui escreve: descricao, dono e categoria mudam no company-app.yaml do app, por push.
+
+export const SUPPORTED_SCHEMA_VERSION = 1;
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -14,290 +27,178 @@ export function isAllowedRepoUrl(value, config = readPlatformConfig()) {
   const pattern = new RegExp(`^https://(github\\.com|${escapeRegExp(config.giteaHost)})/.+`, 'i');
   return pattern.test(String(value ?? ''));
 }
-const DOCKER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
-const LIFECYCLES = new Set(['active', 'review', 'disabled', 'archived']);
 
-// O inventario real (inventory/apps.json) vive fora do repo e da imagem:
-// INVENTORY_PATH aponta para ele. Sem arquivo, cai no apps.example.json do
-// repo, marcado como exemplo.
+// O inventario real vive fora do repo e da imagem: INVENTORY_PATH aponta para ele (no
+// cloud, /ihc/catalog/inventory.json). Sem INVENTORY_PATH, cai no apps.example.json do
+// repo, marcado como exemplo. Com INVENTORY_PATH e sem arquivo, o catalogo fica vazio
+// com o erro, nunca com o exemplo.
 export function getInventoryExamplePath() {
   return fromRoot('inventory', 'apps.example.json');
 }
 
 export function getInventoryPath(env = process.env) {
-  const configured = typeof env.INVENTORY_PATH === 'string' && env.INVENTORY_PATH.trim()
-    ? env.INVENTORY_PATH.trim()
-    : fromRoot('inventory', 'apps.json');
-  return configured;
+  return typeof env.INVENTORY_PATH === 'string' && env.INVENTORY_PATH.trim() ? env.INVENTORY_PATH.trim() : null;
 }
 
 export function resolveInventoryPath(env = process.env) {
   const configured = getInventoryPath(env);
-  if (existsSync(configured)) return { path: configured, example: false };
+  if (configured) return { path: configured, example: false };
   return { path: getInventoryExamplePath(), example: true };
 }
 
+function cleanText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function hostOfUrl(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+export function isIhcInventory(raw) {
+  return Boolean(raw) && typeof raw === 'object' && !Array.isArray(raw.apps)
+    && (raw.schema_version !== undefined || (raw.apps && typeof raw.apps === 'object'));
+}
+
+// Um registro do ihc-app (apps.<slug> do inventory.json) na forma do portal.
+export function adaptIhcApp(slug, record = {}, config = readPlatformConfig()) {
+  const healthPath = cleanText(record.healthcheck?.path) || cleanText(record.runtime?.health_path) || '/';
+  const healthStatus = Number(record.healthcheck?.status ?? record.runtime?.health_status) || 200;
+  const authRequired = typeof record.auth?.required === 'boolean'
+    ? record.auth.required
+    : record.runtime?.auth_required !== false;
+  const repository = cleanText(record.repository);
+  const mcp = record.mcp && typeof record.mcp === 'object' ? record.mcp : null;
+  const systemTest = record.kind === 'system-test';
+  return {
+    slug: record.slug || slug,
+    name: cleanText(record.name) || slug,
+    description: cleanText(record.description) ?? undefined,
+    owner_email: cleanText(record.owner_email),
+    url: cleanText(record.url),
+    domain: hostOfUrl(record.url) || `${slug}.${config.baseDomain}`,
+    category: systemTest ? 'system_test' : 'internal_app',
+    lifecycle: 'active',
+    kind: record.kind || 'app',
+    source: 'ihc-app',
+    repository,
+    repo_url: repository ? `${config.giteaPublicUrl}/${repository}` : null,
+    last_commit: cleanText(record.last_commit),
+    created_at: cleanText(record.created_at),
+    provisioned_at: cleanText(record.provisioned_at),
+    // O projeto Compose de um app e o slug (docs/operator-contract.md).
+    docker_stack: slug,
+    docker_service: cleanText(record.runtime?.service),
+    port: Number(record.runtime?.port) || null,
+    healthcheck_path: healthPath,
+    healthcheck: { path: healthPath, expected_status: healthStatus },
+    auth_required: authRequired,
+    mcp,
+    agent_interface: mcp ? { mcp } : undefined,
+  };
+}
+
+// O portal se ve no catalogo: servico core (sobe com o install, antes do Gitea), nao
+// app do ihc-app. Os dados vem do seu company-app.yaml.
+export function portalCoreApp(env = process.env, config = readPlatformConfig(env)) {
+  const manifestPath = cleanText(env.PORTAL_MANIFEST_PATH) || fromRoot('company-app.yaml');
+  let manifest = {};
+  try {
+    manifest = YAML.parse(readFileSync(manifestPath, 'utf8')) || {};
+  } catch {
+    return null;
+  }
+  const healthPath = cleanText(manifest.runtime?.healthcheck?.path) || '/health';
+  const mcp = manifest.agent_interface?.mcp && typeof manifest.agent_interface.mcp === 'object' ? manifest.agent_interface.mcp : null;
+  return {
+    slug: cleanText(manifest.app?.slug) || 'portal',
+    name: cleanText(manifest.app?.name) || 'Portal',
+    description: cleanText(manifest.app?.description) ?? undefined,
+    owner_email: null,
+    url: config.portalUrl,
+    domain: config.portalHost,
+    category: 'internal_app',
+    lifecycle: 'active',
+    kind: 'core',
+    source: 'core',
+    repository: null,
+    repo_url: null,
+    docker_stack: config.project,
+    docker_service: cleanText(manifest.runtime?.service) || 'portal',
+    port: Number(manifest.runtime?.port) || 8080,
+    healthcheck_path: healthPath,
+    healthcheck: { path: healthPath, expected_status: Number(manifest.runtime?.healthcheck?.expected_status) || 200 },
+    auth_required: manifest.auth?.required !== false,
+    mcp,
+    agent_interface: mcp ? { mcp } : undefined,
+  };
+}
+
+export function adaptInventory(raw, { env = process.env, config = readPlatformConfig(env), sourcePath = null, mtime = null } = {}) {
+  if (!isIhcInventory(raw)) return { ...raw, format: 'list', apps: Array.isArray(raw?.apps) ? raw.apps : [] };
+  const schemaVersion = raw.schema_version ?? null;
+  const apps = Object.entries(raw.apps || {})
+    .filter(([, record]) => record && typeof record === 'object')
+    .map(([slug, record]) => adaptIhcApp(slug, record, config))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+  const core = portalCoreApp(env, config);
+  const provisioned = apps.map((app) => app.provisioned_at).filter(Boolean).sort();
+  return {
+    format: 'ihc',
+    schema_version: schemaVersion,
+    // Um schema mais novo que o que o portal entende: le o que reconhece e avisa.
+    schema_supported: schemaVersion === null || schemaVersion <= SUPPORTED_SCHEMA_VERSION,
+    source: `${sourcePath || 'inventory.json'} (ihc-app, schema ${schemaVersion ?? 'none'})`,
+    updated_at: provisioned.at(-1) || mtime,
+    installation_id: raw.installation_id ?? null,
+    apps: core && !apps.some((app) => app.slug === core.slug) ? [core, ...apps] : apps,
+    docker_containers: [],
+  };
+}
+
+// Ultima leitura boa, por caminho: um arquivo trocado no meio da leitura nao derruba o
+// catalogo.
+const lastGood = new Map();
+
 export function readInventory(env = process.env) {
   const resolved = resolveInventoryPath(env);
-  const inventory = JSON.parse(readFileSync(resolved.path, 'utf8'));
-  return resolved.example
+  let raw;
+  let mtime = null;
+  try {
+    raw = JSON.parse(readFileSync(resolved.path, 'utf8'));
+    mtime = statSync(resolved.path).mtime.toISOString();
+  } catch (error) {
+    const previous = lastGood.get(resolved.path);
+    if (previous) return { ...previous, stale: true, error: error.code || error.message };
+    const empty = adaptInventory({ schema_version: SUPPORTED_SCHEMA_VERSION, apps: {} }, { env, sourcePath: resolved.path });
+    return { ...empty, error: error.code === 'ENOENT' ? 'inventory_missing' : error.message };
+  }
+  const inventory = adaptInventory(raw, { env, sourcePath: resolved.path, mtime });
+  const result = resolved.example
     ? { ...inventory, source: `${inventory.source ?? 'inventory/apps.example.json'} (exemplo; defina INVENTORY_PATH)`, example: true }
     : inventory;
+  lastGood.set(resolved.path, result);
+  return result;
 }
-
-function cleanString(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-export function validateAppMetadata(input = {}) {
-  const errors = [];
-  const category = cleanString(input.category);
-  const ownerEmail = cleanString(input.owner_email).toLowerCase();
-  const repoUrl = cleanString(input.repo_url);
-  const target = cleanString(input.target);
-  const dockerStack = cleanString(input.docker_stack);
-  const description = cleanString(input.description);
-  const lifecycle = cleanString(input.lifecycle);
-
-  if (category && !CATEGORY_RE.test(category)) {
-    errors.push({ path: 'category', message: 'must be lowercase snake_case' });
-  }
-
-  if (ownerEmail && !EMAIL_RE.test(ownerEmail)) {
-    errors.push({ path: 'owner_email', message: 'must be a valid email' });
-  }
-
-  if (repoUrl && !isAllowedRepoUrl(repoUrl)) {
-    errors.push({ path: 'repo_url', message: `must be a GitHub or ${readPlatformConfig().giteaHost} URL` });
-  }
-
-  if (target && !DOCKER_NAME_RE.test(target)) {
-    errors.push({ path: 'target', message: 'must be a Docker container name' });
-  }
-
-  if (dockerStack && !DOCKER_NAME_RE.test(dockerStack)) {
-    errors.push({ path: 'docker_stack', message: 'must be a Docker Compose project/stack name' });
-  }
-  if (description.length > 280) {
-    errors.push({ path: 'description', message: 'must be at most 280 characters' });
-  }
-  if (lifecycle && !LIFECYCLES.has(lifecycle)) {
-    errors.push({ path: 'lifecycle', message: 'must be active, review, disabled, or archived' });
-  }
-
-  return {
-    ok: errors.length === 0,
-    errors,
-    metadata: {
-      ...(category ? { category } : {}),
-      owner_email: ownerEmail || null,
-      repo_url: repoUrl || null,
-      target: target || null,
-      docker_stack: dockerStack || null,
-      ...(description ? { description } : {}),
-      ...(lifecycle ? { lifecycle } : {}),
-    },
-  };
-}
-
-export function updateInventoryAppMetadata(slug, input, {
-  inventoryPath = getInventoryPath(),
-} = {}) {
-  const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  const appIndex = inventory.apps.findIndex((app) => app.slug === slug);
-  if (appIndex === -1) {
-    return {
-      ok: false,
-      error: 'app_not_found',
-      app: null,
-    };
-  }
-
-  const validation = validateAppMetadata(input);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      error: 'invalid_app_metadata',
-      errors: validation.errors,
-      app: null,
-    };
-  }
-
-  const current = inventory.apps[appIndex];
-  const next = {
-    ...current,
-    ...(validation.metadata.category ? { category: validation.metadata.category } : {}),
-  };
-
-  if (validation.metadata.owner_email) {
-    next.owner_email = validation.metadata.owner_email;
-  } else {
-    delete next.owner_email;
-  }
-
-  if (validation.metadata.repo_url) {
-    next.repo_url = validation.metadata.repo_url;
-  } else {
-    delete next.repo_url;
-  }
-
-  if (validation.metadata.target) {
-    next.target = validation.metadata.target;
-  } else {
-    delete next.target;
-  }
-
-  if (validation.metadata.docker_stack) {
-    next.docker_stack = validation.metadata.docker_stack;
-  } else {
-    delete next.docker_stack;
-  }
-  if (validation.metadata.description) next.description = validation.metadata.description;
-  else delete next.description;
-  if (validation.metadata.lifecycle) next.lifecycle = validation.metadata.lifecycle;
-  else delete next.lifecycle;
-
-  inventory.apps[appIndex] = next;
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
-
-  return {
-    ok: true,
-    app: next,
-  };
-}
-
-export function upsertInventoryApp(slug, input, {
-  inventoryPath = getInventoryPath(),
-} = {}) {
-  const cleanSlug = cleanString(slug);
-  if (!SLUG_RE.test(cleanSlug)) {
-    return {
-      ok: false,
-      error: 'invalid_app_slug',
-      errors: [{ path: 'slug', message: 'must be lowercase kebab-case' }],
-      app: null,
-    };
-  }
-
-  const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  const validation = validateAppMetadata({
-    category: input.category || 'internal_app',
-    owner_email: input.owner_email,
-    repo_url: input.repo_url,
-    target: input.target,
-    docker_stack: input.docker_stack,
-    description: input.description,
-    lifecycle: input.lifecycle,
-  });
-  const port = Number(input.port);
-  if (!Number.isInteger(port) || port <= 0) {
-    validation.ok = false;
-    validation.errors.push({ path: 'port', message: 'must be a positive integer' });
-  }
-  const domain = cleanString(input.domain);
-  if (!domain) {
-    validation.ok = false;
-    validation.errors.push({ path: 'domain', message: 'is required' });
-  }
-
-  if (!validation.ok) {
-    return {
-      ok: false,
-      error: 'invalid_app_metadata',
-      errors: validation.errors,
-      app: null,
-    };
-  }
-
-  const apps = Array.isArray(inventory.apps) ? inventory.apps : [];
-  const appIndex = apps.findIndex((app) => app.slug === cleanSlug);
-  const current = appIndex === -1 ? { slug: cleanSlug } : apps[appIndex];
-  const next = {
-    ...current,
-    slug: cleanSlug,
-    domain,
-    category: validation.metadata.category || current.category || 'internal_app',
-    port,
-    status: input.status || current.status || ['OK', 'REDIRECT'],
-  };
-
-  for (const key of ['owner_email', 'repo_url', 'target', 'docker_stack', 'description', 'lifecycle']) {
-    if (validation.metadata[key]) {
-      next[key] = validation.metadata[key];
-    } else {
-      delete next[key];
-    }
-  }
-
-  if (appIndex === -1) {
-    apps.push(next);
-  } else {
-    apps[appIndex] = next;
-  }
-  inventory.apps = apps.sort((a, b) => a.slug.localeCompare(b.slug));
-  inventory.updated_at = new Date().toISOString();
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
-
-  return {
-    ok: true,
-    app: next,
-  };
-}
-
-export function updateInventoryDockerMetadata(name, input, {
-  inventoryPath = getInventoryPath(),
-} = {}) {
-  const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  const validation = validateAppMetadata(input);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      error: 'invalid_docker_metadata',
-      errors: validation.errors,
-      container: null,
-    };
-  }
-
-  const containers = Array.isArray(inventory.docker_containers) ? inventory.docker_containers : [];
-  const containerIndex = containers.findIndex((container) => container.name === name);
-  const current = containerIndex === -1 ? { name } : containers[containerIndex];
-  const next = {
-    ...current,
-    name,
-    ...(validation.metadata.category ? { category: validation.metadata.category } : {}),
-  };
-
-  if (validation.metadata.owner_email) {
-    next.owner_email = validation.metadata.owner_email;
-  } else {
-    delete next.owner_email;
-  }
-
-  if (containerIndex === -1) {
-    containers.push(next);
-  } else {
-    containers[containerIndex] = next;
-  }
-
-  inventory.docker_containers = containers.sort((a, b) => a.name.localeCompare(b.name));
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
-
-  return {
-    ok: true,
-    container: next,
-  };
-}
-
 export function enrichDockerContainersWithInventory(dockerState, inventory = readInventory()) {
   const appByTarget = new Map((inventory.apps ?? [])
     .filter((app) => app.target)
     .map((app) => [app.target, app]));
   const appsByStack = new Map();
+  // Um app que e um servico dentro de um projeto maior (o portal no projeto do cloud)
+  // so leva os containers desse servico.
+  const appsByService = new Map();
   const containerByName = new Map(dockerState.containers.map((container) => [container.name, container]));
   for (const app of inventory.apps ?? []) {
     const inferredStack = app.docker_stack || containerByName.get(app.target)?.docker_stack;
     if (!inferredStack) continue;
+    if (app.kind === 'core') {
+      appsByService.set(`${inferredStack}/${app.docker_service}`, app);
+      continue;
+    }
     const current = appsByStack.get(inferredStack) ?? [];
     current.push(app);
     appsByStack.set(inferredStack, current);
@@ -309,6 +210,7 @@ export function enrichDockerContainersWithInventory(dockerState, inventory = rea
     ...dockerState,
     containers: dockerState.containers.map((container) => {
       const app = appByTarget.get(container.name)
+        ?? appsByService.get(`${container.docker_stack}/${container.docker_service}`)
         ?? appsByStack.get(container.docker_stack)?.[0]
         ?? null;
       const metadata = metadataByName.get(container.name) ?? null;
@@ -433,10 +335,10 @@ export function inferAppsFromDockerMetadata({
   return inferred;
 }
 
-export function listApps() {
-  return readInventory().apps;
+export function listApps(env = process.env) {
+  return readInventory(env).apps;
 }
 
-export function findApp(slug) {
-  return listApps().find((app) => app.slug === slug) ?? null;
+export function findApp(slug, env = process.env) {
+  return listApps(env).find((app) => app.slug === slug) ?? null;
 }

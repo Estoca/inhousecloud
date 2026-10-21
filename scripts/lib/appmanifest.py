@@ -130,6 +130,9 @@ def cmd_vars(path, expected):
             print("%s: %s" % (path, e), file=sys.stderr)
         sys.exit(1)
     redis = get(m, "dependencies.redis", {}) or {}
+    # The agent interface goes to the inventory as is, for the portal's catalog; the
+    # portal (and later its MCP gateway) validates it, the executor only carries it.
+    mcp = get(m, "agent_interface.mcp") or get(m, "mcp")
     out = {
         "M_SLUG": slug,
         "M_NAME": str(get(m, "app.name")),
@@ -144,6 +147,8 @@ def cmd_vars(path, expected):
         "M_REDIS": "true" if isinstance(redis, dict) and truthy(redis.get("required", False)) else "false",
         "M_BUCKET": "true" if truthy(get(m, "object_storage.required", False)) else "false",
         "M_ENV_EXAMPLE": str(get(m, "deploy.env_example", ".env.example")),
+        "M_DESCRIPTION": " ".join(str(get(m, "app.description", "")).split())[:280],
+        "M_MCP": json.dumps(mcp, sort_keys=True) if isinstance(mcp, dict) else "null",
     }
     for k, v in out.items():
         print("%s=%s" % (k, shlex.quote(v)))

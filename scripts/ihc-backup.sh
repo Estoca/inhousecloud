@@ -307,8 +307,9 @@ EOF
     vols="$vols $v"
   done
   if [ -n "$vols" ]; then path_backup volumes volumes "${vols# }" || return 1; fi
-  # 3. The cloud configuration: the install directory without backups/ and local/.
-  path_backup config config "$IHC" "$IHC/backups" "$IHC/local" "$IHC/portal-placeholder/node_modules" || return 1
+  # 3. The cloud configuration: the install directory without backups/, local/ and the
+  #    portal's build context (copied from the checkout on every install run).
+  path_backup config config "$IHC" "$IHC/backups" "$IHC/local" "$IHC/portal" "$IHC/portal-placeholder" || return 1
   snap="$LAST_SNAP"
   # 4. Retention, grouped by host and tags (one group per dump name, one for volumes, one for config).
   log "retention: ${KEEP_D} daily, ${KEEP_W} weekly, ${KEEP_M} monthly"

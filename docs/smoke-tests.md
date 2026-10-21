@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 19 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
+Step 18 of the install sequence, 22 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -121,7 +121,7 @@ scripts/lib/s3.py put http://127.0.0.1 "s3.$BASE_DOMAIN" app-smoke-s3-b smoke.tx
 #       A's PUT and GET on B's bucket answer 403
 
 # 20. The operator agent (skipped only when the agent profile is off)
-docker compose -f "$IHC_COMPOSE_FILE" ps agent agent-docker-proxy
+docker compose -f "$IHC_COMPOSE_FILE" ps agent docker-ro
 python3 -c '...' "$AGENT_DIR/reference/brief.json"                  # services, access matrix, no secret value
 docker exec <agent> node -e 'fetch(DOCKER_API + "/containers/<postgres>/restart", {method: "POST"})'
 docker inspect <agent>                                               # mounts, networks, environment
@@ -151,6 +151,19 @@ tailscale nc "$TAILSCALE_IP" 80 / 443 / 81                           # the tailn
 #       trust; in private ingress any *.<BASE_DOMAIN> resolves to TAILSCALE_IP on the
 #       node's DNS, the tailnet address answers on 80 and 443 and not on the proxy admin
 #       port, and no auth key is left in .env or in the node's container
+
+# 22. The portal reads the cloud (runs inside test 16, while smoke-app is on the air)
+docker compose -f "$IHC_COMPOSE_FILE" exec -T portal wget -qO- http://127.0.0.1:8080/health
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: portal.$BASE_DOMAIN" http://127.0.0.1/api/platform/status
+docker compose -f "$IHC_COMPOSE_FILE" exec -T gitea curl -H 'X-authentik-email: <admin>' -H 'X-authentik-groups: ihc-admins' http://portal:8080/api/platform/status
+docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl -H 'X-authentik-email: <admin>' -H 'X-authentik-groups: ihc-admins' http://portal:8080/api/platform/status
+docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl ... 'http://portal:8080/api/apps-status?refresh=1'
+# PASS: /health ok with its migrations applied; anonymous through the proxy is 302 to
+#       the outpost; the same headers from another container on the ihc network are
+#       anonymous (401: the portal trusts them only from the proxy); from the proxy with
+#       the admin group, 200 with the core services; the catalog lists the portal itself
+#       (kind core) healthy and smoke-app with health ok, SSO effective (true), its route
+#       found and its containers seen
 ```
 
 Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
@@ -164,5 +177,7 @@ Test 14 restores every dump through `restic dump` to compare checksums; on a box
 Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `ihc-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `ihc-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `ihc-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `ihc-app list` (shown with `--all` and in the operator brief) until `ihc-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `ihc-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
 
 Test 19 provisions with the same function `ihc-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
+
+Test 22 stands in for a signed-in admin by sending, from the proxy container, the headers the outpost would set: the browser path (forward auth, then the same headers) is test 9 plus the outpost itself. The positive login with a real session needs the admin's password, which a human replaces; `scripts/sso-login-check.sh --target "$PORTAL_BASE_URL"` checks it by hand.
 
 Test 6 is the one most often wrong on a real box: a Gitea configured to require sign-in answers 403 to an anonymous version call, and a probe without the token reports the service down while everything works.

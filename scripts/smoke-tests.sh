@@ -3,12 +3,13 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 21. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 22. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core), redeploys it, then removes it (ihc-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
 # storage and is skipped only when the storage profile is off; test 20 covers the operator
-# agent and is skipped when the agent profile is off. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# agent and is skipped when the agent profile is off; test 22 covers the portal and runs inside
+# test 16, while smoke-app is on the air. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   IHC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -50,7 +51,7 @@ result() { # NUMBER NAME STATUS DETAIL
   esac
 }
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
-CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal gitea-runner gitea-deployer"
+CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal gitea-runner gitea-deployer"
 STORAGE=false; case ",$COMPOSE_PROFILES," in *,storage,*) STORAGE=true; CORE="$CORE garage" ;; esac
 # TLS internal: every HTTPS check verifies the certificate against the cloud CA
 # (<install-dir>/local/ca/ca.crt), as a device that installed it would; never -k.
@@ -202,18 +203,67 @@ print(m[0].get("status","") if m else "")' "$T16_SHA")"
   [ "$T16_ST" = success ]
 }
 t16_mark() { # mark smoke-app as a system test in inventory.json (it is created by the deploy)
-  $PY - "$INSTALL_DIR/inventory.json" <<'PY'
-import json, os, sys, tempfile
-p = sys.argv[1]
-inv = json.load(open(p)); a = (inv.get("apps") or {}).get("smoke-app")
+  $PY - "$IHC_LIB" "$INSTALL_DIR/inventory.json" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import inventory
+p = sys.argv[2]
+inv = inventory.load(p); a = (inv.get("apps") or {}).get("smoke-app")
 if a is not None and a.get("kind") != "system-test":
     a["kind"] = "system-test"
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".inventory.")
-    with os.fdopen(fd, "w") as f:
-        json.dump(inv, f, indent=2); f.write("\n")
-    os.chmod(tmp, 0o644); os.replace(tmp, p)
+    inventory.save(p, inv)
 PY
 }
+# 22. the portal reads the cloud: /health answers with its migrations applied; anonymous
+#     /api/platform/status through the proxy goes to the SSO; the same request from another
+#     container on the ihc network with forged admin headers is anonymous (401); from the
+#     proxy with the admin group it is 200 with the core services; and the catalog lists
+#     the portal itself and APP (smoke-app of test 16, on the air) with health ok, SSO
+#     effective and its route found. Called by t16 before it removes the app.
+portal_as() { # SERVICE PATH [GROUPS] -> body, then the HTTP code on the last line
+  dc exec -T "$1" curl -sS --max-time 20 -H "X-authentik-email: $GITEA_ADMIN_EMAIL" -H "X-authentik-groups: ${3:-$AUTHENTIK_PORTAL_GROUP}" \
+    -w '\n%{http_code}' "http://portal:8080$2" 2>/dev/null || printf '\n000'
+}
+T22_DONE=false
+t22() {
+  local app="$1" bad="" good="" out code body loc
+  T22_DONE=true
+  out="$(dc exec -T portal wget -qO- http://127.0.0.1:8080/health 2>/dev/null || true)"
+  [ "$(printf '%s' "$out" | jsonq get ok)" = true ] && [ "$(printf '%s' "$out" | jsonq get migrations.ok)" = true ] \
+    && good="/health ok, $(printf '%s' "$out" | jsonq get migrations.total) migrations" || bad="$bad health/migrations:'$(printf '%.120s' "$out")'"
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /api/platform/status)" 2>/dev/null || echo 000)"
+  case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) good="$good; anonymous status to the SSO" ;; *) bad="$bad anonymous-status:${loc%% *}" ;; esac
+  out="$(portal_as gitea /api/platform/status)"; code="${out##*$'\n'}"
+  [ "$code" = 401 ] && good="$good; forged headers from another container 401" || bad="$bad forged-headers-from-gitea:$code"
+  out="$(portal_as proxy /api/platform/status)"; code="${out##*$'\n'}"; body="${out%$'\n'*}"
+  if [ "$code" = 200 ] && [ "$(printf '%s' "$body" | jsonq len services)" -ge 9 ] 2>/dev/null; then
+    good="$good; status 200 with $(printf '%s' "$body" | jsonq len services) services ($(printf '%s' "$body" | jsonq get overall))"
+  else bad="$bad status-from-proxy:$code"; fi
+  out="$(portal_as proxy '/api/apps-status?refresh=1')"; code="${out##*$'\n'}"; body="${out%$'\n'*}"
+  out="$(printf '%s' "$body" | $PY -c 'import json,sys
+app=sys.argv[1]
+try: d=json.load(sys.stdin)
+except Exception: print("no JSON"); sys.exit()
+apps={a.get("slug"):a for a in d.get("apps",[])}
+bad=[]
+p=[a for a in apps.values() if a.get("kind")=="core"]
+if not p: bad.append("portal not in its catalog")
+elif not (p[0].get("health") or {}).get("ok"): bad.append("portal health %s" % (p[0].get("health") or {}).get("status"))
+if app:
+    a=apps.get(app)
+    if not a: bad.append("%s not in the catalog" % app)
+    else:
+        h=a.get("health") or {}
+        if not h.get("ok"): bad.append("%s health %s" % (app, h.get("status")))
+        if h.get("sso_effective") is not True: bad.append("%s sso_effective %s" % (app, h.get("sso_effective")))
+        if (a.get("proxy") or {}).get("matched") is not True: bad.append("%s route not found" % app)
+        if (a.get("runtime") or {}).get("matched") is not True: bad.append("%s containers not seen" % app)
+print("; ".join(bad) or "ok %d apps (schema %s)" % (len(apps), d.get("schema_version")))' "$app")"
+  case "$out" in ok*) good="$good; catalog $out: portal and ${app:-no app} healthy, SSO effective" ;; *) bad="$bad catalog($code):$out" ;; esac
+  [ -n "$app" ] || bad="$bad no-app-on-the-air(test-16-failed-before-it)"
+  [ -z "$bad" ] && result 22 portal pass "${good#; }" || result 22 portal fail "${bad# }"
+}
+
 t16() {
   local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 removed
   T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
@@ -249,6 +299,7 @@ t16() {
   PGPASSWORD="$(envfile get "$app_env" PGPASSWORD)" dc exec -T -e PGPASSWORD postgres psql -h 127.0.0.1 -U "$db" -d "$db" -Atc 'SELECT current_user' >/dev/null 2>&1 \
     || { result 16 app-deploy fail "role $db cannot sign in with the password in $app_env"; rm -rf "$work"; return; }
   fp1="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
+  t22 "$slug"
   if ! t16_push "$work/$slug" "smoke test 16: redeploy"; then
     result 16 app-deploy fail "redeploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
   fi
@@ -265,6 +316,7 @@ t16() {
   result 16 app-deploy pass "push to green run in ${run1}s, redeploy in ${T16_RUN}s kept the password; /health 200, / to the SSO, $db owned by its role; $removed"
 }
 t16
+[ "$T22_DONE" = true ] || t22 ""
 
 # 17. the ops tools are behind the SSO: an anonymous request to the root of
 #     terminal.<BASE_DOMAIN> (when the web terminal is installed), files.<BASE_DOMAIN>,
@@ -365,7 +417,7 @@ if [ "$STORAGE" = true ]; then t19; else result 19 object-storage skip "storage 
 AGENT=false; case ",$COMPOSE_PROFILES," in *,agent,*) AGENT=true ;; esac
 t20() {
   local bad="" h acid pgid out insp
-  for s in agent-docker-proxy agent; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
+  for s in docker-ro agent; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
   [ -z "$bad" ] || { result 20 operator-agent fail "not healthy:$bad"; return; }
   acid="$(dc ps -q agent | head -n 1)"; pgid="$(dc ps -q postgres | head -n 1)"
   out="$($PY - "$AGENT_DIR/reference" "$ENV_FILE" "$INSTALL_DIR" <<'PY'
