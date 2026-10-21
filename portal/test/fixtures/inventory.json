@@ -1,0 +1,265 @@
+{
+  "source": "test/fixtures/inventory.json",
+  "updated_at": "2026-10-16T00:00:00.000Z",
+  "apps": [
+    {
+      "slug": "pedidos",
+      "domain": "pedidos.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8101,
+      "target": "pedidos-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/pedidos"
+    },
+    {
+      "slug": "app-02",
+      "domain": "app-02.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8102,
+      "target": "app-02-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-02"
+    },
+    {
+      "slug": "app-03",
+      "domain": "app-03.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8103,
+      "target": "app-03-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-03"
+    },
+    {
+      "slug": "app-04",
+      "domain": "app-04.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8104,
+      "target": "app-04-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-04"
+    },
+    {
+      "slug": "app-05",
+      "domain": "app-05.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8105,
+      "target": "app-05-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-05"
+    },
+    {
+      "slug": "app-06",
+      "domain": "app-06.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8106,
+      "target": "app-06-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-06"
+    },
+    {
+      "slug": "app-07",
+      "domain": "app-07.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8107,
+      "target": "app-07-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-07"
+    },
+    {
+      "slug": "app-08",
+      "domain": "app-08.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8108,
+      "target": "app-08-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-08"
+    },
+    {
+      "slug": "app-09",
+      "domain": "app-09.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8109,
+      "target": "app-09-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-09"
+    },
+    {
+      "slug": "app-10",
+      "domain": "app-10.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8110,
+      "target": "app-10-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-10"
+    },
+    {
+      "slug": "app-11",
+      "domain": "app-11.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8111,
+      "target": "app-11-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-11"
+    },
+    {
+      "slug": "app-12",
+      "domain": "app-12.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8112,
+      "target": "app-12-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-12"
+    },
+    {
+      "slug": "app-13",
+      "domain": "app-13.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8113,
+      "target": "app-13-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-13"
+    },
+    {
+      "slug": "app-14",
+      "domain": "app-14.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8114,
+      "target": "app-14-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-14"
+    },
+    {
+      "slug": "app-15",
+      "domain": "app-15.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8115,
+      "target": "app-15-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-15"
+    },
+    {
+      "slug": "app-16",
+      "domain": "app-16.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8116,
+      "target": "app-16-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-16"
+    },
+    {
+      "slug": "app-17",
+      "domain": "app-17.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8117,
+      "target": "app-17-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-17"
+    },
+    {
+      "slug": "app-18",
+      "domain": "app-18.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8118,
+      "target": "app-18-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-18"
+    },
+    {
+      "slug": "app-19",
+      "domain": "app-19.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8119,
+      "target": "app-19-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-19"
+    },
+    {
+      "slug": "app-20",
+      "domain": "app-20.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8120,
+      "target": "app-20-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-20"
+    },
+    {
+      "slug": "app-21",
+      "domain": "app-21.exemplo.cloud",
+      "category": "internal_app",
+      "port": 8121,
+      "target": "app-21-app-1",
+      "status": [
+        "OK"
+      ],
+      "owner_email": "ti@exemplo.cloud",
+      "repo_url": "https://git.exemplo.cloud/org/app-21"
+    }
+  ],
+  "docker_containers": [
+    {
+      "name": "authentik-postgresql-1",
+      "category": "infra",
+      "owner_email": "ti@exemplo.cloud"
+    }
+  ]
+}

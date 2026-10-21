@@ -1,0 +1,29 @@
+schema_version: 1
+
+app:
+  slug: inhousecloud-portal
+  name: InHouseCloud portal
+  owner_email: admin@example.com
+  description: Portal do InHouseCloud: catalogo, saude, deploys e status dos apps e da plataforma.
+
+runtime:
+  type: docker-compose
+  compose_file: docker-compose.prod.yml
+  service: app
+  healthcheck:
+    type: http
+    path: /api/health
+    expected_status: 200
+
+deploy:
+  enabled: true
+  domain: portal.cloud.localhost
+  port: 8016
+  env_file: .env
+  env_example: .env.example
+
+auth:
+  required: true
+  provider: authentik
+  allowed_domains:
+    - example.com
