@@ -1076,6 +1076,7 @@ stage_foundation() {
   ok "compose file validates"
   step "pulling images, building the portal and creating containers, network and volumes (first run takes a few minutes)"
   dc build --quiet portal >&2 || { fail "the portal image did not build (docker compose build portal)"; return 1; }
+  docker image rm "$(env_get COMPOSE_PROJECT_NAME)-portal:placeholder" >/dev/null 2>&1 && ok "the placeholder portal's image removed" || true
   has_profile backup && dc build --quiet backup >&2
   build_deployer || { fail "deployer image build failed"; return 1; }
   dc up --no-start --quiet-pull >&2
