@@ -1,0 +1,19 @@
+# Test fixture: an install's .env with the names of its time. No real values.
+COMPOSE_PROJECT_NAME=ihc
+COMPOSE_PROFILES=backup
+IHC_NETWORK=ihc
+IHC_OPS_NETWORK=ihc-ops
+INGRESS=local
+BASE_DOMAIN=cloud.localhost
+TLS_MODE=off
+PORTAL_BASE_URL=http://portal.cloud.localhost
+AUTHENTIK_BASE_URL=http://auth.cloud.localhost
+GITEA_BASE_URL=http://git.cloud.localhost
+AUTHENTIK_PORTAL_GROUP=occ-admins
+AUTHENTIK_APP_GROUP=occ-users
+GITEA_ORGANIZATION=company
+GITEA_RUNNER_NAME=ihc-runner
+POSTGRES_DB=ihc
+POSTGRES_USER=ihc
+BACKUP_ENABLED=true
+BACKUP_DESTINATION=/tmp/fixture-backups

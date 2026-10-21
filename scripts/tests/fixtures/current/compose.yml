@@ -1,0 +1,5 @@
+# Test fixture: the rendered compose file.
+name: ihc
+services:
+  proxy:
+    image: jc21/nginx-proxy-manager:2.16.0

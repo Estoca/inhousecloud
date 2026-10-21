@@ -60,6 +60,71 @@ cd /opt/inhousecloud
 - Apps are separate Compose projects named after their slug: `docker ps -a --filter label=com.docker.compose.project=<slug>` lists one's containers.
 - `rm -rf /opt/inhousecloud` deletes `.env` and, with the default config, the backups. With rootless Docker some files there belong to container users; `install.sh remove --dir` removes those through a container.
 
+## An installation made under a previous name
+
+An installation made before a rename keeps the names it was made with (the table in [`install-design.md`](install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud)): its Compose project, networks, volumes, app overlays, deploy runner and groups. This checkout does not operate it and does not migrate it: `install.sh` (`status`, `handoff`, `stop`, `start`, `remove`, `--plan`, `--apply`), `ihc-operator`, `ihc-app`, `ihc-backup` and `ihc doctor` stop with one message that names the old name and points here. The way forward is to remove it and install fresh. Nothing moves over by itself: copy out first what you want to keep (Gitea repositories, app databases).
+
+| Made with | Prefix | Compose project | Its own `remove` |
+|---|---|---|---|
+| Open Company Cloud (2026-10-20 to 2026-10-21) | `occ` | `occ` | yes: a checkout of that time |
+| Open Company App Harness (until 2026-10-20) | `harness` | `harness` | no: by hand, below |
+
+**Open Company Cloud (`occ`).** Its `install.sh remove` does the whole job. In the checkout it was installed from, or in a fresh clone, go back to the last commit under that name and remove (it asks you to type `occ`):
+
+```bash
+git checkout 3a4f11a
+```
+
+```bash
+./install.sh remove --images --dir --install-dir /opt/open-company-cloud
+```
+
+Then `git checkout main` and install fresh. On a Mac, the install directory is the one you gave then (`~/open-company-cloud` in the try-it of that time).
+
+**Open Company App Harness (`harness`), or by hand for either.** Run these in the old install directory, with the prefix of the table in place of `harness` for an `occ` installation. Read the warnings in [Doing it by hand](#doing-it-by-hand) first: `down -v` deletes the data for good.
+
+```bash
+cd /opt/open-company-harness
+```
+
+Each app is its own Compose project, named after its folder in `apps/`. Remove them first, then the cloud itself, with its volumes and networks:
+
+```bash
+for d in apps/*/; do docker compose -p "$(basename "$d")" down -v --remove-orphans; done
+```
+
+```bash
+docker compose -p harness down -v --remove-orphans
+```
+
+The images the installer and the deploys built (pulled images are shared and can stay; [Remove a test install](#remove-a-test-install) says which ones go with `--images`):
+
+```bash
+docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E '^harness[-_]'
+```
+
+Remove those with `docker image rm`, and each app's image the same way (`docker image ls | grep <slug>`). What is left must be nothing; each of these prints an empty list:
+
+```bash
+docker ps -a --filter label=com.docker.compose.project=harness --format '{{.Names}}'
+```
+
+```bash
+docker volume ls --filter label=com.docker.compose.project=harness --format '{{.Name}}'
+```
+
+```bash
+docker network ls --format '{{.Name}}' | grep -E '^harness'
+```
+
+If the `ops` profile added the web terminal's key to `~/.ssh/authorized_keys`, take out the line that holds the key of `local/wetty/id_ed25519.pub`. Last, the directory, with `.env` and, with the defaults of that time, the backups (with rootless Docker some files there belong to container users: `sudo rm -rf` on Linux):
+
+```bash
+cd ~ && rm -rf /opt/open-company-harness
+```
+
+Then install fresh with this checkout ([`try-it.md`](try-it.md)), in a new directory or in the old one now that it is gone.
+
 ## Docker Desktop (macOS) keeps the space
 
 Docker Desktop stores everything in one disk image on the Mac (`Docker.raw`). Removing images and volumes frees space inside it, but the space on the Mac's disk is not given back right away, and on the run recorded in [`first-run.md`](first-run.md#macos-run-docker-desktop) it was not given back by itself. What the image really takes:

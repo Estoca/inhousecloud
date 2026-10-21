@@ -1,0 +1,19 @@
+# Test fixture: an install's .env with the names of its time. No real values.
+COMPOSE_PROJECT_NAME=occ
+COMPOSE_PROFILES=backup
+OCC_NETWORK=occ
+OCC_OPS_NETWORK=occ-ops
+INGRESS=local
+BASE_DOMAIN=cloud.localhost
+TLS_MODE=off
+PORTAL_BASE_URL=http://portal.cloud.localhost
+AUTHENTIK_BASE_URL=http://auth.cloud.localhost
+GITEA_BASE_URL=http://git.cloud.localhost
+AUTHENTIK_PORTAL_GROUP=occ-admins
+AUTHENTIK_APP_GROUP=occ-users
+GITEA_ORGANIZATION=company
+GITEA_RUNNER_NAME=occ-runner
+POSTGRES_DB=occ
+POSTGRES_USER=occ
+BACKUP_ENABLED=true
+BACKUP_DESTINATION=/tmp/fixture-backups

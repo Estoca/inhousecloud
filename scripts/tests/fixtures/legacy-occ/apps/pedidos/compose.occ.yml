@@ -1,0 +1,7 @@
+# Test fixture: the app overlay install.sh's deploy wrote.
+services:
+  web:
+    networks: [occ]
+networks:
+  occ:
+    external: true

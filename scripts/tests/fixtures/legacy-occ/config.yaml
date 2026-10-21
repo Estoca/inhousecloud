@@ -1,0 +1,7 @@
+# Test fixture config.
+install:
+  directory: /opt/open-company-cloud
+  profiles: []
+ingress:
+  mode: local
+  base_domain: cloud.localhost

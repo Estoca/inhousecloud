@@ -60,6 +60,7 @@ while [ $# -gt 0 ]; do
 done
 INSTALL_DIR="${INSTALL_DIR%/}"
 ENV_FILE="$INSTALL_DIR/.env"
+legacy_guard "$INSTALL_DIR"
 INVENTORY="$INSTALL_DIR/inventory.json"
 RESOURCES=""
 record() { RESOURCES="$RESOURCES $1"; }

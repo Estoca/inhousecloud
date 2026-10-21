@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "installation_id": "00000000-0000-4000-8000-000000000003",
+  "status": "completed",
+  "config_sha256": "fixture",
+  "created_at": "2026-10-20T12:00:00Z",
+  "updated_at": "2026-10-20T12:10:00Z",
+  "paths": {"install_dir": "/opt/open-company-cloud", "env_file": ".env", "compose_file": "compose.yml"},
+  "stages": {
+    "preflight": {"status": "completed", "attempts": 1, "probe": {}, "resources": [], "error_code": null, "resume_command": ""},
+    "foundation": {"status": "completed", "attempts": 1, "probe": {}, "resources": ["volume:ihc_postgres-data", "volume:ihc_gitea-data", "volume:ihc_authentik-media", "network:ihc"], "error_code": null, "resume_command": ""},
+    "gitea": {"status": "completed", "attempts": 1, "probe": {}, "resources": [], "error_code": null, "resume_command": ""},
+    "handoff": {"status": "completed", "attempts": 1, "probe": {"status_command": "install.sh status --install-dir /opt/open-company-cloud"}, "resources": [], "error_code": null, "resume_command": ""}
+  }
+}

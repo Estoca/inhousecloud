@@ -1,0 +1,7 @@
+# Test fixture config.
+install:
+  directory: /opt/open-company-harness
+  profiles: []
+ingress:
+  mode: local
+  base_domain: harness.localhost
