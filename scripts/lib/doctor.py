@@ -33,6 +33,7 @@ SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY|DATABASE_URL|RED
 # Disk and memory: the preflight's thresholds (install.sh stage_preflight) are the warning
 # line; a fail is a box that is about to stop writing.
 DISK_WARN_GIB, DISK_FAIL_GIB = 10, 2
+DISK_PCT_WARN, DISK_PCT_NEAR = 85, 1.5   # a high percentage only matters within 1.5x of the minimum
 MEM_TOTAL_MIB = 3500
 RESTART_WINDOW_S = 3600
 RUNNER_ONLINE_S = 120
@@ -327,6 +328,21 @@ def c_containers(box):
     return c.ok("all %d services of %s running and healthy" % (total, "core" + "".join("+" + p for p in box.profiles)))
 
 
+def disk_level(free_gib, pct):
+    """(level, criterion) for one volume. Absolute free space decides: below DISK_FAIL_GIB is
+    a fail, below DISK_WARN_GIB (the installer's minimum) a warn. A high percentage warns
+    only when the free space is also near that minimum; with room to spare it is a note."""
+    if free_gib < DISK_FAIL_GIB:
+        return "fail", "free space"
+    if free_gib < DISK_WARN_GIB:
+        return "warn", "free space"
+    if pct >= DISK_PCT_WARN:
+        if free_gib < DISK_WARN_GIB * DISK_PCT_NEAR:
+            return "warn", "percentage"
+        return "ok", "percentage note"
+    return "ok", ""
+
+
 def c_disk(box):
     c = Check("disk")
     places = [("install directory", box.I)]
@@ -336,7 +352,7 @@ def c_disk(box):
     dest = box.env.get("BACKUP_DESTINATION", "")
     if box.env.get("BACKUP_ENABLED") == "true" and dest and os.path.isdir(dest):
         places.append(("backups", dest))
-    seen, worst = {}, None
+    seen, worst, notes = {}, None, []
     for label, path in places:
         try:
             dev = os.stat(path).st_dev
@@ -351,16 +367,24 @@ def c_disk(box):
         pct = 100.0 * (u.total - u.free) / u.total if u.total else 0
         line = "%s (%s): %.1f GiB free of %.0f GiB, %.0f%% used" % (" + ".join(labels), path, free, u.total / 1073741824, pct)
         c.see(line)
-        level = "fail" if free < DISK_FAIL_GIB or pct >= 95 else "warn" if free < DISK_WARN_GIB or pct >= 85 else "ok"
+        level, why = disk_level(free, pct)
+        if why == "percentage note":
+            notes.append("%.0f%% used, %.1f GiB free" % (pct, free))
         if worst is None or ["ok", "warn", "fail"].index(level) > ["ok", "warn", "fail"].index(worst[0]):
-            worst = (level, line)
+            worst = (level, line, why)
     if worst is None:
         return c.warn("could not read free disk space", "check by hand: df -h %s" % box.I)
     if worst[0] == "fail":
-        return c.fail("the disk is almost full: " + worst[1], "free space now (build cache and unused images first)", "disk-pressure")
+        return c.fail("the disk is almost full: " + worst[1],
+                      "free space now (build cache and unused images first): free space is below %d GiB" % DISK_FAIL_GIB, "disk-pressure")
     if worst[0] == "warn":
-        return c.warn("free disk is low: " + worst[1], "make room before the next deploy or backup (below %d GiB the installer would refuse)" % DISK_WARN_GIB, "disk-pressure")
-    return c.ok("; ".join(c.evidence))
+        if worst[2] == "percentage":
+            act = ("make room before the next deploy or backup: the volume is %d%% or more used and its free space is within %gx of the %d GiB minimum"
+                   % (DISK_PCT_WARN, DISK_PCT_NEAR, DISK_WARN_GIB))
+        else:
+            act = "make room before the next deploy or backup: free space is below the %d GiB minimum (the installer would refuse)" % DISK_WARN_GIB
+        return c.warn("free disk is low: " + worst[1], act, "disk-pressure")
+    return c.ok("; ".join(c.evidence) + ("" if not notes else " (note: " + "; ".join(notes) + ")"))
 
 
 def c_memory(box):

@@ -169,6 +169,8 @@ PY
 
   if [ "$PUSH" = true ]; then
     ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; askpass "$ap" "ihc"
+    IHC_GIT_TOKEN="$token" git_auth_probe "$push_url" "$ap" 30 2 || { rm -f "$ap"; die "git on $org/$SLUG does not answer with the token after $GIT_PROBE_TRIES tries: ${GIT_PROBE_ERR:-no message}"; }
+    [ "$GIT_PROBE_TRIES" -le 1 ] || log "git answered with the token after $GIT_PROBE_TRIES tries"
     IHC_GIT_TOKEN="$token" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$dir" push -q "$push_url" main:main || { rm -f "$ap"; die "push to $org/$SLUG failed"; }
     rm -f "$ap"
     ok "pushed main: the deploy workflow runs now ($gitea_url/$org/$SLUG/actions)"
