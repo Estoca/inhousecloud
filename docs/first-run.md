@@ -434,6 +434,32 @@ The second rename, to InHouseCloud (`ihc`), on a clean box, and the one-version 
 
 **Not exercised.** The `agent` profile itself (`c_agent` runs the Docker API check from inside the real agent container) and `private` ingress (the Tailscale node's state and split DNS); `public` ingress and TLS `edge`/`acme` (the certificate the world sees). The VM was deleted.
 
+## Portal run
+
+The real portal (`portal/`) wired into the installer, on a clean box, then the update of an install made with the placeholder. On 2026-10-21.
+
+**Setup.** New Lima VMs (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.2 rootless, Compose 5.6.1), 2 CPU, 6 GiB, 30 GiB, no mounts and every port forward off, the branch cloned onto the box. `bootstrap/config.example.yaml` with `storage` on, backup on, `local` ingress, TLS off.
+
+| Step | Result |
+|---|---|
+| `install.sh --plan`, no install directory | stopped at the preflight (cannot create `/opt/inhousecloud`); 0 containers, 0 volumes, no directory |
+| `install.sh --plan`, the directory created as the preflight says | exit 0, services listed with `docker-ro` and `portal` in the core; the directory still empty, 0 containers, volumes or images |
+| `install.sh --non-interactive`, all stages | 329 s, exit 0. Stage `portal`: image built from `portal/`, healthy, **9 migrations applied** at boot. Smoke tests **19 passed, 0 failed, 3 skipped** (ops twice, agent); test 16 push to green in 20 s, redeploy 15 s |
+| Test 22, the portal | `/health` ok with its 9 migrations; anonymous `/api/platform/status` through the proxy 302 to the outpost; the admin headers sent from the Gitea container 401 (trusted only from the proxy); from the proxy 200 with 10 services, all healthy; the catalog lists the portal itself and `smoke-app` with health 200, SSO effective, route found |
+| `scripts/smoke-tests.sh` again | 19 passed, 0 failed, 3 skipped in 51 s |
+| `ihc doctor` | 14 checks ok in 3.3 s (15 with the app below) |
+| `ihc-app new pedidos --push`, `ihc-app wait pedidos` | up in 17 s from the command; the catalog shows `pedidos` healthy (`/health` 200), `sso_protected` and `sso_effective` true, route found, container `pedidos-app-1` with its resources, one green deploy from Gitea Actions |
+| The manifest with `agent_interface.mcp` and a description (first VM) | pushed; `inventory.json` carries `description`, `healthcheck`, `auth`, `mcp` and `schema_version: 1`; the catalog shows the tool `pedidos_list` (the deployer image parses the YAML with PyYAML) |
+| `/api/platform/status` | proxy (health only), Authentik, Gitea 28.2.0, `gitea-runner`, `gitea-deployer`, `docker-ro`, Postgres (5 databases, sizes of the 3 its role opens), Redis, backup (age of `latest-success.json`), Garage: 10 of 10 healthy |
+| Roles and writes | `ihc-users` headers: 403 on the admin refresh; no group: 401; `PATCH .../metadata` as admin: 405 `read_only`; the disk snapshot (super admin) recorded 14 containers through `size=1` |
+| The container | user `1000:1000`, every capability dropped, no Docker socket; mounts `catalog/` and `backups/reports` read only; networks `ihc` and `ihc-docker` only; `docker-ro` logged no refused request from it |
+| Update from `main` (`b76baf8`, placeholder) with an app `legado` deployed there, then the branch and `install.sh --apply --from foundation` | 122 s, exit 0: `inventory.json` moved into `catalog/` behind a symlink, `PORTAL_BUILD_CONTEXT` `./portal-placeholder` replaced by `./portal`, the portal built and migrated, smoke tests 19/0/3; `legado`, recorded before the new fields existed, shows healthy with SSO effective (from its `runtime`); `ihc doctor` 15 ok |
+| `scripts/tests/inventory-contract.sh`, `scripts/tests/agent-proxy.sh` on the box | all checks passed (`agent_interface.mcp` parsed from YAML there) |
+
+**Found and fixed during the run.** The proxy answers 200 at the root of a host it does not know (its default page), so "route found" is now the SSO redirect or a health path that is not 404, as `ihc doctor` decides. The docker CLI's `docker stats` opens `GET /events`, which `docker-ro` refuses: every refresh left 403 lines in the audit trail the agent reads; the portal now reads Docker over the HTTP API (`/containers/json`, one-shot `/stats`) and its image has no docker CLI. The update (`--from foundation`) runs no secrets stage, so the build context and the reports directory are set in `foundation`.
+
+**Not exercised.** A browser session on the portal (the checks above send, from the proxy, the headers the outpost would set; the forward auth itself is test 9); the `ops` and `agent` profiles (the agent's Docker API moved to `docker-ro`: covered by `scripts/tests/agent-proxy.sh`, not by a running agent); `private` and `public` ingress; macOS with Docker Desktop. Both VMs were deleted.
+
 ## Onboarding run
 
 What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.
