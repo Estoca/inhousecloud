@@ -189,6 +189,7 @@ Success: `<slug> is up at http://<slug>.<BASE_DOMAIN>`. It polls the healthcheck
 The real portal will serve `GET http(s)://portal.<BASE_DOMAIN>/api/platform/status`, one entry per core service and the newest backup. The portal is still a placeholder without that endpoint; use:
 
 ```bash
+scripts/ihc-doctor.sh --install-dir "$DIR" --json   # every check (containers, routes, sign-in, runners, data, backup, each app): ok, warn or fail, and what to do
 ./install.sh status --install-dir "$DIR" --json      # stages, smoke tests, URLs
 scripts/ihc-app.sh list --install-dir "$DIR"     # apps: slug, URL, owner, last provision
 ```

@@ -116,13 +116,15 @@ Day zero, in this order:
 6. Operate: the map of services, apps, owners and commands:
      ~/inhousecloud/scripts/ihc-operator.sh brief --install-dir /opt/inhousecloud
    Short state: ~/inhousecloud/install.sh status --install-dir /opt/inhousecloud
+   Something looks wrong? Ask the doctor: it says what is broken and what to do:
+     /opt/inhousecloud/ihc doctor
 7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):
      ~/inhousecloud/install.sh stop --install-dir /opt/inhousecloud
      ~/inhousecloud/install.sh remove --install-dir /opt/inhousecloud
 People: docs/first-user.md (groups ihc-users and ihc-admins; mail, password recovery and invitations are off).
 ```
 
-`./install.sh handoff` prints these steps again. The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`) and to `private` ingress. Smoke test 16 deploys a test app (`smoke-app`) and removes it afterwards, so `ihc-app list` starts empty. Run `./install.sh` without arguments instead to answer the questions yourself; [`../README.md`](../README.md#install) has the options.
+`./install.sh handoff` prints these steps again. Whenever something looks wrong later, `cd /opt/inhousecloud && ./ihc doctor` checks the whole box in a few seconds and prints, for each problem, what to do. The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`) and to `private` ingress. Smoke test 16 deploys a test app (`smoke-app`) and removes it afterwards, so `ihc-app list` starts empty. Run `./install.sh` without arguments instead to answer the questions yourself; [`../README.md`](../README.md#install) has the options.
 
 ## 4. Open the portal
 

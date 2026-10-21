@@ -2,7 +2,8 @@
 # Minimal backup job (docs/install-design.md "Backup", docs/backup.md).
 #
 #   scripts/ihc-backup.sh [--install-dir DIR] run                 dump + volumes + config into restic, apply retention
-#   scripts/ihc-backup.sh [--install-dir DIR] verify --latest [--json]   check the newest run: manifest, checksums, snapshots, repository
+#   scripts/ihc-backup.sh [--install-dir DIR] verify --latest [--quick] [--json]   check the newest run: manifest, checksums, snapshots, repository
+#                                                                 (--quick: snapshots present, no dump restored; for ihc-doctor)
 #   scripts/ihc-backup.sh [--install-dir DIR] status [--json]    the status file the portal reads, plus its age
 #
 # The work happens inside the `backup` container (docker/backup/Dockerfile: restic,
@@ -25,7 +26,7 @@ ok()    { _out "[ok] $*"; }
 warn()  { _out "[!!] $*"; }
 fail()  { _out "[xx] $*"; }
 die()   { fail "$*"; exit 1; }
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ============================================================ host wrapper
 if [ -z "${IHC_BACKUP_CONTAINER:-}" ]; then
@@ -328,8 +329,8 @@ EOF
 
 # ---------------------------------------------------------------- verify
 cmd_verify() {
-  local latest=false
-  while [ $# -gt 0 ]; do case "$1" in --latest) latest=true ;; --json) JSON_OUTPUT=true ;; *) die "unknown verify argument: $1" ;; esac; shift; done
+  local latest=false quick=false
+  while [ $# -gt 0 ]; do case "$1" in --latest) latest=true ;; --quick) quick=true ;; --json) JSON_OUTPUT=true ;; *) die "unknown verify argument: $1" ;; esac; shift; done
   [ "$latest" = true ] || die "verify needs --latest (the only mode so far)"
   local errors=0 checks="" st run manifest sha want got id ids name kind path snap age stale
   check() { # NAME pass|fail DETAIL
@@ -377,7 +378,7 @@ for i in json.load(open(sys.argv[1]))["items"]:
     print("%s %s %s %s %s" % (i["name"], i["kind"], i["snapshot_id"], i.get("path","-"), i.get("sha256","-")))' "$manifest" > "$TMP/items"
     while read -r name kind snap path sha; do
       if ! printf '%s\n' "$ids" | grep -q "^$snap"; then check "snapshot:$name" fail "snapshot ${snap:0:8} not in the repository"; continue; fi
-      if [ "$kind" = dump ]; then
+      if [ "$kind" = dump ] && [ "$quick" != true ]; then
         got="$(restic dump --quiet "$snap" "$path" 2>"$TMP/dump.err" | sha256sum | awk '{print $1}')"
         [ "$got" = "$sha" ] && check "snapshot:$name" pass "${snap:0:8} restores to sha256 ${sha:0:12}" || check "snapshot:$name" fail "${snap:0:8} restored sha256 ${got:0:12}, manifest says ${sha:0:12}"
       else

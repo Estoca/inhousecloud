@@ -54,7 +54,7 @@ The workflow in the template ([`templates/app/.gitea/workflows/deploy.yml`](../t
    - `<install-dir>/apps/<slug>/compose.ihc.yml`, an overlay that puts every service of the app on the ihc network (the main one with the alias `<slug>`), drops published host ports and points `env_file` at the file above;
    - an Authentik proxy provider `app-<slug>` (forward auth, single application, the healthcheck path skipped), an application `<slug>` bound to the users group (`AUTHENTIK_APP_GROUP`), and the provider added to the embedded outpost;
    - the proxy host `<slug>.<BASE_DOMAIN>` to `<slug>:<runtime.port>` with the same forward-auth snippet as the portal (from [`scripts/lib/sso.sh`](../scripts/lib/sso.sh), shared with `first-run.sh`), the healthcheck path left public;
-   - the app in `<install-dir>/inventory.json` under `apps.<slug>`: name, owner, URL, repository, last commit, the resources above, `created_at` on the first run and `provisioned_at` on every run.
+   - the app in `<install-dir>/inventory.json` under `apps.<slug>`: name, owner, URL, repository, last commit, the resources above, `runtime` (the service, port, health path, expected status and `auth.required` of the manifest: what `ihc-doctor` checks), `created_at` on the first run and `provisioned_at` on every run.
 3. **`docker compose -p <slug> -f docker-compose.yml -f <install-dir>/apps/<slug>/compose.ihc.yml up -d --build`** builds and starts the app.
 4. **`ihc-app wait <slug>`** polls the manifest's healthcheck through the proxy until it answers the expected status, then checks that an anonymous `GET /` is sent to the Authentik sign-in. If the container exits or the time runs out it fails the job with the status it got, the container's state and the last 40 lines of its log.
 

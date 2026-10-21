@@ -316,6 +316,7 @@ install.sh             One-command installer: plan, apply, resume, status
 scripts/first-run.sh   First access: Gitea admin and org, Authentik OIDC, portal route
 scripts/ihc-app.sh new, provision, checkout, wait, list: the app loop (docs/gitops-flow.md)
 scripts/ihc-backup.sh run, verify, status: the nightly backup (docs/backup.md)
+scripts/ihc-doctor.sh  Is it on the air, and what to do if not (also install.sh doctor, <install-dir>/ihc doctor)
 scripts/smoke-tests.sh The checks that decide "installed"
 scripts/sso-login-check.sh  Walks the sign-in with curl, the way a browser would
 scripts/ihc-operator.sh brief: the generated map an operator reads first (docs/operator-contract.md)
@@ -346,11 +347,11 @@ Done:
 - PR 12: the rename to InHouseCloud (`ihc-*` commands, `IHC_*` variables); old names load for one version.
 - PR 13: onboarding after the install: the day-zero handoff, `--plan` as a dry run, stop, start and remove.
 - PR 14: the operator agent in conversation (Telegram), with a memory limit and the writes it can use.
+- PR 18: `ihc doctor`: one command that checks the box the way the smoke tests do (containers, disk and memory, routes, DNS and TLS for the ingress, the sign-in, Gitea and its runners, Postgres, Redis, the backup, every app's health path, the agent) in about 3 seconds, and says what is wrong and what to do: plain text for a person, `--json` for an agent; `ihc-ro doctor` for the operator agent inside its container.
 
 Next:
 
 - The real portal, ported from the internal portal already running in the reference installation: read-only inventory, deploy runs, health, backups, the people who can sign in and their groups (read from Authentik), and `GET /api/platform/status` for agents.
-- `ihc doctor`: one command that checks the box the way the smoke tests do (routes and DNS, TLS, the sign-in, disk, containers and their health checks, the age of the last backup) and answers in plain text for a person and with `--json` for an agent or the operator. It works with or without the `agent` profile.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
 - **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `ihc-app new` and the agent path produce it by default; a company can make it mandatory.
@@ -414,11 +415,12 @@ Same path for an agent or CI, with the answers in a file:
 ./install.sh --non-interactive --config bootstrap/config.example.yaml
 ```
 
-`--plan` prints what would happen and creates nothing (no directory, no `state.json`); `--apply --from <stage>` resumes. After the install:
+`--plan` prints what would happen and creates nothing (no directory, no `state.json`); `--apply --from <stage>` resumes. After the install (the same commands, without paths, from the install directory: `cd /opt/inhousecloud && ./ihc doctor`, `./ihc status`):
 
 ```bash
 ./install.sh handoff     # the seven day-zero steps again
 ./install.sh status      # short: state, URLs, service health, backup age, apps and owners
+./install.sh doctor      # every check, and what to do about each one that fails (--json for agents)
 ./install.sh status --verbose   # every stage and the full operator brief (scripts/ihc-operator.sh brief)
 ./install.sh stop        # stop the cloud and its apps, data kept (start: ./install.sh start)
 ./install.sh remove      # remove a test install; asks for the project name (docs/cleanup.md)

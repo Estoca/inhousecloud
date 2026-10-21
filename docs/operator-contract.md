@@ -44,7 +44,7 @@ Read, diagnose, and anything without a persistent effect on the box:
 - Proxy, Authentik and Gitea in read mode: routes, providers, runs, versions.
 - HTTP probes: health endpoints, a route through the proxy with a `Host` header.
 - The brief, the inventory, the backup status file.
-- `scripts/ihc-backup.sh verify --latest` and `status`, `./install.sh status`, `scripts/smoke-tests.sh` (they read; test 16 pushes a commit to the smoke app, which is the cloud's own).
+- `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`; `ihc-ro doctor` in the agent profile), `scripts/ihc-backup.sh verify --latest` and `status`, `./install.sh status`, `scripts/smoke-tests.sh` (they read; test 16 pushes a commit to the smoke app, which is the cloud's own; the doctor writes only its own report).
 - Building and testing code in a scratch checkout, without publishing anything.
 - Writing notes, analyses, incident records, drafts of changes for a human to apply.
 
@@ -81,6 +81,8 @@ The agent profile enforces the levels with permissions, not only with this text:
 
 Not every change needs all nine. The answer always carries the evidence for the ones that apply and says which were not checked. `I` is the install directory, `H` the repository checkout, `dc` is `docker compose --project-directory $I -f $I/compose.yml`.
 
+**First, the doctor.** `$I/ihc doctor --json` (or `$H/scripts/ihc-doctor.sh --install-dir $I --json`) runs the box-wide half of these checks in a few seconds, for the core and for every app in the inventory: containers up and healthy, recent restarts (4), each app's health path through the proxy with its manifest's status and `/` sent to the sign-in (5, 6), the proxy's routes, DNS and TLS for the ingress, Authentik and the outpost, Gitea and both runners, Postgres and Redis (7), the backup's age and a quick `restic check`, disk and memory (8). Each check is `ok`, `warn` or `fail` with one line of explanation and, when not `ok`, the action and the runbook; exit 1 on any `fail`. A `fail` is where the diagnosis starts. All `ok` is not the end: it does not prove 1 (the target), 2 (the way back), 3 (the effective configuration) or a minimal real request (5), and it says nothing about the change you just made beyond its health. In the agent profile, `ihc-ro doctor` runs the checks a read-only view allows from inside the container (containers, the sign-in, Gitea, the backup's age, every app through the proxy) and adds the last full run the host wrote to `reference/doctor.json`, with its age; the host-only checks (disk, TLS, DNS, runners, Postgres, Redis, the backup repository) come only from that run, so ask a human for a fresh one when it is old or when they matter.
+
 | # | Check | Evidence in the cloud |
 |---|---|---|
 | 1 | **Target**: right commit, image, Compose project; nobody else's work mixed in | the deploy run's `head_sha` in Gitea Actions equals the commit asked for; `docker compose -p <slug> ps` (an app's project **is its slug**; a core service's project is `ihc`: never let a working directory pick the project name); `docker inspect -f '{{.Image}}' <slug>-app-1` |
@@ -101,8 +103,9 @@ An InHouseCloud box hands its operator the context the first box's operator had 
 2. **The inventory of apps**, in the same brief: slug, owner, URL, repository, last deployed commit, env variable names, data directory, Compose project, runtime. Containers that belong to nothing inventoried are listed apart.
 3. **The access matrix**, in the same brief: every credential by **name**, the file it lives in, what it opens, which services use it, how it rotates, who approves, and whether the agent gets it. Never a value; the brief generator refuses to write if a value of `.env` or of an app's env file would appear in it.
 4. **The runbooks**, [`docs/runbooks/`](runbooks/): one file per operation, read mode first, literal commands, post-checks, the level of autonomy.
-5. **The change policy**: section 2 of this document and [`security.md`](security.md).
-6. **Least-privilege credentials, injected, not pasted.** In the agent profile: Gitea's read-only token, the read-only Docker API, its own LLM key and chat tokens, which a human writes into `.env`. A token pasted into a chat is exposed: rotate it, do not adopt it.
+5. **The doctor**, `scripts/ihc-doctor.sh` (section 3): the first answer to "is it on the air", with the action for each failure. In the agent profile, `ihc-ro doctor` and the host's last report in `reference/doctor.json`.
+6. **The change policy**: section 2 of this document and [`security.md`](security.md).
+7. **Least-privilege credentials, injected, not pasted.** In the agent profile: Gitea's read-only token, the read-only Docker API, its own LLM key and chat tokens, which a human writes into `.env`. A token pasted into a chat is exposed: rotate it, do not adopt it.
 
 ## 5. What the operator never receives
 
@@ -136,5 +139,5 @@ Every new incident is written the same way: [incident-record](runbooks/incident-
 ## 7. Implementations
 
 - **The agent profile** ([`install-design.md`](install-design.md#the-agent-profile)): OpenClaw in a container, the workspace in `<install-dir>/agent/` with an `AGENTS.md` pointing here, the runbooks and the brief, the Docker API through a read-only filter, Slack or Telegram as the channel. Opt-in; needs an LLM key and a channel that a human provides.
-- **Any other agent** (Claude Code or Codex over `ssh`, as the install user): give it this file, the runbooks and `ihc-operator.sh brief` as its first reads. It has the shell and the `docker` group, so the levels hold only as far as it follows them: nothing on the box enforces them.
+- **Any other agent** (Claude Code or Codex over `ssh`, as the install user): give it this file, the runbooks and `ihc-operator.sh brief` as its first reads, and `ihc doctor --json` as its first command. It has the shell and the `docker` group, so the levels hold only as far as it follows them: nothing on the box enforces them.
 - **A person**: the same files are a checklist.
