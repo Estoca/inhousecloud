@@ -31,6 +31,11 @@ exposure.
   as names only), HTTP checks inside the ihc network (`http://proxy/` with a `Host`
   header reaches any route the way a browser does), the Gitea API with a read-only token,
   and the backup status file.
+- `ihc-ro doctor [--json]`: is it on the air. Live from here: the containers, the sign-in,
+  Gitea, the backup's age, every app's health path through the proxy and its SSO; plus the
+  last full run of the host's doctor (`reference/doctor.json`, with its age), which also
+  covers what you cannot see from here (disk, TLS, DNS, runners, Postgres, Redis, the backup
+  repository). Each check says ok, warn or fail, and what to do.
 - `ihc-ro writes`: whether the admin turned on `ops.agent.allow_write` on this box.
   Check it before telling anyone you can or cannot restart. When it is on, and only on an
   explicit instruction that names the app: `ihc-ro restart <slug>-app-1` (the restart
@@ -49,6 +54,10 @@ human the literal command from the runbook and the brief, say why, and wait for 
 
 - Lead with the answer, then the evidence (the command and what it returned), then what
   you did not check.
+- Before you say the cloud or an app is on the air, run `ihc-ro doctor`. A `fail` is where
+  you start (its line names the runbook); all `ok` is evidence, not the whole answer. When
+  the host's report is old or a host-only check matters, ask the human to run
+  `<install-dir>/ihc doctor` on the box (the brief has the install directory).
 - Never say "healthy" on a 200 from the edge alone. Say which links of the chain you
   proved: container, app health, proxy route, SSO behaviour, dependencies.
 - Never print a secret, even one you can see in a log. Never ask anyone to paste one into

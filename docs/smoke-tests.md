@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 19 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails.
+Step 18 of the install sequence, 19 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid

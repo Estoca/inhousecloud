@@ -6,6 +6,7 @@
 #   ./install.sh --apply [--config FILE]          apply without the confirmation prompt
 #   ./install.sh --non-interactive --config FILE  for agents and CI: no prompts at all
 #   ./install.sh --apply --from STAGE             resume (re-run) from STAGE
+#   ./install.sh doctor [--verbose] [--json]      is it on the air, and what to do if not (scripts/ihc-doctor.sh)
 #   ./install.sh status [--verbose] [--json]      short state: URLs, health, backup age, apps
 #   ./install.sh handoff                          the day-zero steps again
 #   ./install.sh stop | start                     stop the cloud and its apps (data kept), start again
@@ -53,7 +54,7 @@ while [ $# -gt 0 ]; do
     --install-dir=*) INSTALL_DIR="${1#*=}" ;;
     --json) JSON_OUTPUT=true ;;
     --yes|-y) ASSUME_YES=true ;;
-    status|handoff|stop|start|remove) SUBCOMMAND="$1" ;;
+    status|handoff|stop|start|remove|doctor) SUBCOMMAND="$1" ;;
     --verbose|-v) VERBOSE=true ;;
     --confirm) CONFIRM_ARG="$2"; shift ;;
     --confirm=*) CONFIRM_ARG="${1#*=}" ;;
@@ -1311,6 +1312,7 @@ stage_handoff() {
     echo "  \"credentials_file\": \"$ENV_FILE\","
     echo "  \"ingress\": $(jsonq build mode="$INGRESS" tls="$TLS_MODE" tunnel="$TUNNEL_PROVIDER" bind="$BIND_ADDRESS" base_domain="$BASE_DOMAIN" ca_cert="$( [ "$TLS_MODE" = internal ] && echo "$(ca_dir)/ca.crt")" ca_sha256="$( [ "$TLS_MODE" = internal ] && ca_fingerprint)" tailnet_ip="$(env_get TAILSCALE_IP)" tailnet_name="$(env_get TAILSCALE_DNS_NAME)" split_dns_nameserver="$( has_profile tailscale && env_get TAILSCALE_IP)"),"
     echo "  \"status_command\": \"$SELF status --install-dir $INSTALL_DIR\","
+    echo "  \"doctor_command\": \"$INSTALL_DIR/ihc doctor --json\","
     if has_profile ops; then
       echo "  \"ops\": $(state stage optional_profiles get probe 2>/dev/null | $PY -c 'import json,sys
 try: o=json.load(sys.stdin).get("ops") or {}
@@ -1333,6 +1335,7 @@ try: new["apps"]=json.load(open(sys.argv[2])).get("apps",{})
 except (OSError,ValueError): new["apps"]={}
 json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   mv "$inv.new" "$inv"
+  write_shortcut
   state stage handoff set probe "$(jsonq build inventory="$inv" status_command="$SELF status --install-dir $INSTALL_DIR")"
   state stage handoff complete
   state finish >/dev/null || true
@@ -1368,6 +1371,29 @@ json.dump(new,open(sys.argv[1],"w"),indent=2)' "$inv.new" "$inv"
   fi
   [ "$INGRESS" = public ] && _out "Public ingress: DNS (or the tunnel's routes) for *.$BASE_DOMAIN is yours (docs/first-run.md)."
   day0_handoff
+}
+
+# write_shortcut: <install-dir>/ihc, the commands of this installation from the checkout
+# that installed it, so `cd /opt/inhousecloud && ./ihc doctor` needs no path or flag.
+write_shortcut() {
+  cat > "$INSTALL_DIR/ihc.new" <<SH
+#!/bin/sh
+# Written by install.sh: this installation's commands, run from the checkout that installed it.
+#   ihc doctor [--verbose] [--json]   is it on the air, and what to do if not
+#   ihc status | handoff              the short state; the day-zero steps
+#   ihc brief [--json]                the operator's map of the box
+#   ihc app ARGS | ihc backup ARGS    scripts/ihc-app.sh, scripts/ihc-backup.sh
+H='$IHC_ROOT'; I='$INSTALL_DIR'
+case "\${1:-}" in
+  doctor) shift; exec "\$H/scripts/ihc-doctor.sh" --install-dir "\$I" "\$@" ;;
+  status|handoff) c="\$1"; shift; exec "\$H/install.sh" "\$c" --install-dir "\$I" "\$@" ;;
+  brief) shift; exec "\$H/scripts/ihc-operator.sh" brief --install-dir "\$I" "\$@" ;;
+  app) shift; exec "\$H/scripts/ihc-app.sh" "\$@" --install-dir "\$I" ;;
+  backup) shift; exec "\$H/scripts/ihc-backup.sh" --install-dir "\$I" "\$@" ;;
+  *) sed -n '3,6p' "\$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
+SH
+  chmod 755 "$INSTALL_DIR/ihc.new" && mv "$INSTALL_DIR/ihc.new" "$INSTALL_DIR/ihc"
 }
 
 run_stage() {
@@ -1422,6 +1448,8 @@ day0_handoff() {
   _out "6. Operate: the map of services, apps, owners and commands:"
   _out "     $IHC_ROOT/scripts/ihc-operator.sh brief $d"
   _out "   Short state: $SELF status $d"
+  _out "   Something looks wrong? Ask the doctor: it says what is broken and what to do:"
+  _out "     $INSTALL_DIR/ihc doctor"
   _out "7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):"
   _out "     $SELF stop $d"
   _out "     $SELF remove $d"
@@ -1494,6 +1522,7 @@ print("last success %.1f h ago%s (max %s h)"%(age," STALE" if age>float(sys.argv
   if [ "$n" -eq 0 ]; then _out "  apps       none yet"
   else _out "  apps       $n: $(printf '%s\n' "$apps" | awk -F'\t' '{printf "%s%s (%s)", (NR>1?", ":""), $1, $2}')"; fi
   _out "  more       $SELF status --verbose --install-dir $INSTALL_DIR   (stages and the full operator brief)"
+  _out "  trouble?   $( [ -x "$INSTALL_DIR/ihc" ] && echo "$INSTALL_DIR/ihc doctor" || echo "$IHC_ROOT/scripts/ihc-doctor.sh --install-dir $INSTALL_DIR")   (every check, and what to do)"
   return "$rc"
 }
 
@@ -1629,6 +1658,7 @@ onboarding_main() {
 # -------------------------------------------------------------------- main
 case "$SUBCOMMAND" in
   status|handoff|stop|start|remove) onboarding_main "$SUBCOMMAND"; exit $? ;;
+  doctor) exec "$IHC_ROOT/scripts/ihc-doctor.sh" ${INSTALL_DIR:+--install-dir "$INSTALL_DIR"} $( [ "$VERBOSE" = true ] && echo --verbose) $( [ "$JSON_OUTPUT" = true ] && echo --json) ;;
 esac
 
 resolve_config

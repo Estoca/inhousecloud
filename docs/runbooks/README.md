@@ -25,6 +25,7 @@ set -a; . "$I/.env"; set +a          # only for the commands that say so: it put
 ```
 
 - A core service is a service of the Compose project `ihc` (`dc ps`). An app is the Compose project named by its slug (`docker compose -p <slug> ps`); its container is `<slug>-app-1`.
+- `"$I"/ihc doctor` (or `"$H"/scripts/ihc-doctor.sh --install-dir "$I"`) says in seconds what is broken and which runbook fits: run it first. *(agent)* `ihc-ro doctor`.
 - `scripts/ihc-operator.sh brief --install-dir "$I"` prints the map of the box: read it before anything else.
 - *(agent)* lines are for the agent profile's container, where `ihc-ro` replaces `docker` and `curl` reaches the services by name on the `ihc` network (`http://proxy/` with a `Host` header is a request through the proxy). What the container cannot run, the agent asks a human to run, quoting the line.
 - Never print a value from `.env` or an app's env file. `python3 "$H/scripts/lib/envfile.py" keys FILE` lists names.

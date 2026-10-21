@@ -56,6 +56,7 @@ scripts/ihc-backup.sh --install-dir /opt/inhousecloud status [--json]
 On the host the script only forwards to the backup container (`docker compose exec`, or a one-off `run` when the container is stopped), so the host needs no restic and no Postgres client.
 
 - `run` exits non-zero on failure. The failure is also in the status file.
+- `verify --latest --quick` is what `ihc-doctor` runs: the same checks without restoring the dumps (the snapshots must exist, and `restic check` must pass), a few seconds on a small repository.
 - `verify --latest` is smoke test 14. It checks that the newest run succeeded and is younger than `max_age_hours`, that the manifest matches the sha256 in the status file, and that the repository opens with the key. It then checks that every snapshot in the manifest exists, restores every dump through `restic dump` to compare its sha256 with the one recorded at backup time, and runs `restic check`.
 - `status` prints the status file plus the age of the newest success and exits non-zero when it is stale or failed.
 

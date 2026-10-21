@@ -411,6 +411,29 @@ The second rename, to InHouseCloud (`ihc`), on a clean box, and the one-version 
 
 **Not revalidated.** `private` ingress (Tailscale): on a second clean VM (2 CPU, 4 GiB) the install reached `proxy_ingress` with the new names (`ihc-tailscale-1`, volume `ihc_tailscale-state`) and stopped there because the Tailscale auth key available for the test was refused by the control plane (state `NeedsLogin`): the key, not the rename. The operator agent in conversation (Telegram) was not exercised either; smoke test 20 covered the agent container, its Docker API and the brief. Both VMs were deleted.
 
+## Doctor run
+
+`ihc doctor` (`scripts/ihc-doctor.sh`) on a clean box, then three failures provoked on purpose. On 2026-10-21.
+
+**Setup.** A new Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.2 rootless, Compose 5.6.1), 2 CPU, 5 GiB, 30 GiB, the branch copied onto the box. `bootstrap/config.example.yaml` with `storage` on, backup on, `local` ingress, TLS off. `install.sh --non-interactive`: 245 s, smoke tests **18 passed, 0 failed, 3 skipped** (ops, agent, private ingress). Then `ihc-app new pedidos --push` and `ihc-app wait pedidos`: up.
+
+| Step | Result |
+|---|---|
+| `cd /opt/inhousecloud && ./ihc doctor`, before and after the first app | exit 0, **14 then 15 checks ok** (install, docker, containers, disk, memory, routes, dns, login, gitea, runners, postgres, redis, backup, `app:pedidos`, version) in **3.2 s**; `tls` and `agent` listed as not applicable |
+| `--json`, through `python3 -m json.tool` | valid; `summary` `{ok: 15, warn: 0, fail: 0}`; the same from `install.sh doctor --json` and from the checkout with no argument (it finds `/opt/inhousecloud`) |
+| 1. `docker stop pedidos-app-1` | exit 1 in 3.0 s, one fail: `app:pedidos: pedidos is down: its container pedidos-app-1 is exited (exit code 137)`, do: `docker start pedidos-app-1` (runbook diagnose-app-down). After that command: 15 ok |
+| 2. The proxy host of `pedidos.cloud.localhost` deleted through the proxy's admin API | two fails: `routes: the proxy has no route for pedidos.cloud.localhost` and `app:pedidos: pedidos runs, but the proxy has no route (answered 404)`, both with do: re-run the deploy or push to main (runbook route-and-provider). An empty commit pushed to `main`: the deploy put the route back, `ihc-app wait` green, 15 ok |
+| 3a. `docker compose stop backup` (the sidecar) | two fails: `containers: backup (exited)` and `backup: the backup container is not running: no backup will run on schedule '0 2 * * *'`, do: `up -d backup`, then run one (runbook backup-stuck). Started again: 15 ok |
+| 3b. `latest-success.json` set three days back | one fail: `backup: the newest good backup is 3 days old, older than the 26 h window` (runbook backup-stuck). The file restored: 15 ok |
+| `version`, from a git clone of the branch whose `origin` is a bundle with `main` | `checkout at 6d97d7f (ihc-doctor); origin/main is at 6be6ef7: 0 commit(s) behind it, 2 ahead`, ok (informative only) |
+| `ihc-ro doctor`, in a throwaway `node:22-alpine` container on the `ihc` network with the real `docker-ro-proxy.py` beside it (the reference folder mounted read only, as in the agent profile) | 6 ok (containers, login, gitea, backup age, `app:pedidos`, the host's report from `reference/doctor.json`); with `pedidos-app-1` stopped, exit 1 and `app:pedidos` fail with the level-2 rule; `--json` valid; the proxy logged GETs only |
+| Unplanned: `ingress.tls_mode` switched to `internal` on the installed box and `install.sh --apply` | the install stopped at `first_run` (Gitea could not fetch Authentik's discovery over HTTPS from its container: switching TLS in place is not supported yet). The doctor, 3.3 s: `install: the install stopped at stage first_run` with the resume command, `routes: pedidos.cloud.localhost has no HTTPS certificate of the cloud`, `app:pedidos: the proxy does not answer for pedidos.cloud.localhost (TLS connect error)`; `tls` ok: the served certificate verifies against the cloud CA, 396 days left, the CA 3649 days |
+| Docker stopped (`systemctl --user stop docker`) | 0.1 s: `docker: the Docker daemon does not answer`, do: start Docker; nothing else attempted |
+
+**Found and fixed during the run.** The `app:<slug>` line printed the status of `/` instead of the health path's; the OIDC issuer was read from a truncated body; a 000 (proxy or TLS failure) and a 502 to 504 (nothing listening) are now told apart from an app error, each with its own action; with TLS internal, `routes` checks that every route carries the cloud's certificate.
+
+**Not exercised.** The `agent` profile itself (`c_agent` runs the Docker API check from inside the real agent container) and `private` ingress (the Tailscale node's state and split DNS); `public` ingress and TLS `edge`/`acme` (the certificate the world sees). The VM was deleted.
+
 ## Onboarding run
 
 What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.

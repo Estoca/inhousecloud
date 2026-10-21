@@ -295,6 +295,8 @@ def build(install_dir, ihc_root, live):
                "compose_overlay": a.get("compose_overlay", ""), "env_file": a.get("env_file", ""),
                "env_names": sorted(app_env), "data_dir": os.path.join(install_dir, "app-data", slug),
                "resources": a.get("resources", []),
+               # What "up" means, from company-app.yaml (recorded by ihc-app provision): ihc-ro doctor uses it.
+               "health_check": a.get("runtime") or {},
                "health": "the manifest's healthcheck (company-app.yaml in the repository): path through the proxy, then / = 302 to the SSO when auth.required",
                "deploy": "push to main in %s; runs in Gitea Actions on the deployer" % (a.get("repository") or "its repository")}
         if containers is not None:

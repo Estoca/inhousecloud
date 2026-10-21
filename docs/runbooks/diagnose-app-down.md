@@ -10,7 +10,7 @@ The chain, from inside out:
 container  ->  app health (inside the network)  ->  proxy route (Host header)  ->  forward auth (Authentik outpost)  ->  edge (DNS, tunnel, TLS)
 ```
 
-Walk it in this order and stop at the first link that fails.
+`"$I"/ihc doctor --verbose` walks the first four links for every app at once (its `app:<slug>` line names the first one that fails) *(agent: `ihc-ro doctor`)*. Then walk it here, in this order, and stop at the first link that fails.
 
 ## 1. Container
 

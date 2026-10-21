@@ -258,9 +258,9 @@ env_example_defaults() {
 }
 
 inventory_record() {
-  $PY - "$INVENTORY" "$SLUG" "$M_NAME" "$M_OWNER" "$APP_URL" "${GITHUB_REPOSITORY:-}" "${GITHUB_SHA:-}" "$APP_ENV" "$APP_DIR/compose.ihc.yml" "$RESOURCES" <<'PY'
+  $PY - "$INVENTORY" "$SLUG" "$M_NAME" "$M_OWNER" "$APP_URL" "${GITHUB_REPOSITORY:-}" "${GITHUB_SHA:-}" "$APP_ENV" "$APP_DIR/compose.ihc.yml" "$RESOURCES" "$M_SERVICE" "$M_PORT" "$M_HEALTH_PATH" "$M_HEALTH_STATUS" "$M_AUTH" <<'PY'
 import datetime, json, os, sys, tempfile
-path, slug, name, owner, url, repo, sha, envf, overlay, res = sys.argv[1:11]
+path, slug, name, owner, url, repo, sha, envf, overlay, res, svc, port, hpath, hstatus, auth = sys.argv[1:16]
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 try:
     inv = json.load(open(path))
@@ -270,7 +270,10 @@ apps = inv.setdefault("apps", {})
 cur = apps.get(slug, {})
 cur.update({"slug": slug, "name": name, "owner_email": owner, "url": url, "env_file": envf,
             "compose_overlay": overlay, "resources": sorted(set(res.split())),
-            "provisioned_at": now})
+            "provisioned_at": now,
+            # What "up" means for this app, from its company-app.yaml: ihc-doctor reads it.
+            "runtime": {"service": svc, "port": int(port), "health_path": hpath,
+                        "health_status": int(hstatus), "auth_required": auth == "true"}})
 cur.setdefault("created_at", now)
 if repo: cur["repository"] = repo
 if sha: cur["last_commit"] = sha
