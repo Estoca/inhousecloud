@@ -14,6 +14,7 @@
 #      profile, the user AUTHENTIK_SMOKE_USER (ihc-users only, password in .env)
 #      exists so smoke test 18 can prove a non-admin is denied.
 #   3. Gitea: admin, API tokens, organization, ihc-smoke repository, OIDC source.
+#   4. The portal's read-only API token IHC_PORTAL_API_TOKEN (docs/portal-api.md), once.
 # Talks to the services on their loopback control ports; tokens travel in curl config
 # files and on stdin, never on a command line, and nothing secret is printed.
 set -eu
@@ -40,6 +41,8 @@ HAVE_STATE=false; [ -f "$STATE_FILE" ] && HAVE_STATE=true
 record() { [ "$HAVE_STATE" = true ] && state stage first_run set resources "[\"$1\"]" || true; }
 # shellcheck source=lib/sso.sh
 . "$IHC_ROOT/scripts/lib/sso.sh"
+# shellcheck source=lib/portal-api.sh
+. "$IHC_ROOT/scripts/lib/portal-api.sh"
 
 AK="http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3"
 GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
@@ -163,11 +166,11 @@ if [ "$TLS_MODE" = internal ]; then
   PROXY_CERTIFICATE_ID="$(ensure_internal_certificate "$INSTALL_DIR/local/ca/wildcard.crt" "$INSTALL_DIR/local/ca/wildcard.key")"
   [ "$(env_get PROXY_CERTIFICATE_ID)" = "$PROXY_CERTIFICATE_ID" ] || env_set PROXY_CERTIFICATE_ID "$PROXY_CERTIFICATE_ID"
 fi
-FORWARD_AUTH_CONF="$(forward_auth_conf /health)"
 
 ensure_proxy_host "$AUTHENTIK_HOST" authentik-server 9000 ""
 ensure_proxy_host "$GITEA_HOST" gitea 3000 ""
-ensure_proxy_host "$PORTAL_HOST" portal 8080 "$FORWARD_AUTH_CONF"
+# The portal: forward auth, /health public, and the status API rule (lib/portal-api.sh).
+ensure_proxy_host "$PORTAL_HOST" portal 8080 "$(portal_forward_auth_conf)"
 case ",$COMPOSE_PROFILES," in
   # The S3 API: requests are signed per app key, so no forward auth (it would break every
   # client). Garage has no console; its admin API is never routed.
@@ -274,6 +277,16 @@ else
   log "OIDC in Gitea disabled by config"
 fi
 
+# ========================================================= Portal API token
+# IHC_PORTAL_API_TOKEN: the read-only bearer for GET /api/platform/status (docs/portal-api.md).
+# Generated once into .env, never printed; install.sh recreates the portal after this
+# script, so the container gets it. Its fingerprint goes to state.json.
+step "Portal API token"
+if [ -z "$(env_get IHC_PORTAL_API_TOKEN)" ]; then
+  env_set IHC_PORTAL_API_TOKEN "$(random_secret 48)"; ok "portal API token generated into .env"
+else ok "portal API token present"; fi
+PORTAL_API_FP="$(sha_fp "$(env_get IHC_PORTAL_API_TOKEN)")"
+
 # ============================================================ Protected route
 step "Protected route"
 t0=$(date +%s)
@@ -284,5 +297,5 @@ while :; do
   sleep 3
 done
 ok "portal route redirects anonymous requests to the outpost"
-[ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending)"
+[ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending portal_api_token_env=IHC_PORTAL_API_TOKEN portal_api_token_fingerprint="$PORTAL_API_FP")"
 ok "first-run complete"

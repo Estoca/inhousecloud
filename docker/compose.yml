@@ -281,6 +281,8 @@ services:
       USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
       PORTAL_ALLOW_DOMAIN_USERS: "false"
       TRUSTED_PROXY_HOSTS: proxy
+      # Read-only bearer for GET /api/platform/status (docs/portal-api.md); first-run makes it.
+      IHC_PORTAL_API_TOKEN: ${IHC_PORTAL_API_TOKEN:-}
       INVENTORY_PATH: /ihc/catalog/inventory.json
       PORTAL_MANIFEST_PATH: /app/company-app.yaml
       IHC_PROXY_URL: http://proxy:80

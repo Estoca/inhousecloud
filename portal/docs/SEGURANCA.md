@@ -34,10 +34,14 @@ ele deve ser exposto e o que ainda aceita escrita.
 | `PATCH /api/apps/:slug/metadata`, `PATCH /api/runtime/docker/:name/metadata` | ninguem: `405 read_only` |
 | `/api/admins*`, `/api/disk-usage-*` | super admin |
 | `/api/internal/mcp/v1/*` | so o `CATALOG_MCP_TOKEN` (`Authorization: Bearer`); a sessao nao abre |
+| `GET /api/platform/status` | tambem o `IHC_PORTAL_API_TOKEN` (`Authorization: Bearer`, so leitura, para agentes; `docs/portal-api.md` do cloud) |
 
-Sem a sessao do Authentik, toda rota `/api` fora da lista publica responde `401`; um
-`Authorization: Bearer` nunca substitui a sessao. O teste `test/auth-matrix.test.js` percorre a tabela de rotas do Express e
-garante isso.
+Sem a sessao do Authentik, toda rota `/api` fora da lista publica responde `401`. Um
+`Authorization: Bearer` so substitui a sessao em `GET /api/platform/status`, e so com o
+`IHC_PORTAL_API_TOKEN`: com esse token, qualquer outra rota responde `403`; token errado,
+`401`; portal sem a variavel, `503` nessa rota. O teste `test/auth-matrix.test.js` percorre a
+tabela de rotas do Express e garante o `401`; `test/service-token.test.js` garante o `403`
+do token em todas as outras.
 
 ## O que ainda escreve no portal
 

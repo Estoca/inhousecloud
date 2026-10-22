@@ -32,4 +32,6 @@ Hard rules (the full list is in the contract):
 - Never delete a database, bucket, route, repository, volume or the install directory.
 - Ask before applying an install plan, making an app public, or touching anything outside the box.
 
+To read the health of the cloud's services without a browser (a script, a monitor, an agent off the box), use the portal's read-only API: `GET <portal>/api/platform/status` with `Authorization: Bearer <IHC_PORTAL_API_TOKEN>` from `<install-dir>/.env`. The contract is [`docs/portal-api.md`](docs/portal-api.md); `install.sh status --json` and `ihc doctor --json` already read it and say `"source": "portal-api"` (or `"local"` when the portal does not answer).
+
 Reference: [`docs/gitops-flow.md`](docs/gitops-flow.md) (what the deploy job does), [`docs/app-contract.md`](docs/app-contract.md) (`company-app.yaml` and the variables an app receives), [`docs/install-design.md`](docs/install-design.md) (installer stages and ingress modes).

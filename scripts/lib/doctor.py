@@ -15,7 +15,11 @@ that do not apply to this box (TLS with tls off, the agent without its profile) 
 in the list; they are named under not_applicable. The JSON is
   {doctor_version, generated_at, install_dir, checkout, duration_seconds,
    checks: [{name, status, detail, action, runbook, evidence}], summary: {ok, warn, fail},
-   not_applicable: [{name, reason}]}
+   not_applicable: [{name, reason}], source, platform, portal_api}
+source says where the platform view came from: "portal-api" when the portal's read-only
+API answered (platform is its GET /api/platform/status, docs/portal-api.md, and the
+portal-api check compares it), "local" when it did not (platform is null, portal_api.reason
+says why, and the report is the local checks alone).
 Exit status: 0 without a fail, 1 with one. Secrets: the proxy admin password and the
 Gitea tokens are read from .env into this process and sent only to loopback services,
 never on a command line, never printed.
@@ -25,6 +29,7 @@ import urllib.error, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import legacy  # noqa: E402  (an installation under a previous name: one message, no checks)
+import portalapi  # noqa: E402  (the portal's read-only status API, docs/portal-api.md)
 
 DOCTOR_VERSION = 1
 RUNBOOK = "docs/runbooks/%s.md"
@@ -858,6 +863,36 @@ def c_version(box):
     return c.ok("checkout at %s (%s); origin/main is at %s: %s. Informative only: updating is the admin's call" % (head[:12], branch.strip(), remote[:12], where))
 
 
+def c_portal_api(box, reading):
+    """The platform as the portal sees it, read with IHC_PORTAL_API_TOKEN through the proxy."""
+    c = Check("portal-api")
+    meta = reading["portal_api"]
+    c.see("GET %s -> %s" % (meta.get("url", portalapi.PATH), meta.get("http_code", "not sent")))
+    if reading["source"] != "portal-api":
+        reason = meta.get("reason", "no answer")
+        if not box.env.get(portalapi.TOKEN_ENV):
+            action = "update the install: %s/install.sh --apply --from foundation --install-dir %s" % (box.H, box.I)
+        elif meta.get("http_code") == 302:
+            action = "%s/scripts/first-run.sh --install-dir %s (puts the status API rule on the portal route)" % (box.H, box.I)
+        elif meta.get("http_code") in (401, 503):
+            action = "%s up -d portal (the container gets the token from .env)" % box.dc_shown
+        elif meta.get("http_code") in (502, 504):
+            action = "%s up -d portal, then %s logs --tail 30 portal if it does not stay up" % (box.dc_shown, box.dc_shown)
+        else:
+            action = "see the portal check of containers and routes above; docs/portal-api.md"
+        return c.warn("portal API not read (%s); this report is from local checks only" % reason, action)
+    p = reading["platform"]
+    s = p["summary"]
+    c.see("portal checked at %s, overall %s, %d healthy, %d unhealthy, %d unknown" % (p.get("checked_at"), p["overall"], s["healthy"], s["unhealthy"], s["unknown"]))
+    bad = [x for x in p["services"] if x.get("healthy") is False]
+    for x in bad:
+        c.see("%s: %s" % (x["name"], x["detail"]))
+    if bad:
+        return c.warn("the portal sees %d of %d services unhealthy: %s" % (len(bad), s["total"], ", ".join(x["name"] for x in bad)),
+                      "compare with the checks above; the portal's Platform page shows the same (docs/portal-api.md)")
+    return c.ok("the portal sees %d of %d services healthy%s" % (s["healthy"], s["total"], (", %d not configured" % s["unknown"]) if s["unknown"] else ""))
+
+
 # ------------------------------------------------------------------------------ main
 
 def doctor(install_dir, root):
@@ -887,6 +922,7 @@ def doctor(install_dir, root):
     jobs.append(("version", c_version))
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         hosts_f = pool.submit(npm_hosts, box)
+        portal_f = pool.submit(portalapi.fetch_status, box.env, box.I)
         futs = [(n, pool.submit(f, box)) for n, f in jobs]
         hosts, err = hosts_f.result()
         # routes after memory and the apps after backup: the order a person reads them in.
@@ -898,6 +934,12 @@ def doctor(install_dir, root):
                 checks.append(f.result(timeout=40))
             except Exception as e:  # noqa: BLE001  (a broken check is a finding, not a crash)
                 checks.append(Check(name).warn("the check itself failed: %s" % e, "run the doctor with --verbose and report it"))
+        try:
+            box.reading = portal_f.result(timeout=40)
+        except Exception as e:  # noqa: BLE001
+            box.reading = {"source": "local", "platform": None, "portal_api": {"token_env": portalapi.TOKEN_ENV, "reason": "the read failed: %s" % e}}
+        at = next((i for i, c in enumerate(checks) if c.name in ("agent", "version")), len(checks))
+        checks.insert(at, c_portal_api(box, box.reading))
     if not box.apps():
         na.append({"name": "app:*", "reason": "no app provisioned yet"})
     return box, checks, na, t0
@@ -911,6 +953,8 @@ def report(box, checks, na, t0):
          "duration_seconds": round(time.time() - t0, 1),
          "ingress": "%s/%s" % (box.ingress, box.tls), "profiles": ["core"] + box.profiles,
          "checks": [c.as_dict() for c in checks], "summary": s, "not_applicable": na}
+    reading = getattr(box, "reading", None) or {"source": "local", "platform": None, "portal_api": {"token_env": portalapi.TOKEN_ENV, "reason": "Docker is not answering: nothing else was read"}}
+    r.update(reading)
     # The same guard as the brief: no value of .env may leave in a report.
     text = json.dumps(r)
     for k, v in box.env.items():
@@ -921,7 +965,7 @@ def report(box, checks, na, t0):
 
 def text(r, verbose):
     mark = {"ok": "[ok]", "warn": "[!!]", "fail": "[xx]"}
-    out = ["InHouseCloud doctor: %s (%s ingress, TLS %s), %s, %.1f s" % (r["install_dir"], *r["ingress"].split("/"), r["generated_at"], r["duration_seconds"])]
+    out = ["InHouseCloud doctor: %s (%s ingress, TLS %s), %s, %.1f s, platform from %s" % (r["install_dir"], *r["ingress"].split("/"), r["generated_at"], r["duration_seconds"], r.get("source", "local"))]
     w = max(len(c["name"]) for c in r["checks"]) if r["checks"] else 10
     order = {"fail": 0, "warn": 1, "ok": 2}
     rows = r["checks"] if verbose else sorted(r["checks"], key=lambda c: order[c["status"]])

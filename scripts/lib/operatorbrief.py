@@ -125,6 +125,7 @@ CREDENTIALS = {
     "GITEA_DEPLOY_RUNNER_TOKEN": ("registers a deploy runner for the organization: root on the box", "used once; regenerate scoped to the organization", "never"),
     "POSTGRES_PASSWORD": ("superuser of the shared Postgres: every app's data", "ALTER ROLE, then .env, then recreate postgres and backup", "never"),
     "PORTAL_DB_PASSWORD": ("owner of the portal's database", "ALTER ROLE, then .env", "never"),
+    "IHC_PORTAL_API_TOKEN": ("portal API, read only: GET /api/platform/status (docs/portal-api.md)", "empty it in .env, run first-run.sh, then recreate portal", "never"),
     "GARAGE_ADMIN_TOKEN": ("object storage admin API: every bucket and every key", "new value in .env, then recreate garage", "never"),
     "GARAGE_RPC_SECRET": ("object storage node RPC and CLI: full control of the node", "new value in .env, then recreate garage", "never"),
     "GARAGE_METRICS_TOKEN": ("object storage metrics on the admin port", "new value in .env, then recreate garage", "never"),

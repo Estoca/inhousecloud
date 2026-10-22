@@ -186,11 +186,11 @@ Success: `<slug> is up at http://<slug>.<BASE_DOMAIN>`. It polls the healthcheck
 
 ### 3.1 Platform status
 
-The portal serves `GET http(s)://portal.<BASE_DOMAIN>/api/platform/status`, one entry per core service and the newest backup, behind the sign-in: a person's browser session opens it, an agent without a browser has no token for it yet. On the box, use:
+The portal serves `GET http(s)://portal.<BASE_DOMAIN>/api/platform/status`, one entry per core service and the newest backup: a person opens it with the browser session, an agent with the read-only token `IHC_PORTAL_API_TOKEN` from `$DIR/.env` as `Authorization: Bearer`. The token opens that route and nothing else (403 on any other). Fields, error codes and a `curl` that keeps the token off the command line: [`portal-api.md`](portal-api.md). On the box you rarely call it by hand, because the two commands below read it for you and say so in `source` (`portal-api` when the portal answered, `local` when it did not, with `portal_api.reason`):
 
 ```bash
-scripts/ihc-doctor.sh --install-dir "$DIR" --json   # every check (containers, routes, sign-in, runners, data, backup, each app): ok, warn or fail, and what to do
-./install.sh status --install-dir "$DIR" --json      # stages, smoke tests, URLs
+scripts/ihc-doctor.sh --install-dir "$DIR" --json   # every check (containers, routes, sign-in, runners, data, backup, each app): ok, warn or fail, and what to do; plus the portal's view (check portal-api, field platform)
+./install.sh status --install-dir "$DIR" --json      # stages, smoke tests, URLs, and the portal's view of the services (field platform)
 scripts/ihc-app.sh list --install-dir "$DIR"     # apps: slug, URL, owner, last provision
 ```
 

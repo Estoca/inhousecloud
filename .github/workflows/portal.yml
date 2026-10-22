@@ -1,5 +1,6 @@
 # The portal (portal/): the private names check, its tests and its build, on every push
-# and pull request that touches it, plus the inventory contract on the cloud's side.
+# and pull request that touches it, plus the inventory contract and the status API
+# (scripts/tests/portal-api.sh) on the cloud's side.
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -32,3 +33,6 @@ jobs:
       - name: inventory contract (cloud side)
         working-directory: .
         run: scripts/tests/inventory-contract.sh
+      - name: status API (cloud side)
+        working-directory: .
+        run: scripts/tests/portal-api.sh
