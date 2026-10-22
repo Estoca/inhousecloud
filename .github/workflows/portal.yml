@@ -43,3 +43,6 @@ jobs:
       - name: MCP gateway (actor JWT, routing, fallback, cloud side)
         working-directory: .
         run: scripts/tests/mcp-gateway.sh
+      - name: copy_portal leaves a tree the image's node user can read
+        working-directory: .
+        run: scripts/tests/copy-portal-perms.sh
