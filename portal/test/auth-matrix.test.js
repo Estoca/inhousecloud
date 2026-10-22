@@ -121,6 +121,10 @@ test('domain viewers can read every read-only route but not admin routes', async
     for (const [method, path] of [
       ['GET', '/api/admins'],
       ['GET', '/api/disk-usage-snapshots'],
+      ['GET', '/api/platform/status'],
+      ['GET', '/api/storage-usage'],
+      ['GET', '/api/people'],
+      ['GET', '/api/groups'],
       ['POST', '/api/platform/status/refresh'],
       ['POST', '/api/apps-status/refresh'],
     ]) {
@@ -222,6 +226,14 @@ test('the role comes from the outpost groups: ihc-admins is admin, ihc-users is 
     assert.equal((await me({ 'x-authentik-email': 'ana@example.com', 'x-authentik-groups': 'ihc-users' })).role, 'super_admin');
     const status = await fetch(`${baseUrl}/api/platform/status/refresh`, { method: 'POST', headers: { 'x-authentik-email': 'davi@example.org', 'x-authentik-groups': 'ihc-users' } });
     assert.equal(status.status, 403);
+    // ihc-users: catalog, health and deploys yes; the machine's detail and the people no
+    const user = { 'x-authentik-email': 'davi@example.org', 'x-authentik-groups': 'ihc-users' };
+    for (const path of ['/api/apps', '/api/apps-status', '/api/apps/pedidos/deploys']) {
+      assert.notEqual((await fetch(`${baseUrl}${path}`, { headers: user })).status, 403, `${path} refused to ihc-users`);
+    }
+    for (const path of ['/api/platform/status', '/api/storage-usage', '/api/people', '/api/groups']) {
+      assert.equal((await fetch(`${baseUrl}${path}`, { headers: user })).status, 403, `${path} open to ihc-users`);
+    }
   } finally {
     server.close();
   }

@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 23 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
+Step 18 of the install sequence, 24 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -180,6 +180,22 @@ python3 scripts/lib/portalapi.py fetch "$IHC_INSTALL_DIR"
 #       401; a wrong token, 401; the token on another route through the proxy never
 #       opens it (302, 401 or 403), and straight to the portal it is 403; the installer's
 #       reader (behind `install.sh status --json` and `ihc doctor`) says source portal-api
+
+# 24. The portal by role
+scripts/sso-login-check.sh --install-dir "$IHC_INSTALL_DIR" --user ihc-smoke-user \
+  --password-env AUTHENTIK_SMOKE_USER_PASSWORD --target "$PORTAL_BASE_URL" --expect allowed \
+  --probe /api/apps-status=200 --probe /api/people=403 --probe /api/platform/status=403
+docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl -H 'X-authentik-email: <admin>' -H 'X-authentik-groups: ihc-admins' 'http://portal:8080/api/people?refresh=1'
+docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl ... 'http://portal:8080/api/groups?refresh=1'
+curl -K <config with AUTHENTIK_PORTAL_TOKEN> http://127.0.0.1:$AUTHENTIK_LOCAL_PORT/api/v3/core/users/?page_size=1
+curl -K <same> http://127.0.0.1:$AUTHENTIK_LOCAL_PORT/api/v3/core/groups/?page_size=1
+curl -K <same> -X POST -d '{"name":"ihc-smoke-must-not-exist-<pid>"}' http://127.0.0.1:$AUTHENTIK_LOCAL_PORT/api/v3/core/groups/
+# PASS: the smoke user (ihc-users only) signs in to the portal through the SSO for real
+#       and, with that session, reads the catalog (200) and is refused the people list
+#       and the platform status (403); as admin, /api/people lists the smoke user in
+#       ihc-users only and ihc-portal in no group, and /api/groups has ihc-admins and
+#       ihc-users with the smoke user not in ihc-admins; the portal's token reads users
+#       and groups (200) and creating a group answers 403
 ```
 
 Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
@@ -195,6 +211,8 @@ Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, r
 Test 19 provisions with the same function `ihc-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
 
 Test 23 is what an agent does: it reads the platform with the read-only token and nothing else. Through the proxy only `GET /api/platform/status` with an `Authorization` header skips the forward auth (the rule is in `scripts/lib/portal-api.sh`); every other path with the token still meets Authentik, so the portal's own `403` for the token on another route is checked from the proxy container, straight to `portal:8080`. Without the box, `scripts/tests/portal-api.sh` checks the parser, the fallback to `source: local`, the doctor's check, the nginx rule's text and the real portal behind a stand-in proxy.
+
+Test 24 is the other half of 22 with a real session: the smoke user signs in with its password from `.env`, so it proves the portal's binding to `ihc-users` in Authentik and the portal's own role check on what the outpost sends, not headers we wrote. Its last part proves the service account cannot write with the very token the portal holds; the group name is unique per run, so a broken permission would leave one group named `ihc-smoke-must-not-exist-<pid>` behind, visible in the People page.
 
 Test 22 stands in for a signed-in admin by sending, from the proxy container, the headers the outpost would set: the browser path (forward auth, then the same headers) is test 9 plus the outpost itself. The positive login with a real session needs the admin's password, which a human replaces; `scripts/sso-login-check.sh --target "$PORTAL_BASE_URL"` checks it by hand.
 

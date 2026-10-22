@@ -22,7 +22,8 @@ ele deve ser exposto e o que ainda aceita escrita.
 - O portal nao tem o socket do Docker: le pelo `docker-ro` (GET numa lista permitida,
   `Env` so com nomes, numa rede interna so dele e do proxy Docker), e nunca recebe a
   senha de admin do proxy nem o token de admin do Authentik ou do Gitea (so o token
-  somente leitura do Gitea). O container roda como `node` (uid 1000), sem capabilities.
+  somente leitura do Gitea e o da conta de servico `ihc-portal` do Authentik, que so
+  tem `view_user` e `view_group`: um `POST` com ele leva 403, smoke test 24). O container roda como `node` (uid 1000), sem capabilities.
 
 ## Autenticacao das rotas
 
@@ -30,6 +31,7 @@ ele deve ser exposto e o que ainda aceita escrita.
 |---|---|
 | `GET /health`, `GET /api/health` | publico |
 | demais `GET /api/*` | qualquer pessoa autenticada pelo Authentik (grupo `ihc-users` ou `ihc-admins`) |
+| `GET /api/platform/status`, `GET /api/storage-usage`, `GET /api/people`, `GET /api/groups` | admin (grupo `ihc-admins`); `ihc-users` leva `403` |
 | `POST /api/apps-status/refresh`, `POST /api/platform/status/refresh` | admin (grupo `ihc-admins`) |
 | `PATCH /api/apps/:slug/metadata`, `PATCH /api/runtime/docker/:name/metadata` | ninguem: `405 read_only` |
 | `/api/admins*`, `/api/disk-usage-*` | super admin |
@@ -69,5 +71,5 @@ deploy, a descoberta de repos, as metricas de acesso e o login Google.
 - Quem pode entrar: o grupo `ihc-admins` (admin) e o `ihc-users` (viewer), lidos de
   `X-authentik-groups`; super admins de `SUPER_ADMIN_EMAILS`; admins da tabela
   `portal_admins`. No cloud, o dominio do e-mail sozinho nao da acesso
-  (`PORTAL_ALLOW_DOMAIN_USERS=false`). Hoje a aplicacao do portal no Authentik esta
-  ligada so a `ihc-admins`; abrir para `ihc-users` e decisao do PR 5 do cloud.
+  (`PORTAL_ALLOW_DOMAIN_USERS=false`). A aplicacao do portal no Authentik esta ligada
+  a `ihc-admins` e a `ihc-users` (first-run); o mapa grupo -> papel e `src/roles.js`.

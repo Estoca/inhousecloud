@@ -80,7 +80,8 @@ one of them from the installer's `.env`; for development, `.env.example` lists t
 | `DOCKER_HOST` | `tcp://docker-ro:2375`, the cloud's read-only Docker API; never the socket |
 | `IHC_PROJECT`, `COMPOSE_PROFILES`, `INGRESS`, `TUNNEL_PROVIDER` | the cloud's Compose project and profiles: which services the Platform page lists |
 | `GITEA_URL`, `GITEA_PUBLIC_URL`, `GITEA_ORG`, `GITEA_TOKEN` | Gitea API (`http://gitea:3000`), links, the apps' organization, the read-only token |
-| `AUTHENTIK_URL`, `AUTHENTIK_HOST`, `AUTHENTIK_INTERNAL_URL` | Authentik for links, for recognizing its redirects, and for its health |
+| `AUTHENTIK_URL`, `AUTHENTIK_HOST`, `AUTHENTIK_INTERNAL_URL` | Authentik for links, for recognizing its redirects, and for its health and API |
+| `AUTHENTIK_PORTAL_TOKEN`, `PEOPLE_CACHE_TTL_SECONDS` | the API token of the read-only service account `ihc-portal` (first-run writes it; `view_user` and `view_group` only), for the People page (`GET /api/people`, `GET /api/groups`, admin); its cache in seconds (60). Empty: those routes answer 503 |
 | `GARAGE_HEALTH_URL` | Garage's health (storage profile) |
 | `BACKUP_ENABLED`, `BACKUP_REPORTS_DIR`, `BACKUP_MAX_AGE_HOURS` | the backup job's status files, mounted read only |
 | `ADMIN_GROUP`, `USER_GROUP` | the cloud's Authentik groups: `ihc-admins` is admin, `ihc-users` is viewer |
@@ -199,6 +200,6 @@ app's `overall_status` changes.
 
 Read-only portal wired into the cloud: catalog from `inventory.json`, Docker through the
 read-only API, health and SSO through the proxy, Gitea Actions deploy history, backup
-status and the platform view. Next, in the cloud's plan: Authentik people and groups
-(PR 5), the status API for agents with a service token (PR 6), the MCP gateway as a
+status, the platform view, and people and groups from Authentik (admin; `ihc-users`
+sign in as viewer). Next, in the cloud's plan: the status API for agents with a service token (PR 6), the MCP gateway as a
 second entrypoint of this image (PR 7). The CLI has only `validate`.

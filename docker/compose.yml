@@ -252,9 +252,11 @@ services:
     #   the backup status    <BACKUP_DESTINATION>/reports, read only
     #   Docker               through docker-ro on its own internal network, never the socket
     #   apps and routes      through the proxy with the app's Host header, as ihc doctor does
-    #   Gitea                with the read-only token; Authentik, the proxy, Garage: health only
+    #   Gitea                with the read-only token; the proxy, Garage: health only
+    #   Authentik            health, and users and groups with the token of the read-only
+    #                        service account ihc-portal (AUTHENTIK_PORTAL_TOKEN, first-run)
     # Who the person is comes from the forward auth headers, trusted only from the proxy;
-    # admin is the AUTHENTIK_PORTAL_GROUP group.
+    # admin is the AUTHENTIK_PORTAL_GROUP group, viewer the AUTHENTIK_APP_GROUP group.
     build:
       context: ${PORTAL_BUILD_CONTEXT}
     image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:local
@@ -299,6 +301,7 @@ services:
       AUTHENTIK_URL: ${AUTHENTIK_BASE_URL}
       AUTHENTIK_HOST: ${AUTHENTIK_HOST}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
+      AUTHENTIK_PORTAL_TOKEN: ${AUTHENTIK_PORTAL_TOKEN:-}
       GARAGE_HEALTH_URL: http://garage:3903/health
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
       BACKUP_REPORTS_DIR: /ihc/backup-reports

@@ -267,5 +267,5 @@ Mac with Docker Desktop: [Mac 5](#mac-5-operate-check-stop-remove). Any other bo
 ## What this does not show yet
 
 - **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (Cloudflare tunnel or DNS) exists in the installer and is not tested end to end. `local`, used here, answers on the box (and on the Mac through Lima's forward).
-- **The portal, beyond reading.** It shows the catalog, health, SSO, deploys and the platform status; people and groups from Authentik, a token for agents on its status API and the MCP gateway are next ([`../README.md`](../README.md#roadmap)).
+- **The portal, beyond reading.** It shows the catalog, health, SSO, deploys, the platform status and who is in which Authentik group, and only reads; a token for agents on its status API and the MCP gateway are next ([`../README.md`](../README.md#roadmap)).
 - **Mail.** Authentik and Gitea are installed with SMTP off: no password recovery and no invitations; an admin creates each person and sets the first password ([`first-user.md`](first-user.md)).

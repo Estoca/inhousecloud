@@ -848,7 +848,7 @@ stage_secrets() {
   env_secret AUTHENTIK_BOOTSTRAP_TOKEN "${CFG_authentik__bootstrap_token_env:-IHC_AUTHENTIK_BOOTSTRAP_TOKEN}" 60
   env_default AUTHENTIK_PORTAL_GROUP "${CFG_authentik__portal_group:-ihc-admins}"
   env_default AUTHENTIK_APP_GROUP "${CFG_authentik__app_group:-ihc-users}"
-  env_default AUTHENTIK_OUTPOST_ID ""
+  env_default AUTHENTIK_OUTPOST_ID ""; env_default AUTHENTIK_PORTAL_TOKEN ""
   env_default GITEA_ADMIN_USERNAME "${CFG_gitea__initial_admin_username:-admin}"
   env_secret GITEA_ADMIN_PASSWORD "${CFG_gitea__initial_admin_password_env:-IHC_GITEA_ADMIN_PASSWORD}" 24
   env_default GITEA_ADMIN_EMAIL "$ADMIN_EMAIL"
@@ -1160,8 +1160,9 @@ stage_first_run() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
   "$IHC_ROOT/scripts/first-run.sh" $args || return 1
-  # first-run generates the read-only Gitea token the portal lists deploys with: recreate
-  # the portal so it gets it (Compose recreates only when its environment changed).
+  # first-run generates the read-only Gitea token the portal lists deploys with and the
+  # Authentik token of its People page: recreate the portal so it gets them (Compose
+  # recreates only when its environment changed).
   dc up -d portal >&2 || return 1
   wait_healthy 120 portal || return 1
 }

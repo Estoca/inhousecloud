@@ -5,7 +5,7 @@
 # except status lines and the Gitea login that resulted.
 #
 #   scripts/sso-login-check.sh --install-dir DIR [--user akadmin] [--password-env VAR]
-#       [--target URL [--expect allowed|denied]]
+#       [--target URL [--expect allowed|denied] [--probe PATH=CODE ...]]
 #
 # Default user is akadmin with AUTHENTIK_BOOTSTRAP_PASSWORD from .env. Run it on the box
 # (it pins the public names to the proxy on 127.0.0.1). Not part of the smoke tests with
@@ -14,6 +14,9 @@
 # tool): allowed means the user ends on URL with HTTP 200 behind the SSO; denied means
 # Authentik refuses the user after a successful sign-in. Smoke test 18 runs it with the
 # smoke user (AUTHENTIK_SMOKE_USER) and --expect denied on the ops tools.
+# --probe PATH=CODE (repeatable, with --expect allowed): after the sign-in, GET URL+PATH
+# with the same session and require HTTP CODE. Smoke test 24 runs it on the portal:
+# the smoke user reads the catalog (200) and is refused the people list (403).
 set -eu
 IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
@@ -22,7 +25,7 @@ IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 USER_NAME=akadmin
 PASSWORD_ENV=AUTHENTIK_BOOTSTRAP_PASSWORD
-TARGET=""; EXPECT=allowed
+TARGET=""; EXPECT=allowed; PROBES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -30,7 +33,8 @@ while [ $# -gt 0 ]; do
     --password-env) PASSWORD_ENV="$2"; shift ;;
     --target) TARGET="${2%/}"; shift ;;
     --expect) EXPECT="$2"; shift ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --probe) case "$2" in /*=[0-9][0-9][0-9]) PROBES="$PROBES $2" ;; *) die "--probe is PATH=CODE, e.g. /api/people=403" ;; esac; shift ;;
+    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
   shift
@@ -127,7 +131,18 @@ if [ -n "$TARGET" ]; then
   done
   if [ "$outcome" = "$EXPECT" ]; then
     ok "$USER_NAME: $outcome at $TARGET, as expected"
-    echo "sso-login-check: PASS user=$USER_NAME target=$TARGET outcome=$outcome"
+    seen=""; missed=""
+    for p in $PROBES; do
+      [ "$outcome" = allowed ] || break
+      get "$TARGET${p%%=*}"
+      seen="$seen ${p%%=*}=$CODE"
+      [ "$CODE" = "${p##*=}" ] && log "GET ${p%%=*} -> $CODE, as expected" || { fail "GET ${p%%=*} -> $CODE (expected ${p##*=})"; missed="$missed ${p%%=*}=$CODE"; }
+    done
+    if [ -n "$missed" ]; then
+      echo "sso-login-check: FAIL user=$USER_NAME target=$TARGET outcome=$outcome probes:$missed"
+      exit 1
+    fi
+    echo "sso-login-check: PASS user=$USER_NAME target=$TARGET outcome=$outcome${seen:+ probes:$seen}"
     exit 0
   fi
   fail "$USER_NAME: $outcome at $TARGET (expected $EXPECT)"

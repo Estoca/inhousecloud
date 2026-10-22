@@ -378,7 +378,7 @@ test('GET /api/platform/config exposes the installation names without secrets', 
   }
 });
 
-test('GET /api/platform/status returns the core services and links for authenticated users', async () => {
+test('GET /api/platform/status returns the core services and links for admins only', async () => {
   let refreshes = 0;
   const { server, baseUrl } = await listen(createApp({
     auth: adminAuth(),
@@ -403,8 +403,12 @@ test('GET /api/platform/status returns the core services and links for authentic
     const viewer = await fetch(`${baseUrl}/api/platform/status?refresh=1`, {
       headers: { 'x-authentik-email': 'alguem@example.com' },
     });
-    assert.equal(viewer.status, 200);
-    const body = await viewer.json();
+    assert.equal(viewer.status, 403);
+    assert.equal(refreshes, 0);
+
+    const admin = await fetch(`${baseUrl}/api/platform/status?refresh=1`, asAdmin);
+    assert.equal(admin.status, 200);
+    const body = await admin.json();
     assert.equal(body.overall, 'healthy');
     assert.equal(body.services[0].name, 'Gitea');
     assert.equal(body.links.portainer, 'https://portainer.cloud.localhost');

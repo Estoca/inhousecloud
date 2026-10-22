@@ -34,6 +34,8 @@ import { createAuth } from './auth.js';
 import { renderLogin } from './ui.js';
 import { catalogMcpTools, executeCatalogMcpTool } from './catalog-mcp.js';
 import { createServiceTokenGate } from './service-token.js';
+import { createAuthentikDirectory } from './authentik-directory.js';
+import { attachPeopleRoutes } from './people-routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, '..', 'dist');
@@ -97,6 +99,7 @@ export function createApp({
   statusCache = null,
   statusCacheConfig = statusCacheConfigFromEnv(),
   auth = createAuth(),
+  authentikDirectory = createAuthentikDirectory(),
 } = {}) {
   const app = express();
 
@@ -335,9 +338,11 @@ export function createApp({
 
   // Saude dos servicos centrais do cloud (proxy, Authentik, Gitea, runners, Postgres,
   // Redis, backup e, por perfil, Garage, ops, agente e tunnel). Mesmo JSON para a pagina
-  // e para agentes: com sessao, ou com o token de servico IHC_PORTAL_API_TOKEN
-  // (docs/portal-api.md do cloud), que so abre esta rota.
-  app.get('/api/platform/status', async (req, res) => {
+  // e para agentes: com sessao de admin, ou com o token de servico IHC_PORTAL_API_TOKEN
+  // (docs/portal-api.md do cloud), que so abre esta rota. ihc-users (viewer) leva 403:
+  // ve catalogo, saude e deploys dos apps, nao o detalhe da maquina.
+  const adminOrServiceToken = (req, res, next) => (req.serviceToken ? next() : auth.requireAdmin(req, res, next));
+  app.get('/api/platform/status', adminOrServiceToken, async (req, res) => {
     res.json(await platformStatusResource.get({}, { refresh: refreshRequested(req) }));
   });
 
@@ -346,7 +351,7 @@ export function createApp({
     res.json(await platformStatusResource.refresh());
   });
 
-  app.get('/api/storage-usage', async (_req, res) => {
+  app.get('/api/storage-usage', auth.requireAdmin, async (_req, res) => {
     const result = await getStorageUsageFn();
     if (!result.available) {
       res.status(503).json({
@@ -532,6 +537,9 @@ export function createApp({
     }
     res.json(result.result);
   });
+
+  // Pessoas e grupos do Authentik (admin): src/people-routes.js.
+  attachPeopleRoutes(app, { auth, directory: authentikDirectory, swr });
 
   app.use('/api', (_req, res) => {
     res.status(404).json({

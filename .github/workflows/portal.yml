@@ -1,6 +1,6 @@
 # The portal (portal/): the private names check, its tests and its build, on every push
-# and pull request that touches it, plus the inventory contract and the status API
-# (scripts/tests/portal-api.sh) on the cloud's side.
+# and pull request that touches it, plus, on the cloud's side, the inventory contract, the
+# status API (scripts/tests/portal-api.sh) and the role the portal gives each Authentik group.
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -36,3 +36,6 @@ jobs:
       - name: status API (cloud side)
         working-directory: .
         run: scripts/tests/portal-api.sh
+      - name: role from the Authentik groups
+        working-directory: .
+        run: scripts/tests/portal-roles.sh
