@@ -28,18 +28,12 @@ auth:
   allowed_domains:
     - example.com
 
-agent_interface:
-  mcp:
-    provider: mcp-gateway
-    tools_path: /api/internal/mcp/v1/tools
-    execute_path: /api/internal/mcp/v1/tools/{tool}/execute
-    authentication: actor_jwt
-    audience: company-app-template.internal-mcp
-    scopes:
-      - company-app-template.read
-    tools:
-      - name: company_app_template_get_status
-        access: read
+mcp:
+  audience: company-app-template.mcp
+  tools_path: /mcp/tools
+  execute_path: /mcp/tools/{tool}/execute
+  scopes:
+    company-app-template.read: [ihc-users]
 
 database:
   required: false

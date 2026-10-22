@@ -303,6 +303,7 @@ services:
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
       AUTHENTIK_PORTAL_TOKEN: ${AUTHENTIK_PORTAL_TOKEN:-}
       GARAGE_HEALTH_URL: http://garage:3903/health
+      MCP_HEALTH_URL: http://mcp:8090/health
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
       BACKUP_REPORTS_DIR: /ihc/backup-reports
       BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
@@ -320,6 +321,64 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  mcp:
+    # The MCP gateway (docs/mcp-gateway.md): the portal's image with another entrypoint,
+    # at mcp.<BASE_DOMAIN> with no forward auth (MCP clients bring a bearer token). It
+    #   - checks the access token Authentik issued to the MCP client (OAuth2 provider
+    #     ihc-mcp, authorization code with PKCE, made by first-run) and lets in the
+    #     AUTHENTIK_APP_GROUP group only;
+    #   - serves the platform's read-only tools (catalog for everyone, status, people and
+    #     groups for AUTHENTIK_PORTAL_GROUP) and routes app tools to each app's container
+    #     on the ihc network, with a short actor JWT signed by its own key;
+    #   - publishes /.well-known/oauth-protected-resource and /.well-known/jwks.json.
+    # It reads the inventory read only, the portal's status API with IHC_PORTAL_API_TOKEN,
+    # and Authentik with the read-only service account's token. Its signing key lives in
+    # the mcp-keys volume, never in .env or Git.
+    image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:local
+    command: ["node", "src/mcp-gateway.js"]
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      portal:
+        condition: service_started
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8090"
+      BASE_DOMAIN: ${BASE_DOMAIN}
+      PUBLIC_BASE_URL: ${PORTAL_BASE_URL}
+      PORTAL_HOST: ${PORTAL_HOST}
+      MCP_PUBLIC_URL: ${MCP_BASE_URL:-}
+      MCP_OIDC_CLIENT_ID: ${MCP_OIDC_CLIENT_ID:-ihc-mcp}
+      MCP_OIDC_ISSUER: ${AUTHENTIK_BASE_URL}/application/o/${MCP_OIDC_CLIENT_ID:-ihc-mcp}/
+      MCP_OIDC_JWKS_URL: http://authentik-server:9000/application/o/${MCP_OIDC_CLIENT_ID:-ihc-mcp}/jwks/
+      MCP_OIDC_USERINFO_URL: http://authentik-server:9000/application/o/userinfo/
+      MCP_ACTOR_KEY_PATH: /ihc/mcp-keys/actor-key.pem
+      MCP_ACTOR_TTL_SECONDS: ${MCP_ACTOR_TTL_SECONDS:-300}
+      ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
+      USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
+      INVENTORY_PATH: /ihc/catalog/inventory.json
+      PORTAL_MANIFEST_PATH: /app/company-app.yaml
+      PORTAL_INTERNAL_URL: http://portal:8080
+      IHC_PORTAL_API_TOKEN: ${IHC_PORTAL_API_TOKEN:-}
+      IHC_PROXY_URL: http://proxy:80
+      AUTHENTIK_URL: ${AUTHENTIK_BASE_URL}
+      AUTHENTIK_HOST: ${AUTHENTIK_HOST}
+      AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
+      AUTHENTIK_PORTAL_TOKEN: ${AUTHENTIK_PORTAL_TOKEN:-}
+    volumes:
+      - ./catalog:/ihc/catalog:ro
+      - mcp-keys:/ihc/mcp-keys
+    networks: [ihc]
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   docker-ro:
     # The Docker API, read only (docker/agent/docker-ro-proxy.py, docs/security.md): GET on
@@ -761,3 +820,4 @@ volumes:
   filebrowser-db:
   tailscale-state:
   backup-cache:
+  mcp-keys:

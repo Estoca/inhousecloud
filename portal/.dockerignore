@@ -7,3 +7,4 @@ coverage
 tmp
 data
 .DS_Store
+.mcp-actor-key.pem

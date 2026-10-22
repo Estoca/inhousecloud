@@ -42,6 +42,19 @@ The portal's route lets in `ihc-admins` and `ihc-users` (two policy bindings on 
 - **To revoke:** Authentik > Directory > Tokens > `ihc-portal-api` > Delete (the People page then answers 503 until first-run runs again), or deactivate the user `ihc-portal`.
 - **What it reveals if leaked:** the directory (who works here, their emails and groups). Not a way in: no password, no write.
 
+## The MCP gateway: agents acting as a person
+
+The gateway ([`mcp-gateway.md`](mcp-gateway.md)) lets an AI client act as the signed-in person. What bounds it:
+
+- **Who enters.** Only someone who signs in to Authentik and is in `ihc-users`: the application `ihc-mcp` is bound to that group (Authentik refuses the code to anyone else), and the gateway checks the `groups` of every token again (403 otherwise). Admin tools (platform status, people, groups) need `ihc-admins` in the token, as the portal's pages do.
+- **The client.** `ihc-mcp` is a public OAuth client: no secret exists to leak, PKCE binds the code to the program that asked, consent is explicit (a program on the person's laptop cannot get a token without a page the person clicks), and redirects go only to claude.ai, claude.com, loopback addresses and what `MCP_OAUTH_EXTRA_REDIRECT_URIS` adds. Access tokens live one hour; refresh tokens 30 days, and a deactivated person can neither sign in nor refresh. To cut someone off: deactivate the user or remove them from `ihc-users` (the next token check or refresh fails); to cut every client: Authentik > Applications > Providers > `ihc-mcp` > revoke its tokens, or remove the binding.
+- **The token never reaches an app.** Apps get a different token, the actor JWT, signed by the gateway's own key, valid five minutes, for one app (`aud`) and with only the scopes that app's manifest grants the person's groups. An app (or someone who compromised one) cannot replay it against another app, the gateway, Authentik, Gitea or the portal. The gateway's private key stays in the `mcp-keys` volume; its public half is published.
+- **The app decides.** The gateway proves who is asking; the app filters what that person may see, exactly as for a browser user. A tool that ignores `actor.email` shows everyone everything to anyone the manifest grants.
+- **Reaching apps.** The gateway calls apps on the cloud network at `http://<slug>:<runtime.port>` and the paths of their manifest (paths only, no host: an app cannot point the gateway elsewhere). Their `/mcp/*` routes are also behind the forward auth through the proxy, where a browser without an actor JWT gets 401.
+- **Read only.** No tool of this layer writes: the platform's tools read the inventory, the portal's status API and Authentik with the read-only account; the template's tools are read only, and the contract asks apps to keep them so.
+- **What the gateway holds:** the portal's status token and the read-only Authentik token (the same as the portal's), the inventory read only, its signing key. No Docker access, no `.env`, no database. Its logs name the person and the tool, never a token.
+- **What a leaked access token gives:** one hour of that person's read-only tools. Revoke it in Authentik (the user's sessions and tokens).
+
 ## Private ingress: the tailnet and the CA
 
 `INGRESS=private` ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)) puts the box on the company's tailnet. What that exposes and what it trusts:
@@ -102,6 +115,7 @@ Checked by `ihc-app provision` on every deploy:
 - Healthcheck is declared.
 - `deploy.port` is `auto`; host ports are dropped.
 - No local Postgres, Redis or S3 server; no host networking, privileged mode or Docker socket.
+- `mcp`, when present: audience and scopes namespaced by the slug, tool paths that are paths, each scope granted to a group.
 
 Not checked yet: obvious secret values in tracked files.
 

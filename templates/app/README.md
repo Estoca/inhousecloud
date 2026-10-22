@@ -24,9 +24,20 @@ Commit and push to `main`. That is the whole deploy. The workflow in `.gitea/wor
 
 Check it: the run is green in the repository's Actions tab, `curl http://__APP_DOMAIN__/health` answers 200, and `/` sends an anonymous visitor to the sign-in. When a run fails, its log says what to change; the cloud's `docs/llm-bootstrap.md`, section 4, lists the usual causes.
 
+## Tools for AI agents (MCP)
+
+The company's AI clients (Claude Code, claude.ai) reach this app through the cloud's MCP gateway, signed in as a person. `server.js` already serves two routes the gateway calls: `GET /mcp/tools` lists the tools and `POST /mcp/tools/<tool>/execute` runs one; each request carries a short token from the gateway (the actor JWT) that `server.js` checks against `IHC_MCP_JWKS_URL` before anything else. The person is `actor.email` (and `actor.groups`): filter what a tool returns by it, as the pages do with `X-authentik-email`.
+
+- Add a tool: an entry in `TOOLS` (name, the scope it needs, a description, an `input_schema`, and `run(actor, args)` returning JSON). Read only.
+- Who may use the tools: `mcp.scopes` in `company-app.yaml` (`__APP_SLUG__.read` is granted to the users group). A person in no granted group does not see them.
+- In the gateway they are named `__APP_SLUG____<tool>`, e.g. `__APP_SLUG____ping`.
+- No tools for agents: delete the `mcp` section of `company-app.yaml` (the routes then serve nobody).
+
+Contract: the cloud's `docs/app-contract.md` (section MCP) and `docs/mcp-gateway.md`.
+
 ## Configuration the app receives
 
-`PORT`, `APP_SLUG`, `APP_BASE_URL`, `DATABASE_URL` (and `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`), `REDIS_URL`, `REDIS_PREFIX`, and with `object_storage.required: true` the `S3_*` variables (below). New variables: add the name to `.env.example`; values that are not secrets can go in `docker-compose.yml` under `environment:`.
+`PORT`, `APP_SLUG`, `APP_BASE_URL`, `IHC_MCP_ISSUER`, `IHC_MCP_JWKS_URL`, `IHC_MCP_AUDIENCE` (MCP, above), `DATABASE_URL` (and `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`), `REDIS_URL`, `REDIS_PREFIX`, and with `object_storage.required: true` the `S3_*` variables (below). New variables: add the name to `.env.example`; values that are not secrets can go in `docker-compose.yml` under `environment:`.
 
 ## Files: object storage
 

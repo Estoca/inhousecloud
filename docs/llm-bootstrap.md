@@ -135,7 +135,7 @@ Success: the output says `repository <org>/<slug> created in Gitea` and `Actions
 | File in the app folder | Change it? |
 |---|---|
 | `server.js`, `package.json`, `Dockerfile` | yes: this is the app. Another language is fine if the `Dockerfile` builds it |
-| `company-app.yaml` | only `app.name`, `app.description`, `runtime.port`, `runtime.healthcheck.path`, `database.required`, `dependencies.redis.required`, `object_storage.required` ([`app-contract.md`](app-contract.md)) |
+| `company-app.yaml` | only `app.name`, `app.description`, `runtime.port`, `runtime.healthcheck.path`, `database.required`, `dependencies.redis.required`, `object_storage.required`, and `mcp.scopes` (who may use the app's MCP tools) ([`app-contract.md`](app-contract.md)) |
 | `docker-compose.yml` | rarely: keep the one service `app`, its `env_file` and healthcheck; never add a database, cache or storage service |
 | `.env.example` | add the names of variables the app reads; no real values |
 | `.gitea/workflows/deploy.yml` | no |
@@ -151,6 +151,7 @@ Rules the deploy enforces or the app needs on the box:
 - Every route except `/health` is behind the company sign-in. Use relative links and form actions (`/expenses`, not `http://localhost:8080/expenses`).
 - Dependencies are installed by the `Dockerfile`. If you add dependencies and there is no lock file, keep `RUN npm install --omit=dev` (not `npm ci`).
 - Never add a `postgres`, `redis` or S3 server service, `network_mode: host`, `privileged` or a mounted Docker socket to `docker-compose.yml`: the deploy refuses them.
+- MCP tools (optional, for the human's AI agents): the template already answers `GET /mcp/tools` and `POST /mcp/tools/ping/execute` behind the actor JWT of the cloud's MCP gateway. To expose the app's data to agents, add read-only tools to `TOOLS` in `server.js` that filter by `actor.email`, keep the token check as it is, and set who may use them in `mcp.scopes` ([`app-contract.md`](app-contract.md#mcp)). If the app should have no tools, delete the `mcp` section of `company-app.yaml`.
 
 Check before pushing, in the app folder:
 
@@ -220,9 +221,17 @@ To try a page behind the sign-in from the box without a browser, call the app co
 docker exec <slug>-app-1 node -e "fetch('http://localhost:8080/', {headers: {'X-authentik-email': 'test@example.com'}}).then(r => r.text()).then(console.log)"
 ```
 
+To check the app's MCP tools from the box, call them the way the gateway does (an unsigned call must be refused):
+
+```bash
+docker exec <slug>-app-1 node -e "fetch('http://localhost:8080/mcp/tools').then(r => console.log(r.status))"   # 401
+```
+
+The tools themselves show up in the gateway as `<slug>__<tool>` for whoever the manifest grants ([`mcp-gateway.md`](mcp-gateway.md)).
+
 ### 3.4 Report to the human
 
-The URL `http://<slug>.<BASE_DOMAIN>`, that it asks for the company sign-in, the owner, the repository `http://git.<BASE_DOMAIN>/<org>/<slug>`, and that every push to `main` redeploys it keeping its data.
+The URL `http://<slug>.<BASE_DOMAIN>`, that it asks for the company sign-in, the owner, the repository `http://git.<BASE_DOMAIN>/<org>/<slug>`, and that every push to `main` redeploys it keeping its data. When it has MCP tools: their names (`<slug>__<tool>`) and that they are reached through the MCP gateway `https://mcp.<BASE_DOMAIN>/mcp` with the company sign-in (client id `ihc-mcp`, [`mcp-gateway.md`](mcp-gateway.md#connecting-a-client)).
 
 ## 4. Diagnose
 

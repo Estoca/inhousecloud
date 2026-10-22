@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 24 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
+Step 18 of the install sequence, 25 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -196,6 +196,31 @@ curl -K <same> -X POST -d '{"name":"ihc-smoke-must-not-exist-<pid>"}' http://127
 #       ihc-users only and ihc-portal in no group, and /api/groups has ihc-admins and
 #       ihc-users with the smoke user not in ihc-admins; the portal's token reads users
 #       and groups (200) and creating a group answers 403
+
+# 25. The MCP gateway (docs/mcp-gateway.md; runs inside test 16, with smoke-app on the
+#     air: its first deploy grants smoke-app.read to ihc-users, its redeploy to ihc-admins
+#     only). The token goes in a 0600 file and a curl config file, never on a command line
+curl -X POST -D - -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/mcp --data '{}'
+curl -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/.well-known/oauth-protected-resource/mcp
+scripts/sso-login-check.sh --install-dir "$IHC_INSTALL_DIR" --user ihc-smoke-outsider-<pid> \
+  --password-env <var> --oauth-token <file> --expect denied     # a temporary user in no group
+scripts/sso-login-check.sh --install-dir "$IHC_INSTALL_DIR" --user ihc-smoke-user \
+  --password-env AUTHENTIK_SMOKE_USER_PASSWORD --oauth-token <file>
+curl -K <mcp.cfg> -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/mcp \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize",...}'   # then tools/list, tools/call
+docker compose -f "$IHC_COMPOSE_FILE" exec -T mcp node -e "fetch('http://smoke-app:8080/mcp/tools/ping/execute',{method:'POST'})..."
+# PASS: anonymous /mcp is 401 with WWW-Authenticate resource_metadata, and the metadata's
+#       authorization server is <AUTHENTIK_BASE_URL>/application/o/ihc-mcp/; the temporary
+#       user outside ihc-users is refused by Authentik at the authorize step and gets no
+#       token (then deleted); the smoke user gets an access token by authorization code
+#       with PKCE on a loopback redirect, initialize answers inhousecloud-mcp-gateway,
+#       tools/list has ihc_list_apps and smoke-app__ping and none of the admin tools,
+#       smoke-app__ping answers with the smoke user's email (the app checked the actor
+#       JWT), ihc_list_apps shows the portal healthy behind the SSO and hides smoke-app
+#       (marked a system test by then, shown to admins only), ihc_list_people is an error result, and
+#       smoke-app refuses a call without an actor JWT (401). After the redeploy that grants
+#       smoke-app.read to ihc-admins only: smoke-app__ping is gone from tools/list and
+#       calling it is an error result "access denied" from the gateway
 ```
 
 Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
@@ -213,6 +238,8 @@ Test 19 provisions with the same function `ihc-app provision` calls, without a d
 Test 23 is what an agent does: it reads the platform with the read-only token and nothing else. Through the proxy only `GET /api/platform/status` with an `Authorization` header skips the forward auth (the rule is in `scripts/lib/portal-api.sh`); every other path with the token still meets Authentik, so the portal's own `403` for the token on another route is checked from the proxy container, straight to `portal:8080`. Without the box, `scripts/tests/portal-api.sh` checks the parser, the fallback to `source: local`, the doctor's check, the nginx rule's text and the real portal behind a stand-in proxy.
 
 Test 24 is the other half of 22 with a real session: the smoke user signs in with its password from `.env`, so it proves the portal's binding to `ihc-users` in Authentik and the portal's own role check on what the outpost sends, not headers we wrote. Its last part proves the service account cannot write with the very token the portal holds; the group name is unique per run, so a broken permission would leave one group named `ihc-smoke-must-not-exist-<pid>` behind, visible in the People page.
+
+Test 25 signs in the way Claude Code does (authorization code with PKCE, loopback redirect, explicit consent) with the smoke user's password from `.env`, so it proves the provider `ihc-mcp`, its binding to `ihc-users`, the gateway's check of Authentik's token, the actor JWT the app verifies, and the grant by group in the manifest, end to end. The person outside the group is refused by Authentik before any token exists; the gateway's own refusal of a valid token from someone outside `ihc-users` (403) is covered by `scripts/tests/mcp-gateway.sh`, as are the fallback catalog and the actor JWT's checks. The admin tools need an admin's password, which a human replaces, so they are checked by unit tests and by hand ([`first-run.md`](first-run.md#mcp-gateway-run)).
 
 Test 22 stands in for a signed-in admin by sending, from the proxy container, the headers the outpost would set: the browser path (forward auth, then the same headers) is test 9 plus the outpost itself. The positive login with a real session needs the admin's password, which a human replaces; `scripts/sso-login-check.sh --target "$PORTAL_BASE_URL"` checks it by hand.
 

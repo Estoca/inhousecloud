@@ -258,6 +258,7 @@ derive() {
   PORTAL_BASE_URL="$PUBLIC_BASE_URL"
   AUTHENTIK_HOST="auth.$BASE_DOMAIN"
   AUTHENTIK_BASE_URL="$SCHEME://$AUTHENTIK_HOST"
+  MCP_BASE_URL="$SCHEME://mcp.$BASE_DOMAIN"
   GITEA_BASE_URL="${CFG_gitea__base_url:-$SCHEME://git.$BASE_DOMAIN}"
   GITEA_HOST="${GITEA_BASE_URL#*://}"; GITEA_HOST="${GITEA_HOST%%/*}"
   # private: the tailnet reaches the proxy through the Tailscale node, so nothing is
@@ -757,7 +758,7 @@ stage_preflight() {
 }
 
 stage_plan() {
-  local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal"
+  local services="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal mcp"
   has_profile storage && services="$services garage"
   services="$services gitea-runner gitea-deployer"
   has_profile ops && services="$services portainer glances filebrowser"
@@ -773,6 +774,7 @@ stage_plan() {
   [ "$TLS_MODE" = internal ] && log "tls               : own CA in $INSTALL_DIR/local/ca (name-constrained to $BASE_DOMAIN), wildcard *.$BASE_DOMAIN on the proxy, HTTPS forced"
   has_profile tailscale && log "tailnet           : node ${CFG_ingress__tailscale__hostname:-ihc} (userspace); serve 80, 443 -> proxy, ${GITEA_SSH_PORT:-2222} -> gitea:22; split DNS for $BASE_DOMAIN on <tailnet address>:53"
   log "portal            : $PORTAL_BASE_URL (forward auth; built from $IHC_ROOT/portal, migrations at boot; reads catalog/inventory.json, the backup reports and Docker through docker-ro, all read only)"
+  log "mcp gateway       : $MCP_BASE_URL/mcp (same image as the portal; MCP clients sign in through Authentik, provider ihc-mcp, group ${CFG_authentik__app_group:-ihc-users})"
   log "authentik         : $AUTHENTIK_BASE_URL"
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
   log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, ${REAL_STATE_FILE:-$STATE_FILE}, $CONFIG_FILE"
@@ -791,7 +793,7 @@ stage_plan() {
     log "file browser      : $FB_APP_DATA (rw), $FB_REPORTS (ro)"
   fi
   [ "$AGENT_ON" = true ] && log "operator agent    : $(envfile get "$IHC_ROOT/docker/.env.example" OPENCLAW_IMAGE) in $INSTALL_DIR/agent, Docker API read only$( [ "$AGENT_ALLOW_WRITE" = true ] && echo " + restart of app containers and build cache prune (ops.agent.allow_write)"); LLM key and chat channel from AGENT_* in .env (docs/operator-contract.md)"
-  log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, proxy hosts"
+  log "first-run         : Gitea admin+org, Authentik groups+OIDC, portal app+proxy provider, MCP gateway OAuth provider, proxy hosts"
   log "deploys           : push to main of a repository in ${CFG_gitea__organization:-company} runs on the gitea-deployer runner (label ihc-deploy, image $INSTALL_DIR/deployer)"
   log "human afterwards  : seven day-zero steps printed at the end (install.sh handoff): portal, first password, MFA, backup key, first app, operator brief, stop/remove; DNS/tunnel for private/public"
   state stage plan set probe "$(jsonq build services="$services" profiles="core${PROFILES:+,$PROFILES}" portal_url="$PORTAL_BASE_URL" authentik_url="$AUTHENTIK_BASE_URL" gitea_url="$GITEA_BASE_URL" install_dir="$INSTALL_DIR")"
@@ -1054,6 +1056,9 @@ stage_foundation() {
   # creates it as root.
   case "$(env_get PORTAL_BUILD_CONTEXT)" in ""|./portal-placeholder) env_set PORTAL_BUILD_CONTEXT ./portal ;; esac
   env_set PORTAL_BACKUP_REPORTS_DIR "$BACKUP_DEST/reports"
+  # The MCP gateway (service mcp, docs/mcp-gateway.md): its public URL is the actor JWT's
+  # issuer and the resource MCP clients connect to.
+  env_set MCP_BASE_URL "$MCP_BASE_URL"
   mkdir -p "$BACKUP_DEST/reports" 2>/dev/null && chmod 755 "$BACKUP_DEST/reports" 2>/dev/null || warn "cannot create $BACKUP_DEST/reports: the portal shows no backup status until it exists"
   mkdir -p "$INSTALL_DIR/docker-ro"
   cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
@@ -1144,16 +1149,20 @@ stage_gitea() {
 }
 
 # The portal applies its own migrations at boot (portal/src/migrate.js) and reports them
-# on /health; its Docker reads go through docker-ro.
+# on /health; its Docker reads go through docker-ro. The MCP gateway (service mcp) is the
+# same image with another entrypoint; first-run gives it its Authentik provider.
 stage_portal() {
   local h
-  dc up -d docker-ro portal || return 1
-  wait_healthy 240 docker-ro portal || { dc logs --tail 30 portal >&2; return 1; }
+  dc up -d docker-ro portal mcp || return 1
+  wait_healthy 240 docker-ro portal mcp || { dc logs --tail 30 portal mcp >&2; return 1; }
   h="$(dc exec -T portal wget -qO- http://127.0.0.1:8080/health 2>/dev/null)"
   [ "$(printf '%s' "$h" | jsonq get migrations.ok)" = true ] || { fail "portal migrations did not apply: $(printf '%s' "$h" | jsonq get migrations.error)"; dc logs --tail 30 portal >&2; return 1; }
   ok "portal healthy; migrations applied ($(printf '%s' "$h" | jsonq get migrations.applied) now, $(printf '%s' "$h" | jsonq get migrations.total) in all)"
   state stage portal set probe "$(jsonq build health=ok migrations_total="$(printf '%s' "$h" | jsonq get migrations.total)" migrations_applied_now="$(printf '%s' "$h" | jsonq get migrations.applied)" docker_api=docker-ro)"
-  state stage portal set resources '["container:portal","container:docker-ro","image:portal"]'
+  h="$(dc exec -T mcp wget -qO- http://127.0.0.1:8090/health 2>/dev/null)"
+  [ "$(printf '%s' "$h" | jsonq get ok)" = true ] || { fail "the MCP gateway does not answer its /health"; dc logs --tail 30 mcp >&2; return 1; }
+  ok "MCP gateway healthy (actor key $(printf '%s' "$h" | jsonq get actor_kid))"
+  state stage portal set resources '["container:portal","container:docker-ro","container:mcp","image:portal","volume:mcp-keys"]'
 }
 
 stage_first_run() {
@@ -1162,9 +1171,9 @@ stage_first_run() {
   "$IHC_ROOT/scripts/first-run.sh" $args || return 1
   # first-run generates the read-only Gitea token the portal lists deploys with and the
   # Authentik token of its People page: recreate the portal so it gets them (Compose
-  # recreates only when its environment changed).
-  dc up -d portal >&2 || return 1
-  wait_healthy 120 portal || return 1
+  # recreates only when its environment changed). The MCP gateway reads the same tokens.
+  dc up -d portal mcp >&2 || return 1
+  wait_healthy 120 portal mcp || return 1
 }
 
 # The backup job: a sidecar container (docker/backup) whose crond runs ihc-backup on
@@ -1343,12 +1352,13 @@ stage_handoff() {
     echo "  \"installation_id\": \"$(state get installation_id)\","
     echo "  \"install_dir\": \"$INSTALL_DIR\","
     echo "  \"profiles\": \"core${PROFILES:+,$PROFILES}\","
-    echo "  \"urls\": {\"portal\": \"$PORTAL_BASE_URL\", \"authentik\": \"$AUTHENTIK_BASE_URL\", \"gitea\": \"$GITEA_BASE_URL\", \"proxy_admin\": \"http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)\"},"
+    echo "  \"urls\": {\"portal\": \"$PORTAL_BASE_URL\", \"authentik\": \"$AUTHENTIK_BASE_URL\", \"gitea\": \"$GITEA_BASE_URL\", \"mcp\": \"$MCP_BASE_URL/mcp\", \"proxy_admin\": \"http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)\"},"
     echo "  \"ssh\": \"ssh://git@$GITEA_HOST:$(env_get GITEA_SSH_PORT)\","
     echo "  \"credentials_file\": \"$ENV_FILE\","
     echo "  \"ingress\": $(jsonq build mode="$INGRESS" tls="$TLS_MODE" tunnel="$TUNNEL_PROVIDER" bind="$BIND_ADDRESS" base_domain="$BASE_DOMAIN" ca_cert="$( [ "$TLS_MODE" = internal ] && echo "$(ca_dir)/ca.crt")" ca_sha256="$( [ "$TLS_MODE" = internal ] && ca_fingerprint)" tailnet_ip="$(env_get TAILSCALE_IP)" tailnet_name="$(env_get TAILSCALE_DNS_NAME)" split_dns_nameserver="$( has_profile tailscale && env_get TAILSCALE_IP)"),"
     echo "  \"status_command\": \"$SELF status --install-dir $INSTALL_DIR\","
     echo "  \"doctor_command\": \"$INSTALL_DIR/ihc doctor --json\","
+    echo "  \"mcp_gateway\": {\"url\": \"$MCP_BASE_URL/mcp\", \"oauth_client_id\": \"$(env_get MCP_OIDC_CLIENT_ID)\", \"group\": \"$(env_get AUTHENTIK_APP_GROUP)\", \"contract\": \"docs/mcp-gateway.md\"},"
     echo "  \"portal_api\": {\"status_url\": \"$PORTAL_BASE_URL/api/platform/status\", \"auth\": \"Authorization: Bearer <IHC_PORTAL_API_TOKEN from the credentials file>\", \"contract\": \"docs/portal-api.md\"},"
     if has_profile ops; then
       echo "  \"ops\": $(state stage optional_profiles get probe 2>/dev/null | $PY -c 'import json,sys
@@ -1380,6 +1390,7 @@ inventory.save(sys.argv[3],new)' "$IHC_LIB" "$inv.new" "$inv"
   _out ""
   _out "Installed. URLs:"
   _out "  portal     $PORTAL_BASE_URL   (catalog, app health and SSO, deploys, platform status; read only; admins: $(env_get AUTHENTIK_PORTAL_GROUP))"
+  _out "  mcp        $MCP_BASE_URL/mcp   (MCP gateway for Claude and other agents; OAuth client id $(env_get MCP_OIDC_CLIENT_ID); docs/mcp-gateway.md)"
   _out "  authentik  $AUTHENTIK_BASE_URL   (user akadmin)"
   _out "  gitea      $GITEA_BASE_URL   (user $(env_get GITEA_ADMIN_USERNAME); SSH port $(env_get GITEA_SSH_PORT); sign in with Authentik)"
   _out "  proxy admin http://127.0.0.1:$(env_get PROXY_ADMIN_PORT)   (loopback only)"
@@ -1510,7 +1521,7 @@ for s,a in sorted(apps.items()):
 
 # core_services: the cloud's own services for the profiles in .env.
 core_services() {
-  local s="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal gitea-runner gitea-deployer" p
+  local s="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal mcp gitea-runner gitea-deployer" p
   p=",$(env_get COMPOSE_PROFILES),"
   case "$p" in *,storage,*) s="$s garage" ;; esac
   case "$p" in *,ops,*) s="$s portainer glances filebrowser" ;; esac
@@ -1535,6 +1546,7 @@ print("%s (installation %s)"%(out,d.get("installation_id","?")))')"
   _out "InHouseCloud at $INSTALL_DIR: $line"
   if [ ! -r "$ENV_FILE" ]; then _out "  (no readable $ENV_FILE: run as the user who installed it for URLs, health, backup and apps)"; return "$rc"; fi
   _out "  portal     $(env_get PORTAL_BASE_URL)   (catalog, health, deploys, platform status)"
+  _out "  mcp        $(env_get MCP_BASE_URL)/mcp"
   _out "  sign-in    $(env_get AUTHENTIK_BASE_URL)"
   _out "  gitea      $(env_get GITEA_BASE_URL)"
   scheme="$(env_get PORTAL_BASE_URL)"; scheme="${scheme%%://*}"

@@ -262,3 +262,23 @@ test('parseRedisUrl extracts host, port and password', () => {
   });
   assert.equal(parseRedisUrl('redis://localhost').port, 6379);
 });
+
+test('with MCP_HEALTH_URL the MCP gateway is one of the services', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => (url === 'http://mcp:8090/health'
+    ? { ok: true, status: 200, json: async () => ({ ok: true }) }
+    : okFetch(calls)(url, options));
+  const status = createPlatformStatus({
+    env: { ...env, MCP_HEALTH_URL: 'http://mcp:8090/health' },
+    fetchImpl,
+    pgQueryFn: async () => ({ rows: [] }),
+    redisPingFn: async () => 'PONG',
+    listDockerContainersFn: async () => dockerState,
+    ...reports({}),
+  });
+  const gateway = (await status.collect()).services.find((service) => service.kind === 'mcp');
+  assert.equal(gateway?.name, 'Gateway MCP');
+  assert.equal(gateway.healthy, true);
+  const without = await createPlatformStatus({ env, fetchImpl, pgQueryFn: async () => ({ rows: [] }), redisPingFn: async () => 'PONG', listDockerContainersFn: async () => dockerState, ...reports({}) }).collect();
+  assert.equal(without.services.some((service) => service.kind === 'mcp'), false);
+});
