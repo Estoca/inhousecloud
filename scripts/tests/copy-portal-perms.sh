@@ -14,6 +14,9 @@ trap 'rm -rf "$WORK"' EXIT
 FAILS=0
 pass() { printf '[ok] %s\n' "$*"; }
 bad()  { printf '[xx] %s\n' "$*"; FAILS=$((FAILS+1)); }
+# Octal mode of a path: GNU stat (-c) on Linux, BSD stat (-f) on macOS. GNU's -f is the
+# filesystem stat, so try -c first.
+mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 # The function, alone: install.sh runs its CLI when sourced.
 eval "$(sed -n '/^copy_portal() {/,/^}/p' "$ROOT/install.sh")"
@@ -31,18 +34,18 @@ copy_portal || { bad "copy_portal failed"; exit 1; }
 
 # `node` in the image is not the uid that owns the copy: judge by group/other bits.
 while IFS= read -r f; do
-  m=$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f")
+  m=$(mode "$f")
   o=$(( 8#$m & 8#044 ))
   [ "$o" -eq $(( 8#044 )) ] && pass "file $(basename "$f") is $m" || bad "file $f is $m (not go+r)"
 done < <(find "$INSTALL_DIR/portal" -type f)
 while IFS= read -r d; do
-  m=$(stat -f '%Lp' "$d" 2>/dev/null || stat -c '%a' "$d")
+  m=$(mode "$d")
   o=$(( 8#$m & 8#055 ))
   [ "$o" -eq $(( 8#055 )) ] && pass "dir ${d#$INSTALL_DIR/} is $m" || bad "dir $d is $m (not go+rx)"
 done < <(find "$INSTALL_DIR/portal" -type d)
 [ -e "$INSTALL_DIR/portal/node_modules" ] && bad "node_modules was copied" || pass "node_modules excluded"
 # The checkout itself is left alone.
-m=$(stat -f '%Lp' "$IHC_ROOT/portal/src/server.js" 2>/dev/null || stat -c '%a' "$IHC_ROOT/portal/src/server.js")
+m=$(mode "$IHC_ROOT/portal/src/server.js")
 [ "$m" = "600" ] && pass "checkout untouched (server.js still 600)" || bad "checkout changed: server.js is $m"
 
 [ "$FAILS" -eq 0 ] && { echo "copy-portal-perms: all good"; exit 0; } || { echo "copy-portal-perms: $FAILS failure(s)"; exit 1; }
