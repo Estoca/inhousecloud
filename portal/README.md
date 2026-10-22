@@ -161,8 +161,19 @@ PR 6. Served from the cache (60 seconds by default); `?refresh=1` or
 
 `HEALTHCHECK_TIMEOUT_MS` sets the probe timeout.
 
-The portal accepts no personal token and issues none. The only token it knows is the
-`CATALOG_MCP_TOKEN` of the provider below, which only opens `/api/internal/mcp/v1/*`.
+The portal accepts no personal token and issues none. It knows two service tokens, each
+opening one thing: `CATALOG_MCP_TOKEN` of the provider below, which only opens
+`/api/internal/mcp/v1/*`, and `IHC_PORTAL_API_TOKEN`, below too.
+
+### Status API for agents
+
+`GET /api/platform/status` with `Authorization: Bearer` and `IHC_PORTAL_API_TOKEN` answers
+the platform status without a session (`src/service-token.js`). The token opens that route
+and `/health`, in `GET` or `HEAD`; on any other route it answers `403`, a wrong token `401`,
+and a portal without the variable `503` on that route. Without the `Authorization` header
+nothing changes. In the cloud, `first-run.sh` generates it and the proxy lets that one path
+skip the forward auth when the header is present; the contract (fields, errors, `curl`) is
+`docs/portal-api.md` at the repository root. Tests: `test/service-token.test.js`.
 
 ### Catalog provider for the MCP gateway
 

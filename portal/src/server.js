@@ -33,6 +33,7 @@ import { deactivatePortalAdmin, listPortalAdmins, upsertPortalAdmin } from './ad
 import { createAuth } from './auth.js';
 import { renderLogin } from './ui.js';
 import { catalogMcpTools, executeCatalogMcpTool } from './catalog-mcp.js';
+import { createServiceTokenGate } from './service-token.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, '..', 'dist');
@@ -91,6 +92,7 @@ export function createApp({
   recordDiskUsageSnapshotFn = recordDiskUsageSnapshot,
   diskUsageScheduler = null,
   catalogMcpToken = process.env.CATALOG_MCP_TOKEN,
+  portalApiToken = process.env.IHC_PORTAL_API_TOKEN,
   recordStatusEvents = process.env.RECORD_STATUS_EVENTS === 'true',
   statusCache = null,
   statusCacheConfig = statusCacheConfigFromEnv(),
@@ -151,6 +153,9 @@ export function createApp({
   });
   app.locals.diskUsageScheduler = diskScheduler;
   app.use(express.json({ limit: '256kb' }));
+  // Token de servico so leitura (src/service-token.js): decide antes de qualquer rota
+  // quando ha header Authorization; sem ele, nada muda.
+  app.use(createServiceTokenGate({ token: portalApiToken }));
   auth.attachRoutes(app, {
     renderLogin,
   });
@@ -194,7 +199,7 @@ export function createApp({
       next();
       return;
     }
-    if (isPublicApiPath(req.path, req.method)) {
+    if (isPublicApiPath(req.path, req.method) || req.serviceToken) {
       next();
       return;
     }
@@ -330,7 +335,8 @@ export function createApp({
 
   // Saude dos servicos centrais do cloud (proxy, Authentik, Gitea, runners, Postgres,
   // Redis, backup e, por perfil, Garage, ops, agente e tunnel). Mesmo JSON para a pagina
-  // e para agentes (com sessao; o token de servico para agentes vem depois).
+  // e para agentes: com sessao, ou com o token de servico IHC_PORTAL_API_TOKEN
+  // (docs/portal-api.md do cloud), que so abre esta rota.
   app.get('/api/platform/status', async (req, res) => {
     res.json(await platformStatusResource.get({}, { refresh: refreshRequested(req) }));
   });

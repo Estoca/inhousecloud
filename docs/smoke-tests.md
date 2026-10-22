@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 22 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
+Step 18 of the install sequence, 23 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -164,6 +164,22 @@ docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl ... 'http://portal:8080
 #       the admin group, 200 with the core services; the catalog lists the portal itself
 #       (kind core) healthy and smoke-app with health ok, SSO effective (true), its route
 #       found and its containers seen
+
+# 23. The portal's status API for agents (docs/portal-api.md); the token goes in a curl
+#     config file (-K) or on stdin, never on the command line
+curl -K <token.cfg> -H "Host: portal.$BASE_DOMAIN" http://127.0.0.1/api/platform/status
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: portal.$BASE_DOMAIN" http://127.0.0.1/api/platform/status
+curl -K <wrong-token.cfg> -H "Host: portal.$BASE_DOMAIN" http://127.0.0.1/api/platform/status
+curl -K <token.cfg> -H "Host: portal.$BASE_DOMAIN" http://127.0.0.1/api/apps     # also /api/platform/config, POST .../refresh
+printf 'header = "Authorization: Bearer %s"\n' "$IHC_PORTAL_API_TOKEN" | \
+  docker compose -f "$IHC_COMPOSE_FILE" exec -T proxy curl -K - http://portal:8080/api/apps   # also /api/me and /
+python3 scripts/lib/portalapi.py fetch "$IHC_INSTALL_DIR"
+# PASS: with the token, 200 and the contract's required fields (checked_at, overall,
+#       summary with total/healthy/unhealthy/unknown, services with name/kind/healthy/
+#       detail, at least the 9 core services); without the header, 302 to the outpost or
+#       401; a wrong token, 401; the token on another route through the proxy never
+#       opens it (302, 401 or 403), and straight to the portal it is 403; the installer's
+#       reader (behind `install.sh status --json` and `ihc doctor`) says source portal-api
 ```
 
 Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
@@ -177,6 +193,8 @@ Test 14 restores every dump through `restic dump` to compare checksums; on a box
 Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `ihc-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `ihc-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `ihc-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `ihc-app list` (shown with `--all` and in the operator brief) until `ihc-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `ihc-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
 
 Test 19 provisions with the same function `ihc-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
+
+Test 23 is what an agent does: it reads the platform with the read-only token and nothing else. Through the proxy only `GET /api/platform/status` with an `Authorization` header skips the forward auth (the rule is in `scripts/lib/portal-api.sh`); every other path with the token still meets Authentik, so the portal's own `403` for the token on another route is checked from the proxy container, straight to `portal:8080`. Without the box, `scripts/tests/portal-api.sh` checks the parser, the fallback to `source: local`, the doctor's check, the nginx rule's text and the real portal behind a stand-in proxy.
 
 Test 22 stands in for a signed-in admin by sending, from the proxy container, the headers the outpost would set: the browser path (forward auth, then the same headers) is test 9 plus the outpost itself. The positive login with a real session needs the admin's password, which a human replaces; `scripts/sso-login-check.sh --target "$PORTAL_BASE_URL"` checks it by hand.
 

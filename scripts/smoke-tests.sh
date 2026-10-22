@@ -3,13 +3,14 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 22. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 23. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core), redeploys it, then removes it (ihc-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
 # storage and is skipped only when the storage profile is off; test 20 covers the operator
 # agent and is skipped when the agent profile is off; test 22 covers the portal and runs inside
-# test 16, while smoke-app is on the air. Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# test 16, while smoke-app is on the air; test 23 covers the portal's status API for agents
+# (docs/portal-api.md). Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   IHC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -572,6 +573,52 @@ print(" ".join(sorted({x.get("HostIp") or "0.0.0.0" for k in ("80/tcp","443/tcp"
   [ -z "$bad" ] && result 21 ingress-surface pass "${good#; }" || result 21 ingress-surface fail "${bad# }"
 }
 if [ "$INGRESS" = public ]; then result 21 ingress-surface skip "public ingress: the proxy listens on every interface"; else t21; fi
+
+# 23. the portal's status API for agents (docs/portal-api.md): GET /api/platform/status
+#     through the proxy with IHC_PORTAL_API_TOKEN is 200 with every required field;
+#     without the header it goes to the SSO (302) or is 401; a wrong token is 401; the
+#     token on another route never opens it: through the proxy the forward auth stops
+#     it, and straight to the portal from the ihc network it is 403; and the installer's
+#     reader (portalapi.py, behind status --json and ihc doctor) says source portal-api.
+#     The token travels in curl config files and on stdin, never on a command line.
+t23() {
+  local bad="" good="" out code body loc tok status_url path
+  tok="$(env_get IHC_PORTAL_API_TOKEN)"
+  if [ -z "$tok" ]; then result 23 portal-api fail "IHC_PORTAL_API_TOKEN not in .env (install.sh --apply --from foundation)"; return; fi
+  status_url="$(proxy_url "$PORTAL_HOST" /api/platform/status)"
+  api_init portal-api "Authorization: Bearer $tok"
+  out="$(curl -K "$API_CFG" -w '\n%{http_code}' $(proxy_args "$PORTAL_HOST") "$status_url" 2>/dev/null || printf '\n000')"
+  code="${out##*$'\n'}"; body="${out%$'\n'*}"
+  if [ "$code" = 200 ]; then
+    out="$(printf '%s' "$body" | $PY -c 'import json,sys
+sys.path.insert(0,sys.argv[1]); import portalapi
+try: d=portalapi.parse_status(sys.stdin.read())
+except portalapi.ParseError as e: print("bad: %s" % e); sys.exit()
+print("ok %d services, %s" % (len(d["services"]), d["overall"]) if len(d["services"]) >= 9 else "bad: only %d services" % len(d["services"]))' "$IHC_LIB")"
+    case "$out" in ok*) good="token 200, required fields present (${out#ok })" ;; *) bad="$bad token-status:${out#bad: }" ;; esac
+  else bad="$bad token-status:HTTP-$code"; fi
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$status_url" 2>/dev/null || echo 000)"
+  case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*|401*) good="$good; no token ${loc%% *}" ;; *) bad="$bad no-token:${loc%% *}" ;; esac
+  api_init portal-api-wrong "Authorization: Bearer wrong-$(random_secret 24)"
+  code="$(curl -K "$API_CFG" -o /dev/null -w '%{http_code}' $(proxy_args "$PORTAL_HOST") "$status_url" 2>/dev/null || echo 000)"
+  [ "$code" = 401 ] && good="$good; wrong token 401" || bad="$bad wrong-token:$code"
+  api_init portal-api "Authorization: Bearer $tok"
+  for path in /api/apps /api/platform/config; do
+    code="$(curl -K "$API_CFG" -o /dev/null -w '%{http_code}' $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" "$path")" 2>/dev/null || echo 000)"
+    case "$code" in 302|401|403) ;; *) bad="$bad proxy-token-on-$path:$code" ;; esac
+  done
+  code="$(curl -K "$API_CFG" -o /dev/null -w '%{http_code}' -X POST $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /api/platform/status/refresh)" 2>/dev/null || echo 000)"
+  case "$code" in 302|401|403) good="$good; via the proxy, the token on other routes ${code}" ;; *) bad="$bad proxy-token-on-refresh:$code" ;; esac
+  for path in /api/apps /api/me /; do
+    code="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | dc exec -T proxy curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -K - "http://portal:8080$path" 2>/dev/null || echo 000)"
+    [ "$code" = 403 ] || bad="$bad direct-token-on-$path:$code"
+  done
+  case "$bad" in *direct-token*) ;; *) good="$good; straight to the portal, the token on /api/apps, /api/me and / is 403" ;; esac
+  out="$($PY "$IHC_LIB/portalapi.py" fetch "$INSTALL_DIR" 2>/dev/null | jsonq get source)"
+  [ "$out" = portal-api ] && good="$good; status --json and ihc doctor read source portal-api" || bad="$bad installer-reader:${out:-none}"
+  [ -z "$bad" ] && result 23 portal-api pass "$good" || result 23 portal-api fail "${bad# }"
+}
+t23
 
 _out ""
 _out "smoke tests: $PASS passed, $FAILS failed, $SKIP skipped"

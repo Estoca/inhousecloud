@@ -7,7 +7,8 @@
 #   ./install.sh --non-interactive --config FILE  for agents and CI: no prompts at all
 #   ./install.sh --apply --from STAGE             resume (re-run) from STAGE
 #   ./install.sh doctor [--verbose] [--json]      is it on the air, and what to do if not (scripts/ihc-doctor.sh)
-#   ./install.sh status [--verbose] [--json]      short state: URLs, health, backup age, apps
+#   ./install.sh status [--verbose] [--json]      short state: URLs, health, backup age, apps;
+#                                                 --json reads the portal API (docs/portal-api.md)
 #   ./install.sh handoff                          the day-zero steps again
 #   ./install.sh stop | start                     stop the cloud and its apps (data kept), start again
 #   ./install.sh remove [--images] [--dir]        remove a test install (docs/cleanup.md); asks
@@ -39,7 +40,7 @@ ASSUME_YES=false
 SUBCOMMAND=""
 VERBOSE=false; CONFIRM_ARG=""; REMOVE_IMAGES=false; REMOVE_DIR=false
 
-usage() { sed -n '2,19p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,20p' "$SELF" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -1347,6 +1348,7 @@ stage_handoff() {
     echo "  \"ingress\": $(jsonq build mode="$INGRESS" tls="$TLS_MODE" tunnel="$TUNNEL_PROVIDER" bind="$BIND_ADDRESS" base_domain="$BASE_DOMAIN" ca_cert="$( [ "$TLS_MODE" = internal ] && echo "$(ca_dir)/ca.crt")" ca_sha256="$( [ "$TLS_MODE" = internal ] && ca_fingerprint)" tailnet_ip="$(env_get TAILSCALE_IP)" tailnet_name="$(env_get TAILSCALE_DNS_NAME)" split_dns_nameserver="$( has_profile tailscale && env_get TAILSCALE_IP)"),"
     echo "  \"status_command\": \"$SELF status --install-dir $INSTALL_DIR\","
     echo "  \"doctor_command\": \"$INSTALL_DIR/ihc doctor --json\","
+    echo "  \"portal_api\": {\"status_url\": \"$PORTAL_BASE_URL/api/platform/status\", \"auth\": \"Authorization: Bearer <IHC_PORTAL_API_TOKEN from the credentials file>\", \"contract\": \"docs/portal-api.md\"},"
     if has_profile ops; then
       echo "  \"ops\": $(state stage optional_profiles get probe 2>/dev/null | $PY -c 'import json,sys
 try: o=json.load(sys.stdin).get("ops") or {}
@@ -1666,6 +1668,17 @@ cloud_remove() {
   return 0
 }
 
+# status_json: state.json's summary plus the platform status. The status comes from the
+# portal's read-only API when it answers (source: portal-api, docs/portal-api.md); without
+# it, the summary alone (source: local, portal_api.reason says why). The exit code is the
+# state's: 0 only when every stage completed.
+status_json() {
+  local st rc=0
+  st="$(state status --json)" || rc=$?
+  printf '%s' "$st" | $PY "$IHC_LIB/portalapi.py" merge "$INSTALL_DIR" || return 1
+  return "$rc"
+}
+
 onboarding_main() {
   [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$DEFAULT_INSTALL_DIR"
   INSTALL_DIR="${INSTALL_DIR%/}"
@@ -1674,7 +1687,7 @@ onboarding_main() {
   case "$1" in
     status)
       [ -f "$STATE_FILE" ] || die "no state.json in $INSTALL_DIR"
-      if [ "$JSON_OUTPUT" = true ]; then state status --json; return $?; fi
+      if [ "$JSON_OUTPUT" = true ]; then status_json; return $?; fi
       if [ "$VERBOSE" = true ]; then
         local rc=0; state status || rc=$?
         if [ -r "$ENV_FILE" ]; then _out ""; "$IHC_ROOT/scripts/ihc-operator.sh" brief --install-dir "$INSTALL_DIR"; fi
