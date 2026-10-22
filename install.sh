@@ -1044,6 +1044,10 @@ copy_portal() {
   local ctx="$INSTALL_DIR/portal"
   rm -rf "$ctx" "$INSTALL_DIR/portal-placeholder"; mkdir -p "$ctx"
   (cd "$IHC_ROOT/portal" && tar --exclude=./node_modules --exclude=./dist --exclude='./.env' -cf - .) | (cd "$ctx" && tar -xf -) || return 1
+  # The image runs as `node`, not as the uid that owns the checkout. tar keeps the checkout's
+  # modes, and a checkout made with a strict umask (0600 files, seen on macOS) gives a portal
+  # that cannot read its own server.js and restart-loops. Normalize the copy, not the checkout.
+  chmod -R u+rwX,go+rX "$ctx" || return 1
 }
 
 stage_foundation() {
