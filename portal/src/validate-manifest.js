@@ -166,29 +166,48 @@ function validateDependencies(issues, dependencies) {
   }
 }
 
-function validateAgentInterface(issues, agentInterface, appSlug) {
-  if (!isObject(agentInterface)) {
-    issue(issues, 'agent_interface', 'must be an object for deployable apps');
-    return;
-  }
-  const mcp = agentInterface.mcp;
+// Secao MCP, camada 1 (docs/app-contract.md "MCP" e docs/mcp-gateway.md do cloud): o
+// gateway MCP lista GET tools_path e chama POST execute_path no container do app com um
+// actor JWT (aud = audience, scope = os escopos concedidos aos grupos de quem pede).
+// Mesmas regras de scripts/lib/appmanifest.py (mcp_errors). Aceita `mcp:` no topo ou a
+// forma antiga `agent_interface.mcp`; provider, authentication e tools sao opcionais.
+const MCP_PATH = /^\/[A-Za-z0-9/_.{}-]*$/;
+const MCP_SCOPE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function validateMcp(issues, mcp, appSlug, field) {
   if (!isObject(mcp)) {
-    issue(issues, 'agent_interface.mcp', 'must be an object for deployable apps');
+    issue(issues, field, 'must be an object (audience, tools_path, execute_path, scopes) or be left out');
     return;
   }
-  if (mcp.provider !== 'mcp-gateway') issue(issues, 'agent_interface.mcp.provider', 'must be "mcp-gateway"');
-  if (mcp.tools_path !== '/api/internal/mcp/v1/tools') issue(issues, 'agent_interface.mcp.tools_path', 'must be "/api/internal/mcp/v1/tools"');
-  if (mcp.execute_path !== '/api/internal/mcp/v1/tools/{tool}/execute') issue(issues, 'agent_interface.mcp.execute_path', 'must be "/api/internal/mcp/v1/tools/{tool}/execute"');
-  if (mcp.authentication !== 'actor_jwt') issue(issues, 'agent_interface.mcp.authentication', 'must be "actor_jwt"');
-  if (typeof mcp.audience !== 'string' || !mcp.audience.trim()) issue(issues, 'agent_interface.mcp.audience', 'must be a non-empty provider audience');
-  if (!Array.isArray(mcp.scopes) || !mcp.scopes.some((scope) => typeof scope === 'string' && scope.trim())) issue(issues, 'agent_interface.mcp.scopes', 'must include at least one scope');
-  if (!Array.isArray(mcp.tools) || mcp.tools.length === 0) {
-    issue(issues, 'agent_interface.mcp.tools', 'must declare at least one read tool');
-  } else if (!mcp.tools.some((tool) => isObject(tool) && typeof tool.name === 'string' && tool.name.trim() && (tool.access ?? 'read') === 'read')) {
-    issue(issues, 'agent_interface.mcp.tools', 'must include a named read tool');
+  if (mcp.enabled === false) return;
+  const audience = mcp.audience ?? `${appSlug}.mcp`;
+  if (typeof audience !== 'string' || !audience.startsWith(`${appSlug}.`)) {
+    issue(issues, `${field}.audience`, `must start with "${appSlug}." (for example ${appSlug}.mcp)`);
   }
-  if (appSlug && typeof mcp.audience === 'string' && !mcp.audience.startsWith(`${appSlug}.`)) {
-    issue(issues, 'agent_interface.mcp.audience', 'must be namespaced by app.slug');
+  for (const [key, fallback] of [['tools_path', '/mcp/tools'], ['execute_path', '/mcp/tools/{tool}/execute']]) {
+    const value = mcp[key] ?? fallback;
+    if (typeof value !== 'string' || !MCP_PATH.test(value) || value.includes('..') || value.startsWith('//')) {
+      issue(issues, `${field}.${key}`, `must be a path on the app's container, such as ${fallback}`);
+    }
+  }
+  if (!String(mcp.execute_path ?? '{tool}').includes('{tool}')) issue(issues, `${field}.execute_path`, 'must contain {tool}');
+  if (mcp.authentication !== undefined && mcp.authentication !== 'actor_jwt') issue(issues, `${field}.authentication`, 'must be "actor_jwt"');
+  let names = [];
+  if (Array.isArray(mcp.scopes)) {
+    names = mcp.scopes.map((scope) => (isObject(scope) ? scope.name : scope));
+  } else if (isObject(mcp.scopes)) {
+    names = Object.keys(mcp.scopes);
+    for (const [name, groups] of Object.entries(mcp.scopes)) {
+      if (!Array.isArray(groups) || groups.length === 0 || !groups.every((group) => typeof group === 'string' && group.trim())) {
+        issue(issues, `${field}.scopes.${name}`, 'must list the groups granted this scope, e.g. [ihc-users]');
+      }
+    }
+  }
+  if (names.length === 0) issue(issues, `${field}.scopes`, `must grant at least one scope to a group, e.g. ${appSlug}.read: [ihc-users]`);
+  for (const name of names) {
+    if (typeof name !== 'string' || !MCP_SCOPE.test(name) || !name.startsWith(`${appSlug}.`)) {
+      issue(issues, `${field}.scopes`, `${JSON.stringify(name)} must start with "${appSlug}."`);
+    }
   }
 }
 
@@ -296,11 +315,12 @@ export function validateManifest(manifest, options = {}) {
     };
   }
 
-  // Existing apps use schema_version 1 and predate the mcp-gateway contract.
-  // New templates declare it; validate strictly whenever it is present instead of
-  // turning a catalog/documentation rollout into a breaking migration.
-  if (manifest.agent_interface !== undefined) {
-    validateAgentInterface(issues, manifest.agent_interface, slug);
+  // A secao MCP e opcional (um app sem ela fica fora do gateway); presente, vale o contrato.
+  if (manifest.mcp !== undefined) {
+    validateMcp(issues, manifest.mcp, slug, 'mcp');
+  } else if (manifest.agent_interface !== undefined) {
+    if (!isObject(manifest.agent_interface)) issue(issues, 'agent_interface', 'must be an object');
+    else if (manifest.agent_interface.mcp !== undefined) validateMcp(issues, manifest.agent_interface.mcp, slug, 'agent_interface.mcp');
   }
 
   if (runtimeType !== 'docker-compose') {

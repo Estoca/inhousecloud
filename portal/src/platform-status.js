@@ -11,6 +11,7 @@
 //   postgres     SELECT 1 e tamanho dos bancos via PLATFORM_PG_READONLY_URL, ou o banco do
 //                proprio portal (DATABASE_URL)
 //   redis        PING em REDIS_URL (RESP cru, sem biblioteca)
+//   mcp          GET {MCP_HEALTH_URL} (o gateway MCP), quando configurado
 //   backup       latest-status.json e latest-success.json em BACKUP_REPORTS_DIR (docs/backup.md
 //                do cloud): status da ultima execucao e idade do ultimo sucesso
 //   por perfil   garage (storage), portainer/glances/filebrowser/wetty (ops), agent (agent),
@@ -54,6 +55,7 @@ export function platformConfigFromEnv(env = process.env) {
     databaseUrl: cleanText(env.DATABASE_URL),
     redisUrl: cleanText(env.REDIS_URL) || cleanText(env.SHARED_REDIS_URL),
     garageHealthUrl: stripSlash(env.GARAGE_HEALTH_URL),
+    mcpHealthUrl: stripSlash(env.MCP_HEALTH_URL),
     backupEnabled: cleanText(env.BACKUP_ENABLED) ? env.BACKUP_ENABLED === 'true' : null,
     backupReportsDir: stripSlash(env.BACKUP_REPORTS_DIR),
     backupMaxAgeHours: Number(env.BACKUP_MAX_AGE_HOURS) > 0 ? Number(env.BACKUP_MAX_AGE_HOURS) : 26,
@@ -267,6 +269,14 @@ export async function checkGarage(config, { fetchImpl }) {
   });
 }
 
+// O gateway MCP (servico mcp, docs/mcp-gateway.md do cloud): so com MCP_HEALTH_URL.
+export async function checkMcpGateway(config, { fetchImpl }) {
+  const probe = await httpProbe(fetchImpl, config.mcpHealthUrl, { timeoutMs: config.timeoutMs });
+  return result('Gateway MCP', 'mcp', probe.ok, probe.ok ? 'operacional' : (probe.error ? `sem resposta: ${probe.error}` : `HTTP ${probe.status}`), {
+    latency_ms: probe.latency_ms,
+  });
+}
+
 // Um servico do cloud pelo label do Compose (projeto + servico); sem labels, pelo nome.
 function findContainer(dockerState, name, project = null) {
   const wanted = String(name).toLowerCase();
@@ -368,6 +378,7 @@ export function createPlatformStatus({
       checkRedis(config, { redisPingFn }),
       Promise.resolve(checkBackup(config, { now, readFile })),
     ];
+    if (config.mcpHealthUrl) checks.push(checkMcpGateway(config, { fetchImpl }));
     if (has('storage')) checks.push(checkGarage(config, { fetchImpl }));
     if (has('ops')) {
       checks.push(container('Portainer', 'ops', 'portainer'), container('Glances', 'ops', 'glances'), container('FileBrowser', 'ops', 'filebrowser'));

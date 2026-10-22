@@ -3,7 +3,7 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 24. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 25. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core), redeploys it, then removes it (ihc-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
@@ -11,7 +11,8 @@
 # agent and is skipped when the agent profile is off; test 22 covers the portal and runs inside
 # test 16, while smoke-app is on the air; test 23 covers the portal's status API for agents
 # (docs/portal-api.md); test 24 covers the portal by role (the smoke user through the SSO,
-# the people list, the portal's Authentik token). Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# the people list, the portal's Authentik token); test 25 covers the MCP gateway and runs
+# inside test 16 (docs/mcp-gateway.md). Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   IHC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -53,7 +54,7 @@ result() { # NUMBER NAME STATUS DETAIL
   esac
 }
 PROXY="http://127.0.0.1:${PROXY_HTTP_PORT}"
-CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal gitea-runner gitea-deployer"
+CORE="proxy authentik-postgres authentik-server authentik-worker postgres redis gitea docker-ro portal mcp gitea-runner gitea-deployer"
 STORAGE=false; case ",$COMPOSE_PROFILES," in *,storage,*) STORAGE=true; CORE="$CORE garage" ;; esac
 # TLS internal: every HTTPS check verifies the certificate against the cloud CA
 # (<install-dir>/local/ca/ca.crt), as a device that installed it would; never -k.
@@ -272,6 +273,116 @@ print("; ".join(bad) or "ok %d apps (schema %s)" % (len(apps), d.get("schema_ver
   [ -z "$bad" ] && result 22 portal pass "${good#; }" || result 22 portal fail "${bad# }"
 }
 
+# 25. the MCP gateway (docs/mcp-gateway.md), with APP (smoke-app of test 16, on the air):
+#     anonymous /mcp is 401 and names its metadata, which points at the Authentik provider;
+#     a person outside the users group is refused at sign-in; the smoke user gets a token by
+#     the authorization code flow with PKCE (as Claude Code), lists the platform's tools
+#     (catalog only: no admin tools) and APP's ping, calls it (the app checks the actor JWT
+#     and answers with the smoke user's email), sees the portal healthy in ihc_list_apps
+#     (APP is a system test by then: admins only), is refused
+#     ihc_list_people, and APP refuses a call that carries no actor JWT. Then test 16's
+#     redeploy grants APP's scope to the admin group only: the ping disappears from the
+#     list and the call is refused by the gateway. The token stays in a 0600 file and
+#     travels in curl config files, never on a command line.
+T25_DONE=false; T25_REVOKED=false; T25_GOOD=""; T25_BAD=""
+mcp_rpc() { # METHOD [PARAMS_JSON] -> body, then the HTTP code on the last line
+  local body params="${2:-}"
+  [ -n "$params" ] || params='{}'
+  body="$(jsonq build jsonrpc=2.0 id:=1 method="$1" params:="$params")"
+  printf '%s' "$body" | curl -K "$T25_CFG" -sS --max-time 60 -X POST --data-binary @- -w '\n%{http_code}' $(proxy_args "mcp.$BASE_DOMAIN") "$(proxy_url "mcp.$BASE_DOMAIN" /mcp)" 2>/dev/null || printf '\n000'
+}
+t25_manifest() { # REPO GROUP: the app's mcp section grants its scope to GROUP
+  $PY - "$1/company-app.yaml" "$2" <<'PY'
+import re, sys
+p, group = sys.argv[1:3]
+s = open(p).read()
+s = re.sub(r"(?ms)^mcp:\n(?:[ #].*\n|\n)*", "", s).rstrip("\n") + "\n"
+s += "\nmcp:\n  audience: smoke-app.mcp\n  tools_path: /mcp/tools\n  execute_path: /mcp/tools/{tool}/execute\n  scopes:\n    smoke-app.read:\n      - %s\n" % group
+open(p, "w").write(s)
+PY
+}
+t25_outsider() { # a user in no group: Authentik refuses the MCP client's sign-in
+  local user="ihc-smoke-outsider-$$" pk out
+  api_init ak25 "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
+  api POST "http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3/core/users/" "$(jsonq build username="$user" name="Smoke outsider (temporary)" email="$user@smoke.invalid" is_active:=true path=ihc/smoke)"
+  pk="$(printf '%s' "$API_BODY" | jsonq get pk)"
+  [ -n "$pk" ] || { T25_BAD="$T25_BAD outsider-not-created($API_CODE)"; return; }
+  T25_OUTSIDER_PASSWORD="$(random_secret 32)"; export T25_OUTSIDER_PASSWORD
+  api POST "http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3/core/users/$pk/set_password/" "$(jsonq build password="$T25_OUTSIDER_PASSWORD")"
+  out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$user" --password-env T25_OUTSIDER_PASSWORD --oauth-token "$T25_WORK/outsider" --expect denied 2>/dev/null | tail -n 1 || true)"
+  api_init ak25 "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
+  api DELETE "http://127.0.0.1:${AUTHENTIK_LOCAL_PORT}/api/v3/core/users/$pk/"
+  unset T25_OUTSIDER_PASSWORD
+  case "$out" in *PASS*) T25_GOOD="$T25_GOOD; a user outside $AUTHENTIK_APP_GROUP is refused at sign-in" ;; *) T25_BAD="$T25_BAD outsider(${out:-no output})" ;; esac
+  if [ -s "$T25_WORK/outsider" ]; then T25_BAD="$T25_BAD outsider-got-a-token"; fi
+}
+t25_granted() { # APP
+  local app="$1" out code body
+  T25_DONE=true
+  T25_WORK="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke25.XXXXXX")"; chmod 700 "$T25_WORK"
+  out="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' -D "$T25_WORK/h" -X POST -H 'Content-Type: application/json' --data '{}' $(proxy_args "mcp.$BASE_DOMAIN") "$(proxy_url "mcp.$BASE_DOMAIN" /mcp)" 2>/dev/null || echo 000)"
+  if [ "$out" = 401 ] && grep -qi '^www-authenticate: Bearer resource_metadata=' "$T25_WORK/h"; then
+    body="$(curl -sS --max-time 15 $(proxy_args "mcp.$BASE_DOMAIN") "$(proxy_url "mcp.$BASE_DOMAIN" /.well-known/oauth-protected-resource/mcp)" 2>/dev/null | jsonq get authorization_servers.0)"
+    [ "$body" = "$AUTHENTIK_BASE_URL/application/o/${MCP_OIDC_CLIENT_ID:-ihc-mcp}/" ] && T25_GOOD="anonymous 401 with metadata naming $body" || T25_BAD="$T25_BAD metadata:'$body'"
+  else T25_BAD="$T25_BAD anonymous:$out"; fi
+  t25_outsider
+  out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --oauth-token "$T25_WORK/token" 2>/dev/null | tail -n 1 || true)"
+  case "$out" in *PASS*) ;; *) T25_BAD="$T25_BAD smoke-user-token(${out:-no output})"; return ;; esac
+  T25_CFG="$T25_WORK/mcp.cfg"
+  (umask 077; printf 'header = "Content-Type: application/json"\nheader = "Accept: application/json, text/event-stream"\nheader = "Authorization: Bearer %s"\n' "$(cat "$T25_WORK/token")" > "$T25_CFG")
+  out="$(mcp_rpc initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ihc-smoke","version":"1"}}')"
+  [ "$(printf '%s' "${out%$'\n'*}" | jsonq get result.serverInfo.name)" = inhousecloud-mcp-gateway ] || { T25_BAD="$T25_BAD initialize:${out##*$'\n'}"; return; }
+  out="$(mcp_rpc tools/list)"; body="${out%$'\n'*}"
+  out="$(printf '%s' "$body" | $PY -c 'import json,sys
+app=sys.argv[1]
+try: names=[t["name"] for t in json.load(sys.stdin)["result"]["tools"]]
+except Exception: print("no tool list"); sys.exit()
+bad=[]
+if "ihc_list_apps" not in names: bad.append("ihc_list_apps missing")
+if set(names) & {"ihc_platform_status","ihc_list_people","ihc_list_groups"}: bad.append("admin tools listed")
+if app+"__ping" not in names: bad.append(app+"__ping missing")
+print("; ".join(bad) or "ok %d tools" % len(names))' "$app")"
+  case "$out" in ok*) T25_GOOD="$T25_GOOD; $AUTHENTIK_SMOKE_USER (PKCE) lists ${out#ok } (catalog, ${app}__ping, no admin tools)" ;; *) T25_BAD="$T25_BAD tools/list:$out" ;; esac
+  out="$(mcp_rpc tools/call "{\"name\":\"${app}__ping\",\"arguments\":{}}")"; body="${out%$'\n'*}"
+  if [ "$(printf '%s' "$body" | jsonq get result.isError)" = false ] && [ "$(printf '%s' "$body" | jsonq get result.structuredContent.email)" = "$AUTHENTIK_SMOKE_USER@smoke.invalid" ]; then
+    T25_GOOD="$T25_GOOD; ${app}__ping answers pong for $AUTHENTIK_SMOKE_USER@smoke.invalid"
+  else T25_BAD="$T25_BAD ping:'$(printf '%.160s' "$body")'"; fi
+  out="$(mcp_rpc tools/call '{"name":"ihc_list_apps","arguments":{}}')"; body="${out%$'\n'*}"
+  # APP is marked kind system-test by now: the catalog shows it to admins only.
+  out="$(printf '%s' "$body" | $PY -c 'import json,sys
+app=sys.argv[1]
+try: apps={a["slug"]:a for a in json.load(sys.stdin)["result"]["structuredContent"]["apps"]}
+except Exception: print("no apps"); sys.exit()
+p=apps.get("portal") or {}
+bad=[]
+if not (p.get("health") or {}).get("ok"): bad.append("portal health %s" % p.get("health"))
+if (p.get("sso") or {}).get("required") is not True: bad.append("portal sso %s" % p.get("sso"))
+if app in apps: bad.append("system test %s shown to a viewer" % app)
+print("; ".join(bad) or "ok")' "$app")"
+  [ "$out" = ok ] && T25_GOOD="$T25_GOOD; ihc_list_apps shows the portal healthy behind the SSO and hides the system test $app" || T25_BAD="$T25_BAD list_apps:$out"
+  out="$(mcp_rpc tools/call '{"name":"ihc_list_people","arguments":{}}')"; body="${out%$'\n'*}"
+  [ "$(printf '%s' "$body" | jsonq get result.isError)" = true ] && T25_GOOD="$T25_GOOD; ihc_list_people refused" || T25_BAD="$T25_BAD list_people-not-refused"
+  code="$(dc exec -T mcp node -e 'fetch(process.argv[1],{method:"POST",body:"{}"}).then(r=>console.log(r.status)).catch(()=>console.log("000"))' "http://$app:8080/mcp/tools/ping/execute" 2>/dev/null | tr -d '[:space:]')"
+  [ "$code" = 401 ] && T25_GOOD="$T25_GOOD; $app refuses a call without an actor JWT (401)" || T25_BAD="$T25_BAD app-without-jwt:$code"
+}
+t25_revoked() { # APP: its manifest now grants the scope to the admin group only
+  local app="$1" out body
+  T25_REVOKED=true
+  [ -n "${T25_CFG:-}" ] && [ -s "$T25_CFG" ] || { T25_BAD="$T25_BAD revoked:no-token"; return; }
+  out="$(mcp_rpc tools/list)"; body="${out%$'\n'*}"
+  printf '%s' "$body" | grep -q "\"${app}__ping\"" && T25_BAD="$T25_BAD revoked-still-listed" || T25_GOOD="$T25_GOOD; after the scope went to $AUTHENTIK_PORTAL_GROUP only, ${app}__ping is gone from the list"
+  out="$(mcp_rpc tools/call "{\"name\":\"${app}__ping\",\"arguments\":{}}")"; body="${out%$'\n'*}"
+  if [ "$(printf '%s' "$body" | jsonq get result.isError)" = true ] && printf '%s' "$body" | grep -q 'access denied'; then
+    T25_GOOD="$T25_GOOD and the call is refused by the gateway"
+  else T25_BAD="$T25_BAD revoked-call:'$(printf '%.160s' "$body")'"; fi
+}
+t25_result() {
+  rm -rf "${T25_WORK:-/nonexistent}"
+  [ "$T25_DONE" = true ] || T25_BAD="$T25_BAD no-app-on-the-air(test-16-failed-before-it)"
+  [ "$T25_DONE" != true ] || [ "$T25_REVOKED" = true ] || T25_BAD="$T25_BAD revocation-not-checked(test-16-redeploy-failed)"
+  [ -z "$T25_BAD" ] && result 25 mcp-gateway pass "${T25_GOOD#; }" || result 25 mcp-gateway fail "${T25_BAD# }"
+}
+
 t16() {
   local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 tries1 removed
   T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
@@ -291,6 +402,10 @@ t16() {
     GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git clone -q "$T16_REPO" "$work/$slug" 2>/dev/null \
       || { result 16 app-deploy fail "clone of $org/$slug failed"; rm -rf "$work"; return; }
   fi
+  # Test 25: the app's MCP section grants its scope to the users group for the first deploy
+  # (a repository left by an older run may predate the section, or carry the admin grant).
+  cp "$IHC_ROOT/templates/app/server.js" "$work/$slug/server.js"
+  t25_manifest "$work/$slug" "$AUTHENTIK_APP_GROUP"
   api_init gt16 "Authorization: token ${GITEA_ADMIN_TOKEN}"
   if ! t16_push "$work/$slug" "smoke test 16"; then
     result 16 app-deploy fail "deploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started after ${T16_RUN:-?}s}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
@@ -308,10 +423,15 @@ t16() {
     || { result 16 app-deploy fail "role $db cannot sign in with the password in $app_env"; rm -rf "$work"; return; }
   fp1="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
   t22 "$slug"
+  t25_granted "$slug"
+  # The redeploy also takes the MCP scope away from the users group (test 25).
+  t25_manifest "$work/$slug" "$AUTHENTIK_PORTAL_GROUP"
+  api_init gt16 "Authorization: token ${GITEA_ADMIN_TOKEN}"
   if ! t16_push "$work/$slug" "smoke test 16: redeploy"; then
     result 16 app-deploy fail "redeploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
   fi
   rm -rf "$work"
+  [ "$T25_DONE" = true ] && t25_revoked "$slug"
   fp2="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
   [ "$fp1" = "$fp2" ] || { result 16 app-deploy fail "the redeploy changed the database password"; return; }
   if "$IHC_ROOT/scripts/ihc-app.sh" remove "$slug" --yes --install-dir "$INSTALL_DIR" >"${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log" 2>&1; then
@@ -325,6 +445,7 @@ t16() {
 }
 t16
 [ "$T22_DONE" = true ] || t22 ""
+t25_result
 
 # 17. the ops tools are behind the SSO: an anonymous request to the root of
 #     terminal.<BASE_DOMAIN> (when the web terminal is installed), files.<BASE_DOMAIN>,

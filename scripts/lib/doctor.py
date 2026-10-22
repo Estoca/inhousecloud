@@ -163,7 +163,7 @@ class Box:
     def services(self):
         """The cloud's own services for the profiles in .env (install.sh core_services)."""
         s = ["proxy", "authentik-postgres", "authentik-server", "authentik-worker", "postgres", "redis",
-             "gitea", "docker-ro", "portal", "gitea-runner", "gitea-deployer"]
+             "gitea", "docker-ro", "portal", "mcp", "gitea-runner", "gitea-deployer"]
         if self.has("storage"): s += ["garage"]
         if self.has("ops"):
             s += ["portainer", "glances", "filebrowser"]
@@ -434,7 +434,8 @@ def npm_hosts(box):
 
 
 def expected_routes(box):
-    r = [(box.portal_host, "portal", "core"), (box.git_host, "gitea", "core"), (box.auth_host, "authentik-server", "core")]
+    r = [(box.portal_host, "portal", "core"), (box.git_host, "gitea", "core"), (box.auth_host, "authentik-server", "core"),
+         ("mcp." + box.base, "mcp", "core")]
     if box.has("storage"):
         r.append(("s3." + box.base, "garage", "core"))
     if box.has("ops"):

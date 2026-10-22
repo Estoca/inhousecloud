@@ -92,6 +92,8 @@ svc_cid() {
 }
 
 app_url() { printf '%s://%s.%s' "${PORTAL_BASE_URL%%://*}" "$1" "$BASE_DOMAIN"; }
+# The MCP gateway's public URL: the actor JWT's issuer (first-run writes MCP_BASE_URL).
+mcp_public_url() { printf '%s' "${MCP_BASE_URL:-$(app_url mcp)}"; }
 db_ident() { printf 'app_%s' "$(printf '%s' "$1" | tr '-' '_')"; }
 
 # askpass FILE USER: a GIT_ASKPASS helper that answers USER and $IHC_GIT_TOKEN, so
@@ -127,10 +129,10 @@ cmd_new() {
   mkdir -p "$dir"
   tmpl="$IHC_ROOT/templates/app"
   (cd "$tmpl" && tar cf - .) | (cd "$dir" && tar xf -)
-  $PY - "$dir" "$SLUG" "$NAME" "$OWNER" "$SLUG.$domain" <<'PY'
+  $PY - "$dir" "$SLUG" "$NAME" "$OWNER" "$SLUG.$domain" "${AUTHENTIK_APP_GROUP:-ihc-users}" <<'PY'
 import os, sys
-root, slug, name, owner, domain = sys.argv[1:6]
-subs = {"__APP_SLUG__": slug, "__APP_NAME__": name, "__OWNER_EMAIL__": owner, "__APP_DOMAIN__": domain}
+root, slug, name, owner, domain, group = sys.argv[1:7]
+subs = {"__APP_SLUG__": slug, "__APP_NAME__": name, "__OWNER_EMAIL__": owner, "__APP_DOMAIN__": domain, "__APP_GROUP__": group}
 for d, dirs, files in os.walk(root):
     dirs[:] = [x for x in dirs if x != ".git"]
     for f in files:
@@ -311,7 +313,10 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   APP_DATA="$INSTALL_DIR/app-data/$SLUG"
   (umask 077; mkdir -p "$APP_DATA"); chmod 700 "$INSTALL_DIR/app-data" 2>/dev/null || true
   [ -f "$APP_ENV" ] || (umask 077; : > "$APP_ENV")
-  for kv in "APP_SLUG=$SLUG" "APP_BASE_URL=$APP_URL" "PORT=$M_PORT" "DATA_DIR=/data"; do
+  # The MCP gateway (docs/mcp-gateway.md): where the app checks the actor JWT. Written for
+  # every app, so adding an mcp section later needs no other change on the box.
+  for kv in "APP_SLUG=$SLUG" "APP_BASE_URL=$APP_URL" "PORT=$M_PORT" "DATA_DIR=/data" \
+      "IHC_MCP_ISSUER=$(mcp_public_url)" "IHC_MCP_JWKS_URL=http://mcp:8090/.well-known/jwks.json" "IHC_MCP_AUDIENCE=${M_MCP_AUDIENCE:-$SLUG.mcp}"; do
     printf '%s' "${kv#*=}" | envfile set "$APP_ENV" "${kv%%=*}"
   done
   [ "$M_DATABASE" = true ] && ensure_app_database "$(db_ident "$SLUG")" "$(db_ident "$SLUG")"

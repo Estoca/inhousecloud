@@ -17,6 +17,10 @@
 #      group only, and a proxy host with forward auth and no public path.
 #   3. Gitea: admin, API tokens, organization, ihc-smoke repository, OIDC source.
 #   4. The portal's read-only API token IHC_PORTAL_API_TOKEN (docs/portal-api.md), once.
+#   5. The MCP gateway (docs/mcp-gateway.md): OAuth2 provider and application ihc-mcp in
+#      Authentik (public client, authorization code with PKCE, explicit consent, bound to
+#      ihc-users) and the proxy host mcp.<BASE_DOMAIN> (no forward auth: the gateway
+#      checks the bearer token itself).
 # Talks to the services on their loopback control ports; tokens travel in curl config
 # files and on stdin, never on a command line, and nothing secret is printed.
 set -eu
@@ -80,9 +84,19 @@ if [ -z "$SIGNING_KEY" ]; then
 else ok "signing key: authentik self-signed certificate"; fi
 
 # Scope mappings openid, email, profile (the API gives a provider none by default).
+# Authentik's worker creates them from a blueprint after the first start: on a slow host
+# they may not exist yet, so wait for them (two minutes at most).
+scope_mapping() { # NAME -> pk, or nothing
+  ak_list_find "propertymappings/provider/scope/?managed=$(urlenc "goauthentik.io/providers/oauth2/$1")" managed "goauthentik.io/providers/oauth2/$1" pk
+}
+t0=$(date +%s)
+until [ -n "$(scope_mapping scope-profile)" ]; do
+  [ $(( $(date +%s) - t0 )) -ge 120 ] && die "Authentik's OAuth2 scope mappings did not appear in 120s: is authentik-worker running? (docker compose logs authentik-worker in $INSTALL_DIR)"
+  sleep 5
+done
 SCOPES="[]"
 for m in scope-openid scope-email scope-profile; do
-  pk="$(ak_list_find "propertymappings/provider/scope/?managed=$(urlenc "goauthentik.io/providers/oauth2/$m")" managed "goauthentik.io/providers/oauth2/$m" pk)"
+  pk="$(scope_mapping "$m")"
   [ -n "$pk" ] || die "scope mapping $m not found"
   SCOPES="$(printf '%s' "$SCOPES" | $PY -c 'import json,sys;l=json.load(sys.stdin);l.append(sys.argv[1]);print(json.dumps(l))' "$pk")"
 done
@@ -118,6 +132,40 @@ ensure_binding "$PORTAL_APP_PK" "$PORTAL_GROUP_PK" "portal <- $AUTHENTIK_PORTAL_
 # the platform status and the people list for admins (docs/security.md).
 ensure_binding "$PORTAL_APP_PK" "$APP_GROUP_PK" "portal <- $AUTHENTIK_APP_GROUP"
 ensure_binding "$GITEA_APP_PK" "$APP_GROUP_PK" "gitea <- $AUTHENTIK_APP_GROUP"
+
+# The MCP gateway's OAuth2 provider (docs/mcp-gateway.md): a public client (no secret: an
+# MCP client on a laptop cannot keep one), authorization code with PKCE and refresh
+# tokens, explicit consent (a local program cannot get a token silently), JWT access
+# tokens signed with the same key as the id tokens. Redirects: claude.ai and claude.com's
+# callback, and any loopback port for Claude Code and other local clients; more strict
+# URLs from MCP_OAUTH_EXTRA_REDIRECT_URIS (comma separated) in .env.
+[ -n "$(env_get MCP_OIDC_CLIENT_ID)" ] || env_set MCP_OIDC_CLIENT_ID ihc-mcp
+[ -n "$(env_get MCP_BASE_URL)" ] || env_set MCP_BASE_URL "${PORTAL_BASE_URL%%://*}://mcp.$BASE_DOMAIN"
+MCP_CLIENT_ID="$(env_get MCP_OIDC_CLIENT_ID)"; MCP_URL="$(env_get MCP_BASE_URL)"
+MCP_SCOPES="$SCOPES"
+pk="$(scope_mapping scope-offline_access)"
+[ -n "$pk" ] && MCP_SCOPES="$(printf '%s' "$SCOPES" | $PY -c 'import json,sys;l=json.load(sys.stdin);l.append(sys.argv[1]);print(json.dumps(l))' "$pk")"
+MCP_REDIRECTS="$($PY -c 'import json,sys
+r=[{"matching_mode":"strict","url":"https://claude.ai/api/mcp/auth_callback"},
+   {"matching_mode":"strict","url":"https://claude.com/api/mcp/auth_callback"},
+   {"matching_mode":"regex","url":r"^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?/(oauth/)?callback$"}]
+r+=[{"matching_mode":"strict","url":u.strip()} for u in sys.argv[1].split(",") if u.strip()]
+print(json.dumps(r))' "${MCP_OAUTH_EXTRA_REDIRECT_URIS:-}")"
+CONSENT_FLOW="$(flow_pk default-provider-authorization-explicit-consent)"
+MCP_PROVIDER_BODY="$(jsonq build name="$MCP_CLIENT_ID" authorization_flow="$CONSENT_FLOW" invalidation_flow="$INVAL_FLOW" client_type=public grant_types:='["authorization_code","refresh_token"]' client_id="$MCP_CLIENT_ID" signing_key="$SIGNING_KEY" property_mappings:="$MCP_SCOPES" redirect_uris:="$MCP_REDIRECTS" sub_mode=hashed_user_id issuer_mode=per_provider access_token_validity="hours=1" refresh_token_validity="days=30")"
+MCP_PROVIDER_PK="$(ak_list_find "providers/oauth2/?name=$(urlenc "$MCP_CLIENT_ID")" name "$MCP_CLIENT_ID" pk)"
+if [ -z "$MCP_PROVIDER_PK" ]; then
+  api POST "$AK/providers/oauth2/" "$MCP_PROVIDER_BODY"
+  api_ok || die "create OAuth2 provider $MCP_CLIENT_ID: HTTP $API_CODE $API_BODY"
+  MCP_PROVIDER_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "OAuth2 provider $MCP_CLIENT_ID created (public client, PKCE)"
+else
+  api PATCH "$AK/providers/oauth2/$MCP_PROVIDER_PK/" "$MCP_PROVIDER_BODY"
+  api_ok || die "reconcile OAuth2 provider $MCP_CLIENT_ID: HTTP $API_CODE $API_BODY"
+  ok "OAuth2 provider $MCP_CLIENT_ID reconciled"
+fi
+record "authentik:provider:oauth2:$MCP_PROVIDER_PK"
+MCP_APP_PK="$(ensure_application "$MCP_CLIENT_ID" "MCP gateway" "$MCP_PROVIDER_PK" "$MCP_URL/mcp")"
+ensure_binding "$MCP_APP_PK" "$APP_GROUP_PK" "$MCP_CLIENT_ID <- $AUTHENTIK_APP_GROUP"
 
 # Ops tools: admins only (docs/security.md). Created with the ops profile; the terminal's
 # only when the installer found an sshd for it.
@@ -189,6 +237,9 @@ ensure_proxy_host "$AUTHENTIK_HOST" authentik-server 9000 ""
 ensure_proxy_host "$GITEA_HOST" gitea 3000 ""
 # The portal: forward auth, /health public, and the status API rule (lib/portal-api.sh).
 ensure_proxy_host "$PORTAL_HOST" portal 8080 "$(portal_forward_auth_conf)"
+# The MCP gateway: no forward auth, every /mcp request carries a bearer token the gateway
+# checks against Authentik; /health and /.well-known/* are public (docs/mcp-gateway.md).
+ensure_proxy_host "mcp.$BASE_DOMAIN" mcp 8090 ""
 case ",$COMPOSE_PROFILES," in
   # The S3 API: requests are signed per app key, so no forward auth (it would break every
   # client). Garage has no console; its admin API is never routed.
@@ -208,11 +259,12 @@ while :; do
   c_auth="$(http_code "$(proxy_url "$AUTHENTIK_HOST" /-/health/live/)" $(proxy_args "$AUTHENTIK_HOST"))"
   c_git="$(http_code "$(proxy_url "$GITEA_HOST" /api/healthz)" $(proxy_args "$GITEA_HOST"))"
   c_health="$(http_code "$(proxy_url "$PORTAL_HOST" /health)" $(proxy_args "$PORTAL_HOST"))"
-  [ "$c_auth" = 200 ] && [ "$c_git" = 200 ] && [ "$c_health" = 200 ] && break
-  [ $(( $(date +%s) - t0 )) -ge 90 ] && die "routes not answering through the proxy (auth $c_auth, git $c_git, portal health $c_health)"
+  c_mcp="$(http_code "$(proxy_url "mcp.$BASE_DOMAIN" /.well-known/oauth-protected-resource)" $(proxy_args "mcp.$BASE_DOMAIN"))"
+  [ "$c_auth" = 200 ] && [ "$c_git" = 200 ] && [ "$c_health" = 200 ] && [ "$c_mcp" = 200 ] && break
+  [ $(( $(date +%s) - t0 )) -ge 90 ] && die "routes not answering through the proxy (auth $c_auth, git $c_git, portal health $c_health, mcp metadata $c_mcp)"
   sleep 3
 done
-ok "routes answer through the proxy (auth, git, portal /health)"
+ok "routes answer through the proxy (auth, git, portal /health, mcp metadata)"
 
 # ==================================================================== Gitea
 step "Gitea"
@@ -315,5 +367,5 @@ while :; do
   sleep 3
 done
 ok "portal route redirects anonymous requests to the outpost"
-[ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending portal_api_token_env=IHC_PORTAL_API_TOKEN portal_api_token_fingerprint="$PORTAL_API_FP")"
+[ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending portal_api_token_env=IHC_PORTAL_API_TOKEN portal_api_token_fingerprint="$PORTAL_API_FP" mcp_url="$MCP_URL/mcp" mcp_oauth_client_id="$MCP_CLIENT_ID")"
 ok "first-run complete"

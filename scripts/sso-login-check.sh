@@ -17,6 +17,10 @@
 # --probe PATH=CODE (repeatable, with --expect allowed): after the sign-in, GET URL+PATH
 # with the same session and require HTTP CODE. Smoke test 24 runs it on the portal:
 # the smoke user reads the catalog (200) and is refused the people list (403).
+# --oauth-token FILE [--client-id ID]: the MCP client's sign-in instead (docs/mcp-gateway.md):
+# authorization code with PKCE at the OAuth2 provider ID (default MCP_OIDC_CLIENT_ID, ihc-mcp)
+# with a loopback redirect, as Claude Code does; the access token goes to FILE (0600), never
+# to the output. With --expect denied, passes when Authentik refuses the user. Smoke test 25.
 set -eu
 IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/common.sh
@@ -25,7 +29,7 @@ IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 USER_NAME=akadmin
 PASSWORD_ENV=AUTHENTIK_BOOTSTRAP_PASSWORD
-TARGET=""; EXPECT=allowed; PROBES=""
+TARGET=""; EXPECT=allowed; PROBES=""; OAUTH_OUT=""; CLIENT_ID=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -33,8 +37,10 @@ while [ $# -gt 0 ]; do
     --password-env) PASSWORD_ENV="$2"; shift ;;
     --target) TARGET="${2%/}"; shift ;;
     --expect) EXPECT="$2"; shift ;;
+    --oauth-token) OAUTH_OUT="$2"; shift ;;
+    --client-id) CLIENT_ID="$2"; shift ;;
     --probe) case "$2" in /*=[0-9][0-9][0-9]) PROBES="$PROBES $2" ;; *) die "--probe is PATH=CODE, e.g. /api/people=403" ;; esac; shift ;;
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
   shift
@@ -63,16 +69,32 @@ get() {
 origin() { local h="${1#*://}"; printf '%s://%s' "${1%%://*}" "${h%%/*}"; }
 # A completed stage answers 302 to the executor itself: -L turns that into the GET
 # that fetches the next challenge, as the browser's executor does.
+# Once signed in, Authentik's API wants the CSRF header the browser's executor sends (the
+# value of the authentik_csrf cookie): the consent stage of the MCP provider needs it.
 post_json() { # URL BODY
-  printf '%s' "$2" | curl -sS -L -c "$JAR" -b "$JAR" $R --max-time 30 -H 'Content-Type: application/json' -H 'Referer: '"$AUTHENTIK_BASE_URL/" --data-binary @- "$1"
+  local csrf
+  csrf="$(awk '$6 == "authentik_csrf" {v=$7} END {print v}' "$JAR")"
+  printf '%s' "$2" | curl -sS -L -c "$JAR" -b "$JAR" $R --max-time 30 -H 'Content-Type: application/json' -H 'Referer: '"$AUTHENTIK_BASE_URL/" ${csrf:+-H "X-authentik-CSRF: $csrf"} --data-binary @- "$1"
 }
 abs() { case "$1" in http*) printf '%s' "$1" ;; *) printf '%s%s' "$2" "$1" ;; esac; }
 
 # run_flow SLUG QUERY -> prints the URL the flow ends on
 run_flow() {
-  local slug="$1" query="$2" url resp component tries=0
+  local slug="$1" query="$2" url resp out component tries=0
   url="$AUTHENTIK_BASE_URL/api/v3/flows/executor/$slug/?query=$(urlenc "$query")"
-  resp="$(curl -sS -c "$JAR" -b "$JAR" $R --max-time 30 "$url")"
+  # A stage with nothing to ask (a consent given before) completes on the GET: the executor
+  # redirects to itself for the next one, or out of the flow when it is over.
+  out="$(curl -sS -c "$JAR" -b "$JAR" $R --max-time 30 -o "$TMP/flow" -w '%{http_code} %{redirect_url}' "$url")"
+  while :; do
+    case "$out" in
+      30[1237]\ *"/flows/executor/"*) out="$(curl -sS -c "$JAR" -b "$JAR" $R --max-time 30 -o "$TMP/flow" -w '%{http_code} %{redirect_url}' "${out#* }")" ;;
+      30[1237]\ ?*) printf '%s' "${out#* }"; return 0 ;;
+      *) break ;;
+    esac
+    tries=$((tries+1)); [ $tries -le 8 ] || die "flow $slug: too many redirects"
+  done
+  tries=0
+  resp="$(cat "$TMP/flow")"
   while :; do
     tries=$((tries+1)); [ $tries -le 8 ] || die "flow $slug: too many steps"
     component="$(printf '%s' "$resp" | jsonq get component)"
@@ -99,6 +121,56 @@ run_flow() {
 
 # denied_page: Authentik answered a page that refuses the signed-in user.
 denied_page() { printf '%s' "$BODY" | grep -qiE 'access-denied|permission denied|access denied|not allowed'; }
+
+if [ -n "$OAUTH_OUT" ]; then
+  # authorize -> Authentik sign-in -> consent -> loopback redirect with the code -> token.
+  CLIENT_ID="${CLIENT_ID:-${MCP_OIDC_CLIENT_ID:-ihc-mcp}}"
+  REDIRECT="http://127.0.0.1:53682/callback"
+  VERIFIER="$(random_secret 64)"
+  CHALLENGE="$(printf '%s' "$VERIFIER" | $PY -c 'import base64,hashlib,sys;print(base64.urlsafe_b64encode(hashlib.sha256(sys.stdin.read().encode()).digest()).decode().rstrip("="))')"
+  STATE="$(random_secret 16)"
+  step "OAuth sign-in: $CLIENT_ID (authorization code + PKCE) as $USER_NAME, expecting $EXPECT"
+  url="$AUTHENTIK_BASE_URL/application/o/authorize/?response_type=code&client_id=$(urlenc "$CLIENT_ID")&redirect_uri=$(urlenc "$REDIRECT")&scope=$(urlenc "openid email profile offline_access")&code_challenge=$CHALLENGE&code_challenge_method=S256&state=$STATE"
+  hops=0; outcome=""; code=""
+  while :; do
+    hops=$((hops+1)); [ $hops -le 20 ] || die "too many redirects"
+    case "$url" in
+      "$REDIRECT"*)
+        code="$(printf '%s' "$url" | $PY -c 'import sys,urllib.parse as u;q=u.parse_qs(u.urlsplit(sys.stdin.read()).query);print((q.get("code") or [""])[0] if (q.get("state") or [""])[0]==sys.argv[1] else "")' "$STATE")"
+        [ -n "$code" ] || die "the redirect carried no code for our state: $(printf '%s' "${url#*\?}" | sed 's/code=[^&]*/code=…/')"
+        outcome=allowed; break ;;
+      "$AUTHENTIK_BASE_URL"/if/flow/*)
+        slug="${url#"$AUTHENTIK_BASE_URL"/if/flow/}"; slug="${slug%%/*}"
+        query="${url#*\?}"; [ "$query" = "$url" ] && query=""
+        to="$(run_flow "$slug" "$query")"
+        [ "$to" = __DENIED__ ] && { outcome=denied; break; }
+        url="$(abs "$to" "$AUTHENTIK_BASE_URL")"
+        continue ;;
+    esac
+    get "$url"
+    log "GET ${url%%\?*} -> $CODE"
+    case "$CODE" in
+      30[1237]|308) url="$(abs "$LOCATION" "$(origin "$url")")" ;;
+      200|403) denied_page && { outcome=denied; break; }; die "stopped on a page (HTTP $CODE) at ${url%%\?*}" ;;
+      *) die "unexpected HTTP $CODE at ${url%%\?*}" ;;
+    esac
+  done
+  if [ "$outcome" = allowed ]; then
+    printf 'grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&code_verifier=%s' "$code" "$(urlenc "$REDIRECT")" "$(urlenc "$CLIENT_ID")" "$VERIFIER" \
+      | curl -sS $R --max-time 30 -o "$TMP/token" -w '%{http_code}' -H 'Content-Type: application/x-www-form-urlencoded' --data-binary @- "$AUTHENTIK_BASE_URL/application/o/token/" > "$TMP/code" || true
+    [ "$(cat "$TMP/code")" = 200 ] || die "token endpoint answered HTTP $(cat "$TMP/code"): $(jsonq get error < "$TMP/token") $(jsonq get error_description < "$TMP/token")"
+    (umask 077; jsonq get access_token < "$TMP/token" > "$OAUTH_OUT")
+    [ -s "$OAUTH_OUT" ] || die "no access_token in the token endpoint's answer"
+    ok "access token for $USER_NAME from $CLIENT_ID written to $OAUTH_OUT (refresh token: $( [ -n "$(jsonq get refresh_token < "$TMP/token")" ] && echo yes || echo no))"
+  fi
+  if [ "$outcome" = "$EXPECT" ]; then
+    echo "sso-login-check: PASS user=$USER_NAME client=$CLIENT_ID outcome=$outcome"
+    exit 0
+  fi
+  fail "$USER_NAME: $outcome at $CLIENT_ID (expected $EXPECT)"
+  echo "sso-login-check: FAIL user=$USER_NAME client=$CLIENT_ID outcome=$outcome"
+  exit 1
+fi
 
 if [ -n "$TARGET" ]; then
   # A forward-auth route: target -> outpost -> Authentik sign-in -> authorize -> target.

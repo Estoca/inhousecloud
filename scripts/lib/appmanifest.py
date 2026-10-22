@@ -24,7 +24,7 @@ RESERVED = {
     "redis", "gitea", "portal", "garage", "gitea-runner", "portainer", "glances", "wetty",
     "filebrowser", "terminal", "files", "gitea-deployer",
     "cloudflared", "tailscale", "backup", "auth", "git", "s3", "s3-console", "ihc",
-    "authentik", "www", "api", "admin", "localhost", "ihc-smoke",
+    "authentik", "www", "api", "admin", "localhost", "ihc-smoke", "mcp",
 }
 # Local infrastructure an app built inside the cloud must not bring (install-design.md).
 INFRA = {
@@ -53,6 +53,45 @@ def slug_problem(slug):
     if slug.startswith("app-") or slug.startswith("ihc-"):
         return "slug %r: the prefixes app- and ihc- are reserved for platform resources" % slug
     return None
+
+
+MCP_PATH = re.compile(r"^/[A-Za-z0-9/_.{}-]*$")
+SCOPE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def mcp_errors(mcp, slug, errors):
+    """The mcp section, layer 1 (docs/app-contract.md, "MCP"). Absent or enabled: false is fine."""
+    if mcp is None:
+        return
+    if not isinstance(mcp, dict):
+        errors.append("mcp must be a mapping (audience, tools_path, execute_path, scopes) or be left out")
+        return
+    if mcp.get("enabled") is False:
+        return
+    aud = mcp.get("audience", "%s.mcp" % slug)
+    if not isinstance(aud, str) or not aud.startswith(slug + "."):
+        errors.append("mcp.audience %r: use %s.mcp (it must start with the slug and a dot)" % (aud, slug))
+    for key, default in (("tools_path", "/mcp/tools"), ("execute_path", "/mcp/tools/{tool}/execute")):
+        v = mcp.get(key, default)
+        if not isinstance(v, str) or not MCP_PATH.match(v) or ".." in v or v.startswith("//"):
+            errors.append("mcp.%s %r: a path on the app's container such as %s" % (key, v, default))
+    if "{tool}" not in str(mcp.get("execute_path", "{tool}")):
+        errors.append("mcp.execute_path must contain {tool}, e.g. /mcp/tools/{tool}/execute")
+    scopes = mcp.get("scopes")
+    names = []
+    if isinstance(scopes, dict):
+        for name, groups in scopes.items():
+            names.append(name)
+            if not (isinstance(groups, list) and groups and all(isinstance(g, str) and g for g in groups)):
+                errors.append("mcp.scopes.%s: the list of groups granted this scope, e.g. [ihc-users]" % name)
+    elif isinstance(scopes, list):
+        for item in scopes:
+            names.append(item.get("name") if isinstance(item, dict) else item)
+    if not names:
+        errors.append("mcp.scopes: grant at least one scope to a group, e.g. %s.read: [ihc-users]" % slug)
+    for name in names:
+        if not isinstance(name, str) or not SCOPE.match(name) or not name.startswith(slug + "."):
+            errors.append("mcp.scopes: %r must start with %s. (e.g. %s.read)" % (name, slug, slug))
 
 
 def get(d, path, default=None):
@@ -122,6 +161,7 @@ def cmd_vars(path, expected):
                    "redis" if name in INFRA["redis"] else "s3" if name in ("minio", "garage", "seaweedfs", "s3", "object_storage") else None
             if kind and isinstance(dep, dict) and dep.get("shared") is False:
                 errors.append("dependencies.%s.shared is false: %s" % (name, ALTERNATIVE[kind]))
+    mcp_errors(get(m, "mcp") if get(m, "mcp") is not None else get(m, "agent_interface.mcp"), slug, errors)
     if get(m, "infrastructure.exception"):
         errors.append("infrastructure.exception is not supported by the executor yet: an app that needs "
                       "its own database, cache or storage is deployed by hand until the portal reviews exceptions")
@@ -130,9 +170,9 @@ def cmd_vars(path, expected):
             print("%s: %s" % (path, e), file=sys.stderr)
         sys.exit(1)
     redis = get(m, "dependencies.redis", {}) or {}
-    # The agent interface goes to the inventory as is, for the portal's catalog; the
-    # portal (and later its MCP gateway) validates it, the executor only carries it.
-    mcp = get(m, "agent_interface.mcp") or get(m, "mcp")
+    # The MCP section goes to the inventory as is: the portal's catalog shows it and the
+    # MCP gateway (docs/mcp-gateway.md) routes to it. Checked above (mcp_errors).
+    mcp = get(m, "mcp") or get(m, "agent_interface.mcp")
     out = {
         "M_SLUG": slug,
         "M_NAME": str(get(m, "app.name")),
@@ -149,6 +189,7 @@ def cmd_vars(path, expected):
         "M_ENV_EXAMPLE": str(get(m, "deploy.env_example", ".env.example")),
         "M_DESCRIPTION": " ".join(str(get(m, "app.description", "")).split())[:280],
         "M_MCP": json.dumps(mcp, sort_keys=True) if isinstance(mcp, dict) else "null",
+        "M_MCP_AUDIENCE": str(mcp.get("audience") or "%s.mcp" % slug) if isinstance(mcp, dict) else "%s.mcp" % slug,
     }
     for k, v in out.items():
         print("%s=%s" % (k, shlex.quote(v)))

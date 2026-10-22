@@ -17,12 +17,16 @@ COPY inventory/apps.example.json ./inventory/apps.example.json
 COPY db ./db
 COPY company-app.yaml ./
 
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev \
+  && mkdir -p /ihc/mcp-keys && chown node:node /ihc/mcp-keys && chmod 700 /ihc/mcp-keys
 
 # The image's own user (uid 1000); compose also drops every capability.
 USER node
 
 EXPOSE 8080
 
-# Migrations run at boot (src/migrate.js), then the server listens on PORT.
+# Migrations run at boot (src/migrate.js), then the server listens on PORT. The same image
+# runs the MCP gateway (service `mcp`, docs/mcp-gateway.md) with `node src/mcp-gateway.js`;
+# its signing key lives in the volume mounted at /ihc/mcp-keys (owned by node here, so a
+# new named volume starts with that owner).
 CMD ["node", "src/server.js"]

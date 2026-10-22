@@ -24,14 +24,29 @@ pass() { printf '[ok] %s\n' "$*"; }
 bad()  { printf '[xx] %s\n' "$*"; FAILS=$((FAILS+1)); }
 
 # The template app's manifest, as ihc-app new fills it in.
-sed -e 's/__APP_SLUG__/demo-app/; s/__APP_NAME__/Demo App/; s/__OWNER_EMAIL__/owner@example.com/; s/__APP_DOMAIN__/demo-app.cloud.localhost/' \
+sed -e 's/__APP_SLUG__/demo-app/g; s/__APP_NAME__/Demo App/; s/__OWNER_EMAIL__/owner@example.com/; s/__APP_DOMAIN__/demo-app.cloud.localhost/; s/__APP_GROUP__/ihc-users/' \
   "$ROOT/templates/app/company-app.yaml" > "$WORK/company-app.yaml"
 vars="$($PY "$LIB/appmanifest.py" vars "$WORK/company-app.yaml" demo-app)" || { bad "appmanifest.py vars refused the template manifest"; exit 1; }
 eval "$vars"
 [ "$M_DESCRIPTION" = "Internal app built on the company cloud." ] && pass "vars: M_DESCRIPTION from app.description" || bad "vars: M_DESCRIPTION is '$M_DESCRIPTION'"
-[ "$M_MCP" = null ] && pass "vars: M_MCP is null without agent_interface.mcp" || bad "vars: M_MCP is '$M_MCP'"
+# The template's mcp section (docs/app-contract.md, "MCP"), parsed by PyYAML or by the
+# installer's own reader alike (block lists only).
+[ "$(printf '%s' "$M_MCP" | $PY -c 'import json,sys;m=json.load(sys.stdin);print(m["audience"], m["scopes"]["demo-app.read"], m["execute_path"])')" = "demo-app.mcp ['ihc-users'] /mcp/tools/{tool}/execute" ] \
+  && pass "vars: the template's mcp section carried as JSON (audience, scope granted to ihc-users)" || bad "vars: M_MCP is '$M_MCP'"
+[ "$M_MCP_AUDIENCE" = demo-app.mcp ] && pass "vars: M_MCP_AUDIENCE for the app's env" || bad "vars: M_MCP_AUDIENCE is '$M_MCP_AUDIENCE'"
+TEMPLATE_MCP="$M_MCP"
+$PY - "$WORK/company-app.yaml" > "$WORK/no-mcp.yaml" <<'PY'
+import re, sys
+print(re.sub(r"(?ms)^mcp:\n(?:[ #].*\n|\n)*", "", open(sys.argv[1]).read()), end="")
+PY
+[ "$($PY "$LIB/appmanifest.py" vars "$WORK/no-mcp.yaml" demo-app | sed -n 's/^M_MCP=//p')" = null ] && pass "vars: M_MCP is null without an mcp section (the app stays out of the gateway)" || bad "vars: M_MCP not null without the section"
+for broken in "s/audience: demo-app.mcp/audience: other.mcp/" "s/demo-app.read:/other.read:/" "s#execute_path: /mcp/tools/{tool}/execute#execute_path: /mcp/run#"; do
+  sed -e "$broken" "$WORK/company-app.yaml" > "$WORK/broken.yaml"
+  $PY "$LIB/appmanifest.py" vars "$WORK/broken.yaml" demo-app >/dev/null 2>&1 && bad "vars: accepted a broken mcp section ($broken)" || pass "vars: refuses a broken mcp section ($broken)"
+done
 
 if python3 -c 'import yaml' 2>/dev/null; then
+  cp "$WORK/no-mcp.yaml" "$WORK/company-app.yaml"
   cat >> "$WORK/company-app.yaml" <<'YAML'
 
 agent_interface:
@@ -50,8 +65,8 @@ YAML
   M_MCP="$mcp"
 else
   pass "vars: agent_interface.mcp parsing skipped (no PyYAML here; the deployer image has it)"
-  M_MCP='{"provider":"mcp-gateway","audience":"demo-app.cloud","scopes":["demo-app.read"],"tools":[{"name":"demo_list","access":"read"}]}'
 fi
+M_MCP="$TEMPLATE_MCP"
 
 INST="$WORK/install"; mkdir -p "$INST"
 printf '{"installation_id":"test","apps":{}}\n' > "$INST/inventory.json"
@@ -79,7 +94,7 @@ for k, v in want.items():
 for k, v in {"description": "Internal app built on the company cloud.", "healthcheck": {"path": "/health", "status": 200},
              "auth": {"required": True}, "repository": "company/demo-app", "last_commit": "0123456789abcdef"}.items():
     if a.get(k) != v: bad.append("%s is %r" % (k, a.get(k)))
-if not (isinstance(a.get("mcp"), dict) and a["mcp"].get("tools")): bad.append("mcp is %r" % a.get("mcp"))
+if not (isinstance(a.get("mcp"), dict) and a["mcp"].get("audience") == "demo-app.mcp"): bad.append("mcp is %r" % a.get("mcp"))
 if a.get("runtime", {}).get("health_path") != "/health": bad.append("runtime.health_path missing (ihc doctor reads it)")
 # Every field a real record has is also in the full record of the fixture: the portal is tested on it.
 full = fx["apps"].get("pedidos", {})

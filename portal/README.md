@@ -17,6 +17,12 @@ Derived from the internal portal of the reference installation.
 - In the cloud it is a **core service**: `install.sh` builds it from this directory and
   starts it with the core (service `portal` of `docker/compose.yml`). It is not an app of
   `ihc-app`; `company-app.yaml` here only describes it for its own catalog.
+- The same image is also the cloud's **MCP gateway** (`node src/mcp-gateway.js`, service
+  `mcp`, port 8090; the cloud's `docs/mcp-gateway.md`): MCP streamable HTTP for Claude and
+  other agents, signed in through Authentik, with the platform's read-only tools and each
+  app's tools routed with a short actor JWT. Modules: `src/mcp-gateway.js` (HTTP and
+  JSON-RPC), `src/mcp-auth.js` (Authentik's access token), `src/mcp-providers.js` (apps'
+  providers, routing, fallback catalog), `src/mcp-platform-tools.js`, `src/jwt.js` (RS256).
 
 ## Documents
 
@@ -118,6 +124,12 @@ cp .env.example .env
 npm start
 ```
 
+The MCP gateway, for development (the signing key goes to a file of your choice):
+
+```bash
+MCP_ACTOR_KEY_PATH=./.mcp-actor-key.pem BASE_DOMAIN=cloud.localhost node src/mcp-gateway.js
+```
+
 ## API
 
 Read-only endpoints:
@@ -178,7 +190,8 @@ skip the forward auth when the header is present; the contract (fields, errors, 
 
 ### Catalog provider for the MCP gateway
 
-The portal exposes a read-only view of the catalog to the `mcp-gateway`:
+The portal exposes a read-only view of the catalog to an external MCP gateway (the cloud's
+own gateway, `src/mcp-gateway.js`, serves `ihc_list_apps` itself and does not use it):
 
 - `GET /api/internal/mcp/v1/tools`
 - `POST /api/internal/mcp/v1/tools/{tool}/execute`

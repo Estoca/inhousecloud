@@ -42,6 +42,19 @@ dependencies:
 object_storage:
   required: false
 
+# Tools for AI agents through the cloud's MCP gateway (docs/app-contract.md, "MCP"). The
+# gateway lists GET tools_path and calls POST execute_path on this app's container with an
+# actor JWT (aud = audience, scope = the scopes below granted to the caller's groups);
+# server.js checks it. In the gateway the tools are named <slug>__<tool>. Delete the
+# section to keep the app out of the gateway.
+mcp:
+  audience: __APP_SLUG__.mcp
+  tools_path: /mcp/tools
+  execute_path: /mcp/tools/{tool}/execute
+  scopes:
+    __APP_SLUG__.read:
+      - __APP_GROUP__
+
 checks:
   build_command: docker compose build
   test_command: npm test

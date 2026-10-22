@@ -11,3 +11,4 @@ tmp/
 data/
 inventory/apps.json
 backup-reports/
+.mcp-actor-key.pem
