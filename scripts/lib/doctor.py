@@ -876,6 +876,8 @@ def c_portal_api(box, reading):
             action = "%s/scripts/first-run.sh --install-dir %s (puts the status API rule on the portal route)" % (box.H, box.I)
         elif meta.get("http_code") in (401, 503):
             action = "%s up -d portal (the container gets the token from .env)" % box.dc_shown
+        elif meta.get("http_code") in (502, 504):
+            action = "%s up -d portal, then %s logs --tail 30 portal if it does not stay up" % (box.dc_shown, box.dc_shown)
         else:
             action = "see the portal check of containers and routes above; docs/portal-api.md"
         return c.warn("portal API not read (%s); this report is from local checks only" % reason, action)

@@ -118,7 +118,9 @@ REASONS = {
     "302": "the proxy sent the token request to the sign-in: the portal route has no status API rule (run scripts/first-run.sh)",
     "401": "the portal refused the token: .env and the portal container disagree (recreate the portal)",
     "403": "the portal refused the route for the token",
+    "502": "the proxy reached no portal: its container is down or restarting",
     "503": "the portal has no IHC_PORTAL_API_TOKEN (recreate the portal after first-run)",
+    "504": "the proxy reached no portal: its container is down or restarting",
 }
 
 

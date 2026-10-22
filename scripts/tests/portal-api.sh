@@ -92,6 +92,7 @@ falls("302 to the sign-in", p.fetch_status(env, "/opt/x", http=fake("302")), "no
 falls("401", p.fetch_status(env, "/opt/x", http=fake("401", '{"error":"unauthorized"}')), "refused the token")
 falls("503", p.fetch_status(env, "/opt/x", http=fake("503", '{"error":"portal_api_token_not_configured"}')), "no IHC_PORTAL_API_TOKEN")
 falls("500", p.fetch_status(env, "/opt/x", http=fake("500")), "HTTP 500")
+falls("502, the portal down", p.fetch_status(env, "/opt/x", http=fake("502")), "container is down")
 falls("a 200 that is not the status", p.fetch_status(env, "/opt/x", http=fake("200", "<html></html>")), "not the platform status")
 falls("a real curl to a closed port", p.fetch_status(dict(env, PROXY_HTTP_PORT="9"), "/opt/x", timeout=2), "did not answer")
 
@@ -116,6 +117,8 @@ c = d.c_portal_api(B(env), p.fetch_status(env, "/opt/x", http=fake("302")))
 check("doctor: 302 -> warn, re-run first-run", c.status == "warn" and "first-run.sh" in c.action)
 c = d.c_portal_api(B(env), p.fetch_status(env, "/opt/x", http=fake("401")))
 check("doctor: 401 -> warn, recreate the portal", c.status == "warn" and "up -d portal" in c.action)
+c = d.c_portal_api(B(env), p.fetch_status(env, "/opt/x", http=fake("502")))
+check("doctor: 502 -> warn, start the portal", c.status == "warn" and "up -d portal" in c.action and "logs" in c.action)
 sys.exit(1 if bad else 0)
 PY
 
