@@ -15,7 +15,7 @@
 # Authentik refuses the user after a successful sign-in. Smoke test 18 runs it with the
 # smoke user (AUTHENTIK_SMOKE_USER) and --expect denied on the ops tools.
 # --probe PATH=CODE (repeatable, with --expect allowed): after the sign-in, GET URL+PATH
-# with the same session and require HTTP CODE. Smoke test 23 runs it on the portal:
+# with the same session and require HTTP CODE. Smoke test 24 runs it on the portal:
 # the smoke user reads the catalog (200) and is refused the people list (403).
 set -eu
 IHC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

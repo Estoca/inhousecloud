@@ -23,7 +23,7 @@ ele deve ser exposto e o que ainda aceita escrita.
   `Env` so com nomes, numa rede interna so dele e do proxy Docker), e nunca recebe a
   senha de admin do proxy nem o token de admin do Authentik ou do Gitea (so o token
   somente leitura do Gitea e o da conta de servico `ihc-portal` do Authentik, que so
-  tem `view_user` e `view_group`: um `POST` com ele leva 403, smoke test 23). O container roda como `node` (uid 1000), sem capabilities.
+  tem `view_user` e `view_group`: um `POST` com ele leva 403, smoke test 24). O container roda como `node` (uid 1000), sem capabilities.
 
 ## Autenticacao das rotas
 

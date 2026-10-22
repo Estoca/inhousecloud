@@ -10,7 +10,7 @@
 #      outpost, group policy bindings; the read-only service account ihc-portal, whose
 #      API token goes to AUTHENTIK_PORTAL_TOKEN in .env (the portal's people page);
 #      the user AUTHENTIK_SMOKE_USER (ihc-users only, password in .env), so smoke
-#      tests 18 and 23 can prove what a non-admin is denied.
+#      tests 18 and 24 can prove what a non-admin is denied.
 #   2. Proxy: hosts for auth, git and portal (portal with forward auth), plus the
 #      optional profiles' hosts. The ops tools (Portainer, Glances, the web terminal,
 #      the file browser) each get a proxy provider and application bound to the admin
@@ -134,7 +134,7 @@ TOOL
   done
 fi
 
-# The smoke user: ihc-users only, in every install (tests 18 and 23). Its password exists
+# The smoke user: ihc-users only, in every install (tests 18 and 24). Its password exists
 # only in .env (0600).
 # The portal knows a person by the email the outpost sends: the smoke user needs one. The
 # .invalid domain (RFC 2606) never receives mail.
