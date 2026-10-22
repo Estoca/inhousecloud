@@ -482,6 +482,17 @@ The portal's People page and `ihc-users` in the portal (the read-only service ac
 
 **Not exercised.** A browser on the People page (the checks above go through the API with a real session for the smoke user and the outpost's headers for the admin); `ops`, `storage`, `agent`; `private` and `public` ingress; macOS with Docker Desktop. The VM was deleted.
 
+**After the rebase onto the status API (`main` `7de2098`, 2026-10-22).** The same checks on one new clean VM (same setup; Ubuntu 26.04.1, Docker 29.9.2 rootless, Compose 5.6.1), the Mac idle this time (load under 10 when it started), the branch at `6c24987`. The People test is number 24 since the rebase; 23 is the status API's.
+
+| Step | Result |
+|---|---|
+| `main` (`7de2098`): `install.sh --non-interactive` | 311 s, exit 0, smoke 19 passed, 0 failed, 4 skipped |
+| The branch, `install.sh --apply --from foundation` | 113 s, exit 0, **20 passed, 0 failed, 4 skipped**. First-run added the binding `portal <- ihc-users`, `ihc-smoke-user`, `ihc-portal`, `ihc-portal-reader` and `AUTHENTIK_PORTAL_TOKEN`; everything else "exists" or "reconciled"; "portal API token present". `IHC_PORTAL_API_TOKEN` kept the same fingerprint before and after. Test 23 (the status API with that token: 200 with 9 services, no token 302, wrong token 401, the token elsewhere 302 through the proxy and 403 straight to the portal, the installer's reader on `portal-api`) and test 24 (smoke user: catalog 200, people 403, platform status 403; admin people and groups; the Authentik token reads and is refused creating a group) both passed: the platform status answers the token and admins, and refuses `ihc-users` |
+| `add_group` added to `ihc-portal-reader` by hand, then `scripts/first-run.sh` | 8 s; removed; both tokens unchanged ("portal token valid", "portal API token present") |
+| `install.sh remove --dir --confirm ihc` (0 containers, 0 volumes left), then `install.sh --non-interactive` on the same VM (images kept) | 219 s, exit 0, **20 passed, 0 failed, 4 skipped**; both tokens generated; tests 16, 22, 23, 24 ok; `ihc doctor` 15 checks ok in 3 s |
+
+The VM was deleted.
+
 ## Onboarding run
 
 What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.
