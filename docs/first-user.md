@@ -17,7 +17,7 @@ They do not include each other: an admin who also uses the apps is in both, like
 
 In Authentik's admin interface, <http://auth.cloud.localhost/if/admin/>, signed in as `akadmin`:
 
-1. **Directory > Users > Create.** Username, name, email; type `Internal`.
+1. **Directory > Users > Create.** Username, name, email; type `Internal`. The email is required for the portal: it knows a person by the email Authentik sends, and without one sends them to its sign-in page.
 2. Open the new user: **Set password**. Pick a temporary one and send it to the person over a channel other than the one where you send the URL.
 3. **Directory > Groups > `ihc-users` > Users > Add existing user**: the person. Also `ihc-admins`, only if they operate the box.
 

@@ -136,12 +136,20 @@ fi
 
 # The smoke user: ihc-users only, in every install (tests 18 and 23). Its password exists
 # only in .env (0600).
+# The portal knows a person by the email the outpost sends: the smoke user needs one. The
+# .invalid domain (RFC 2606) never receives mail.
+SMOKE_EMAIL="$AUTHENTIK_SMOKE_USER@smoke.invalid"
+[ -n "${AUTHENTIK_SMOKE_USER_PASSWORD:-}" ] || die "AUTHENTIK_SMOKE_USER_PASSWORD is empty in .env: run install.sh --apply --from secrets"
 SMOKE_PK="$(ak_list_find "core/users/?username=$(urlenc "$AUTHENTIK_SMOKE_USER")" username "$AUTHENTIK_SMOKE_USER" pk)"
 if [ -z "$SMOKE_PK" ]; then
-  api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Smoke test user (not an admin)" is_active:=true path=ihc/smoke)"
+  api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Smoke test user (not an admin)" email="$SMOKE_EMAIL" is_active:=true path=ihc/smoke)"
   api_ok || die "create user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
   SMOKE_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "user $AUTHENTIK_SMOKE_USER created"
-else ok "user $AUTHENTIK_SMOKE_USER exists"; fi
+else
+  api PATCH "$AK/core/users/$SMOKE_PK/" "$(jsonq build email="$SMOKE_EMAIL")"
+  api_ok || die "reconcile user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
+  ok "user $AUTHENTIK_SMOKE_USER exists"
+fi
 api POST "$AK/core/users/$SMOKE_PK/set_password/" "$(jsonq build password="$AUTHENTIK_SMOKE_USER_PASSWORD")"
 api_ok || die "set the password of $AUTHENTIK_SMOKE_USER: HTTP $API_CODE"
 api POST "$AK/core/groups/$APP_GROUP_PK/add_user/" "$(jsonq build pk:="$SMOKE_PK")"
