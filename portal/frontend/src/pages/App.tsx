@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Activity, Boxes, HardDrive, Server, ServerCog, Users } from 'lucide-react';
+import { Activity, Boxes, Contact, HardDrive, Server, ServerCog, Users } from 'lucide-react';
 import {
   AppStatus,
   AppsStatusResponse,
@@ -21,12 +21,13 @@ import { AppDetailPage } from './AppDetailPage';
 import { CatalogPage } from './CatalogPage';
 import { DiskPage } from './DiskPage';
 import { DockersPage } from './DockersPage';
+import { PeoplePage } from './PeoplePage';
 import { PlatformPage } from './PlatformPage';
 
-type View = 'dashboard' | 'app-detail' | 'dockers' | 'platform' | 'admins' | 'disk';
+type View = 'dashboard' | 'app-detail' | 'dockers' | 'platform' | 'people' | 'admins' | 'disk';
 type Access = 'all' | 'admin' | 'super_admin';
 
-const viewValues: View[] = ['dashboard', 'app-detail', 'dockers', 'platform', 'admins', 'disk'];
+const viewValues: View[] = ['dashboard', 'app-detail', 'dockers', 'platform', 'people', 'admins', 'disk'];
 
 // Quem ve cada tela; a API aplica a mesma regra (test/auth-matrix.test.js).
 const viewAccess: Record<View, Access> = {
@@ -34,6 +35,7 @@ const viewAccess: Record<View, Access> = {
   'app-detail': 'all',
   dockers: 'admin',
   platform: 'admin',
+  people: 'admin',
   disk: 'super_admin',
   admins: 'super_admin',
 };
@@ -53,7 +55,10 @@ const navGroups: { label: string; items: { label: string; icon: typeof Activity;
   },
   {
     label: 'ADMINISTRAÇÃO',
-    items: [{ label: 'Admins', icon: Users, view: 'admins' }],
+    items: [
+      { label: 'Pessoas', icon: Contact, view: 'people' },
+      { label: 'Admins', icon: Users, view: 'admins' },
+    ],
   },
 ];
 
@@ -193,6 +198,7 @@ export function App() {
     if (canSee(view, user)) {
       if (view === 'dockers') return <DockersPage emailDomain={emailDomain} />;
       if (view === 'platform') return <PlatformPage canManage={canManage} nowMs={nowMs} />;
+      if (view === 'people') return <PeoplePage nowMs={nowMs} authentikUrl={platformConfig?.authentik_url} />;
       if (view === 'disk') return <DiskPage />;
       if (view === 'admins') return <AdminsPage user={user} emailDomain={emailDomain} />;
     }

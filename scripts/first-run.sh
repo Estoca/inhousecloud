@@ -6,13 +6,15 @@
 #
 # Repeatable: every action probes before it creates and reconciles what exists.
 #   1. Authentik: groups, OIDC provider + application for Gitea, proxy provider +
-#      application for the portal, embedded outpost, group policy bindings.
+#      application for the portal (bound to ihc-admins and ihc-users), embedded
+#      outpost, group policy bindings; the read-only service account ihc-portal, whose
+#      API token goes to AUTHENTIK_PORTAL_TOKEN in .env (the portal's people page);
+#      the user AUTHENTIK_SMOKE_USER (ihc-users only, password in .env), so smoke
+#      tests 18 and 23 can prove what a non-admin is denied.
 #   2. Proxy: hosts for auth, git and portal (portal with forward auth), plus the
 #      optional profiles' hosts. The ops tools (Portainer, Glances, the web terminal,
 #      the file browser) each get a proxy provider and application bound to the admin
-#      group only, and a proxy host with forward auth and no public path. With the ops
-#      profile, the user AUTHENTIK_SMOKE_USER (ihc-users only, password in .env)
-#      exists so smoke test 18 can prove a non-admin is denied.
+#      group only, and a proxy host with forward auth and no public path.
 #   3. Gitea: admin, API tokens, organization, ihc-smoke repository, OIDC source.
 #   4. The portal's read-only API token IHC_PORTAL_API_TOKEN (docs/portal-api.md), once.
 # Talks to the services on their loopback control ports; tokens travel in curl config
@@ -112,6 +114,9 @@ ok "embedded outpost serves the portal provider; authentik_host $AUTHENTIK_BASE_
 record "authentik:outpost:$OUTPOST_PK"
 
 ensure_binding "$PORTAL_APP_PK" "$PORTAL_GROUP_PK" "portal <- $AUTHENTIK_PORTAL_GROUP"
+# ihc-users sign in to the portal too: catalog, health and deploys; the portal itself keeps
+# the platform status and the people list for admins (docs/security.md).
+ensure_binding "$PORTAL_APP_PK" "$APP_GROUP_PK" "portal <- $AUTHENTIK_APP_GROUP"
 ensure_binding "$GITEA_APP_PK" "$APP_GROUP_PK" "gitea <- $AUTHENTIK_APP_GROUP"
 
 # Ops tools: admins only (docs/security.md). Created with the ops profile; the terminal's
@@ -127,21 +132,26 @@ $t
 TOOL
     ensure_admin_tool "$slug" "$name" "$sub.$BASE_DOMAIN" "$PORTAL_GROUP_PK"
   done
-  # The smoke user: ihc-users only. Its password exists only in .env (0600).
-  SMOKE_PK="$(ak_list_find "core/users/?username=$(urlenc "$AUTHENTIK_SMOKE_USER")" username "$AUTHENTIK_SMOKE_USER" pk)"
-  if [ -z "$SMOKE_PK" ]; then
-    api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Smoke test user (not an admin)" is_active:=true path=ihc/smoke)"
-    api_ok || die "create user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
-    SMOKE_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "user $AUTHENTIK_SMOKE_USER created"
-  else ok "user $AUTHENTIK_SMOKE_USER exists"; fi
-  api POST "$AK/core/users/$SMOKE_PK/set_password/" "$(jsonq build password="$AUTHENTIK_SMOKE_USER_PASSWORD")"
-  api_ok || die "set the password of $AUTHENTIK_SMOKE_USER: HTTP $API_CODE"
-  api POST "$AK/core/groups/$APP_GROUP_PK/add_user/" "$(jsonq build pk:="$SMOKE_PK")"
-  api_ok || die "add $AUTHENTIK_SMOKE_USER to $AUTHENTIK_APP_GROUP: HTTP $API_CODE"
-  api POST "$AK/core/groups/$PORTAL_GROUP_PK/remove_user/" "$(jsonq build pk:="$SMOKE_PK")"
-  ok "$AUTHENTIK_SMOKE_USER in $AUTHENTIK_APP_GROUP only (password from .env)"
-  record "authentik:user:$AUTHENTIK_SMOKE_USER"
 fi
+
+# The smoke user: ihc-users only, in every install (tests 18 and 23). Its password exists
+# only in .env (0600).
+SMOKE_PK="$(ak_list_find "core/users/?username=$(urlenc "$AUTHENTIK_SMOKE_USER")" username "$AUTHENTIK_SMOKE_USER" pk)"
+if [ -z "$SMOKE_PK" ]; then
+  api POST "$AK/core/users/" "$(jsonq build username="$AUTHENTIK_SMOKE_USER" name="Smoke test user (not an admin)" is_active:=true path=ihc/smoke)"
+  api_ok || die "create user $AUTHENTIK_SMOKE_USER: HTTP $API_CODE $API_BODY"
+  SMOKE_PK="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "user $AUTHENTIK_SMOKE_USER created"
+else ok "user $AUTHENTIK_SMOKE_USER exists"; fi
+api POST "$AK/core/users/$SMOKE_PK/set_password/" "$(jsonq build password="$AUTHENTIK_SMOKE_USER_PASSWORD")"
+api_ok || die "set the password of $AUTHENTIK_SMOKE_USER: HTTP $API_CODE"
+api POST "$AK/core/groups/$APP_GROUP_PK/add_user/" "$(jsonq build pk:="$SMOKE_PK")"
+api_ok || die "add $AUTHENTIK_SMOKE_USER to $AUTHENTIK_APP_GROUP: HTTP $API_CODE"
+api POST "$AK/core/groups/$PORTAL_GROUP_PK/remove_user/" "$(jsonq build pk:="$SMOKE_PK")"
+ok "$AUTHENTIK_SMOKE_USER in $AUTHENTIK_APP_GROUP only (password from .env)"
+record "authentik:user:$AUTHENTIK_SMOKE_USER"
+
+# The portal's read-only service account (scripts/lib/sso.sh, docs/security.md).
+ensure_portal_reader
 
 # The bootstrap admin joins both groups so the first login works out of the box.
 ADMIN_PK="$(ak_list_find "core/users/?username=akadmin" username akadmin pk)"

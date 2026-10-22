@@ -20,7 +20,27 @@ The `ops` profile (on by default in the interactive installer) adds four tools f
 - **File browser (`files.<BASE_DOMAIN>`, FileBrowser) sees every app's data**, read and write, and the backup reports, read only. What it does **not** mount, on purpose: the install directory itself, `.env` (every platform secret), `apps/` (each app's `.env` with its database password), `local/` (the terminal key), `runner/`, `state.json`, `config.yaml`, the restic repository, home directories and system directories. App data lives in `<install-dir>/app-data/<slug>`, apart from `apps/<slug>/`, precisely so it can be shown without the secrets next to it. The installer refuses a configured path that breaks this rule, and `scripts/tests/ops-mounts.sh` fails if the compose file ever mounts the install directory or an env file into it.
 - **Portainer** has the Docker socket (root on the box) and **Glances** sees every process: both were already admin tools; they now require `ihc-admins` too.
 - **No way around the SSO.** The four run on the `ihc-ops` network, which only the proxy joins; apps on the `ihc` network cannot reach them directly. They publish no host port and their routes leave no path public. FileBrowser trusts the `X-authentik-username` header only because nothing but the proxy can reach it.
-- **The smoke user.** With `ops`, first-run keeps `ihc-smoke-user` in `ihc-users` (no admin rights; password only in `.env`, 0600) so smoke test 18 can prove the denial with a real sign-in. It can open Gitea and the apps like any user; deactivate it in Authentik if you do not want it, and test 18 will then fail at the sign-in rather than at the denial.
+- **The smoke user.** First-run keeps `ihc-smoke-user` in `ihc-users` (no admin rights; password only in `.env`, 0600) so smoke tests 18 and 23 can prove the denials with a real sign-in. It can open Gitea, the apps and the portal's catalog like any user; deactivate it in Authentik if you do not want it, and tests 18 and 23 will then fail at the sign-in rather than at the denial.
+
+## The portal: who sees what, and its Authentik account
+
+The portal's route lets in `ihc-admins` and `ihc-users` (two policy bindings on the `portal` application in Authentik); anyone else is refused by Authentik after signing in. Inside, the role comes from the groups the outpost sends (`X-authentik-groups`, trusted only from the proxy):
+
+| | `ihc-users` (viewer) | `ihc-admins` (admin) |
+|---|---|---|
+| Catalog: apps, health, SSO, deploys | yes | yes |
+| Platform (`/api/platform/status`), storage usage | 403 | yes |
+| Dockers page | hidden (the runtime JSON under `/api/runtime/*` and `/api/apps-runtime` still answers: container names, images, state) | yes |
+| People and groups (`/api/people`, `/api/groups`) | 403 | yes |
+| Disk snapshots, portal admins | 403 | super admin only |
+
+**The service account `ihc-portal`.** The People page reads Authentik with its own account, not with an admin's: first-run creates the user `ihc-portal` (type service account, no password, cannot sign in interactively, in no group), a role `ihc-portal-reader` with exactly two global permissions, `authentik_core.view_user` and `authentik_core.view_group`, and one API token (`ihc-portal-api`, intent API, no expiry), whose key goes to `AUTHENTIK_PORTAL_TOKEN` in `.env` (0600) and from there only into the portal's container.
+
+- **It can:** list users (username, name, email, active, last login, groups) and groups (name, members), which is what the page shows.
+- **It cannot:** create, change or delete anything (users, groups, passwords, tokens, applications, policies, flows), view or create other tokens, impersonate, or read any other model (providers, applications, events). A `POST` that would create a group answers 403 (smoke test 23 checks it on every install). It never sees passwords: Authentik never returns them.
+- **Re-running first-run** (or `install.sh --apply --from foundation`) puts the role back to those two permissions, removing any other a human may have added, and keeps the token while it still works; a token that stopped working (deleted or rotated in Authentik) is replaced and `.env` updated.
+- **To revoke:** Authentik > Directory > Tokens > `ihc-portal-api` > Delete (the People page then answers 503 until first-run runs again), or deactivate the user `ihc-portal`.
+- **What it reveals if leaked:** the directory (who works here, their emails and groups). Not a way in: no password, no write.
 
 ## Private ingress: the tailnet and the CA
 

@@ -24,7 +24,9 @@ Talks to the three control planes on their loopback ports (`127.0.0.1:9000` Auth
 | Proxy provider `portal` | by name | mode forward auth (single application), external host `PORTAL_BASE_URL`, `/health` skipped |
 | Application `portal` | by slug | launch URL `PORTAL_BASE_URL` |
 | Embedded outpost | managed id | the portal provider is added; `authentik_host` set to `AUTHENTIK_BASE_URL` so browsers are sent to the public name |
-| Policy bindings | by target and group | `portal` requires `ihc-admins`, `gitea` requires `ihc-users` |
+| Policy bindings | by target and group | `portal` admits `ihc-admins` or `ihc-users` (the portal itself keeps its admin pages for `ihc-admins`), `gitea` requires `ihc-users` |
+| User `ihc-smoke-user` (`AUTHENTIK_SMOKE_USER`) | by username | `ihc-users` only, password from `.env`; smoke tests 18 and 23 sign in with it |
+| Service account `ihc-portal`, role `ihc-portal-reader`, token `ihc-portal-api` | by username, role name, token identifier | type service account in no group; the role holds `authentik_core.view_user` and `authentik_core.view_group` and nothing else (extra permissions are removed); the token (intent API, no expiry) is kept while it answers as `ihc-portal`, else replaced; its key is written to `.env` as `AUTHENTIK_PORTAL_TOKEN` ([`security.md`](security.md#the-portal-who-sees-what-and-its-authentik-account)) |
 | `akadmin` membership | by group users | added to both groups |
 
 The outpost id is written to `.env` as `AUTHENTIK_OUTPOST_ID` (it is not a secret).

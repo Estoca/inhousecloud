@@ -415,3 +415,45 @@ export async function runDiskUsageSnapshot(): Promise<{ recorded: number; summar
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
+
+// Pessoas e grupos do Authentik (admin), lidos pela conta de servico ihc-portal.
+export type DirectoryUser = {
+  pk: number;
+  username: string;
+  name: string | null;
+  email: string | null;
+  is_active: boolean;
+  is_superuser: boolean;
+  type: string;
+  last_login: string | null;
+  groups: string[];
+};
+
+export type DirectoryGroup = {
+  pk: string;
+  name: string;
+  is_superuser: boolean;
+  parent: string | null;
+  member_count: number;
+  members: { pk: number; username: string; name: string | null; email: string | null; is_active: boolean }[];
+};
+
+export type PeopleResponse = CacheMeta & { count: number; users: DirectoryUser[] };
+export type GroupsResponse = CacheMeta & { count: number; groups: DirectoryGroup[] };
+
+async function directoryJson<T>(path: string, refresh: boolean): Promise<T> {
+  const response = await fetch(`${path}${refresh ? '?refresh=1' : ''}`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export function getPeople({ refresh = false } = {}): Promise<PeopleResponse> {
+  return directoryJson<PeopleResponse>('/api/people', refresh);
+}
+
+export function getGroups({ refresh = false } = {}): Promise<GroupsResponse> {
+  return directoryJson<GroupsResponse>('/api/groups', refresh);
+}

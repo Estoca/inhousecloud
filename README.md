@@ -353,7 +353,7 @@ Done:
 
 Next:
 
-- The portal, next steps: the people who can sign in and their groups, read from Authentik with a read-only service account (and opening the portal to `ihc-users`); a read-only service token for agents on `GET /api/platform/status`; the MCP gateway as a second entrypoint of the portal's image.
+- The portal, next steps: a read-only service token for agents on `GET /api/platform/status`; the MCP gateway as a second entrypoint of the portal's image.
 - `public` (tunnel) ingress, tested end to end.
 - The off-site backup copy and the monthly restore rehearsal (`docs/backup.md`).
 - **Every app is born agent-ready.** An `mcp:` section in `company-app.yaml` (provider name, tools, scopes, owner), a minimal MCP endpoint in the app template (one discovery tool and one read tool), and the deploy recording the provider in the inventory. `ihc-app new` and the agent path produce it by default; a company can make it mandatory.

@@ -106,6 +106,96 @@ ensure_binding() { # APP_PK GROUP_PK LABEL
   ok "binding $3 created"
 }
 
+# ensure_portal_reader: the portal's read-only service account (docs/security.md, "The
+# portal"). User ihc-portal (type service_account, in no group), role ihc-portal-reader
+# holding exactly PORTAL_READER_PERMS (any other permission on the role is removed), the
+# role given to the user, and one API token, ihc-portal-api, whose key is written to
+# AUTHENTIK_PORTAL_TOKEN in .env. A token that still works is kept; one that does not
+# (deleted, rotated, never written) is replaced. The key travels from Authentik's answer
+# to env_set on stdin, never on a command line, and is never printed.
+PORTAL_READER_USER=ihc-portal
+PORTAL_READER_ROLE=ihc-portal-reader
+PORTAL_READER_TOKEN=ihc-portal-api
+PORTAL_READER_PERMS="authentik_core.view_user authentik_core.view_group"
+ensure_portal_reader() {
+  local pk role have want p key me
+  # The user.
+  pk="$(ak_list_find "core/users/?username=$(urlenc "$PORTAL_READER_USER")" username "$PORTAL_READER_USER" pk)"
+  if [ -z "$pk" ]; then
+    api POST "$AK/core/users/" "$(jsonq build username="$PORTAL_READER_USER" name="InHouseCloud portal (read-only)" type=service_account is_active:=true path=ihc/service)"
+    api_ok || die "create user $PORTAL_READER_USER: HTTP $API_CODE $API_BODY"
+    pk="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "service account $PORTAL_READER_USER created"
+  else
+    api PATCH "$AK/core/users/$pk/" "$(jsonq build type=service_account is_active:=true groups:='[]')"
+    api_ok || die "reconcile user $PORTAL_READER_USER: HTTP $API_CODE $API_BODY"
+    ok "service account $PORTAL_READER_USER exists (in no group)"
+  fi
+  record "authentik:user:$PORTAL_READER_USER"
+
+  # The role and its permissions: exactly PORTAL_READER_PERMS, global.
+  role="$(ak_list_find "rbac/roles/?name=$(urlenc "$PORTAL_READER_ROLE")" name "$PORTAL_READER_ROLE" pk)"
+  if [ -z "$role" ]; then
+    api POST "$AK/rbac/roles/" "$(jsonq build name="$PORTAL_READER_ROLE")"
+    api_ok || die "create role $PORTAL_READER_ROLE: HTTP $API_CODE $API_BODY"
+    role="$(printf '%s' "$API_BODY" | jsonq get pk)"; ok "role $PORTAL_READER_ROLE created"
+  fi
+  record "authentik:role:$PORTAL_READER_ROLE"
+  # Object permissions (on one user, one group...) never belong to it: each is removed.
+  api GET "$AK/rbac/permissions/roles/?uuid=$role&page_size=500"
+  api_ok || die "list the object permissions of $PORTAL_READER_ROLE: HTTP $API_CODE"
+  printf '%s' "$API_BODY" | $PY -c 'import json,sys
+for p in json.load(sys.stdin).get("results",[]):
+    print(json.dumps({"permissions":["%s.%s" % (p["app_label"], p["codename"])],"model":"%s.%s" % (p["app_label"], p["model"].lower()),"object_pk":str(p["object_pk"])}))' > "$API_TMPDIR/reader-objperms"
+  while IFS= read -r p; do
+    api PATCH "$AK/rbac/permissions/assigned_by_roles/$role/unassign/" "$p"
+    api_ok || die "remove an object permission from $PORTAL_READER_ROLE: HTTP $API_CODE $API_BODY"
+    ok "object permission removed from $PORTAL_READER_ROLE"
+  done < "$API_TMPDIR/reader-objperms"
+  # Global permissions: exactly PORTAL_READER_PERMS.
+  api GET "$AK/rbac/permissions/?role=$role&page_size=500"
+  api_ok || die "list the permissions of $PORTAL_READER_ROLE: HTTP $API_CODE"
+  have="$(printf '%s' "$API_BODY" | $PY -c 'import json,sys
+for p in json.load(sys.stdin).get("results",[]): print("%s.%s" % (p["app_label"], p["codename"]))')"
+  want=""; for p in $have; do case " $PORTAL_READER_PERMS " in *" $p "*) ;; *) want="$want \"$p\"" ;; esac; done
+  if [ -n "$want" ]; then
+    api PATCH "$AK/rbac/permissions/assigned_by_roles/$role/unassign/" "{\"permissions\":[$(echo $want | tr ' ' ',')]}"
+    api_ok || die "remove extra permissions from $PORTAL_READER_ROLE: HTTP $API_CODE $API_BODY"
+    ok "extra permissions removed from $PORTAL_READER_ROLE:$want"
+  fi
+  want=""; for p in $PORTAL_READER_PERMS; do printf '%s\n' "$have" | grep -qx "$p" || want="$want \"$p\""; done
+  if [ -n "$want" ]; then
+    api POST "$AK/rbac/permissions/assigned_by_roles/$role/assign/" "{\"permissions\":[$(echo $want | tr ' ' ',')]}"
+    api_ok || die "give $PORTAL_READER_ROLE its permissions: HTTP $API_CODE $API_BODY"
+  fi
+  ok "role $PORTAL_READER_ROLE: $PORTAL_READER_PERMS, nothing else"
+
+  # The role to the user, directly (no group: it would show up as a group of people).
+  api POST "$AK/rbac/roles/$role/add_user/" "$(jsonq build pk:="$pk")"
+  api_ok || die "give $PORTAL_READER_ROLE to $PORTAL_READER_USER: HTTP $API_CODE $API_BODY"
+
+  # The token: kept while it answers as the service account, else replaced.
+  key="$(env_get AUTHENTIK_PORTAL_TOKEN)"
+  if [ -n "$key" ]; then
+    api_init akportal "Authorization: Bearer $key"
+    api GET "$AK/core/users/me/"; me="$(printf '%s' "$API_BODY" | jsonq get user.username)"
+    api_init ak "Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}"
+    if [ "$me" = "$PORTAL_READER_USER" ]; then ok "portal token valid (AUTHENTIK_PORTAL_TOKEN)"; record "authentik:token:$PORTAL_READER_TOKEN"; return 0; fi
+  fi
+  api GET "$AK/core/tokens/$PORTAL_READER_TOKEN/"
+  if [ "$API_CODE" = 200 ]; then
+    api DELETE "$AK/core/tokens/$PORTAL_READER_TOKEN/"
+    api_ok || die "replace token $PORTAL_READER_TOKEN: HTTP $API_CODE"
+  fi
+  api POST "$AK/core/tokens/" "$(jsonq build identifier="$PORTAL_READER_TOKEN" intent=api user:="$pk" expiring:=false description="InHouseCloud portal: people and groups, read only")"
+  api_ok || die "create token $PORTAL_READER_TOKEN: HTTP $API_CODE $API_BODY"
+  api GET "$AK/core/tokens/$PORTAL_READER_TOKEN/view_key/"
+  api_ok || die "read token $PORTAL_READER_TOKEN: HTTP $API_CODE"
+  key="$(printf '%s' "$API_BODY" | jsonq get key)"
+  [ -n "$key" ] || die "token $PORTAL_READER_TOKEN has no key"
+  env_set AUTHENTIK_PORTAL_TOKEN "$key"; ok "portal token generated into .env (AUTHENTIK_PORTAL_TOKEN)"
+  record "authentik:token:$PORTAL_READER_TOKEN"
+}
+
 # -------------------------------------------------------------------- Proxy
 # npm_login: signs in to the proxy admin API and loads the current hosts into PROXY_HOSTS.
 npm_login() {

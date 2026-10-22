@@ -2,6 +2,9 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { isPortalAdmin } from './admin-store.js';
 import { readPlatformConfig } from './config.js';
+import { isAdminRole, parseGroups, roleFromGroups, strongerRole } from './roles.js';
+
+export { parseGroups };
 
 function parseEmailList(value) {
   return String(value ?? '')
@@ -14,14 +17,6 @@ function parseDomainList(value) {
   return String(value ?? '')
     .split(',')
     .map((item) => item.trim().toLowerCase().replace(/^@/, ''))
-    .filter(Boolean);
-}
-
-// X-authentik-groups: o outpost separa os grupos por `|`; aceita `,` tambem.
-export function parseGroups(value) {
-  return String(value ?? '')
-    .split(/[|,]/)
-    .map((item) => item.trim())
     .filter(Boolean);
 }
 
@@ -141,24 +136,16 @@ export function createAuth({
     return admins.size > 0 || Boolean(adminGroup) || (allowDomainUsers && userDomains.length > 0);
   }
 
-  function groupRole(groups) {
-    if (adminGroup && groups.includes(adminGroup)) return 'admin';
-    if (userGroup && groups.includes(userGroup)) return 'viewer';
-    return null;
-  }
-
-  const RANK = { viewer: 1, admin: 2, super_admin: 3 };
-
   async function currentUser(req) {
     if (!(await proxyTrust.trusted(req))) return null;
     const email = String(req.get('x-authentik-email') ?? '').trim().toLowerCase();
     if (!email) return null;
     const groups = parseGroups(req.get('x-authentik-groups'));
-    const byGroup = groupRole(groups);
+    const byGroup = roleFromGroups(groups, { adminGroup, userGroup });
     const access = await resolveAccess(email);
     if (!access.allowed && !byGroup) return null;
     const byAccess = access.allowed ? access.admin?.role || 'viewer' : null;
-    const role = (RANK[byAccess] ?? 0) >= (RANK[byGroup] ?? 0) ? byAccess : byGroup;
+    const role = strongerRole(byAccess, byGroup);
 
     return {
       email,
@@ -196,7 +183,7 @@ export function createAuth({
       res.status(401).json({ error: 'unauthenticated' });
       return;
     }
-    if (user.role !== 'admin' && user.role !== 'super_admin') {
+    if (!isAdminRole(user.role)) {
       res.status(403).json({ error: 'forbidden' });
       return;
     }
