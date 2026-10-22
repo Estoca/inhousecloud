@@ -462,6 +462,26 @@ The real portal (`portal/`) wired into the installer, on a clean box, then the u
 
 **Not exercised.** A browser session on the portal (the checks above send, from the proxy, the headers the outpost would set; the forward auth itself is test 9); the `ops` and `agent` profiles (the agent's Docker API moved to `docker-ro`: covered by `scripts/tests/agent-proxy.sh`, not by a running agent); `private` and `public` ingress; macOS with Docker Desktop. Both VMs were deleted.
 
+## People run
+
+The portal's People page and `ihc-users` in the portal (the read-only service account `ihc-portal`, smoke test 23), on one clean box: first the update of an install made from `main` (`9ea66a9`), then, on the same VM, `install.sh remove --dir` and a fresh install of the branch. On 2026-10-22.
+
+**Setup.** One new Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04, Docker rootless), 2 CPU, 6 GiB, 30 GiB, no mounts and every port forward off. `bootstrap/config.example.yaml` (core, backup on, `local` ingress, TLS off). The Mac was heavily loaded by other work during the run (load average from 18 up to 98), which explains the first two lines below.
+
+| Step | Result |
+|---|---|
+| `main`: `install.sh --non-interactive` | stopped in stage `authentik` after 426 s: Authentik's first-boot migrations outlasted the 300 s wait under that load. Resumed with `--from authentik`: 434 s, test 16 failed once (`create binding smoke-app <- ihc-users: HTTP 000`, an Authentik call over 60 s), the rest passed. `--from smoke_tests`: 17 passed, 1 failed (`docker-ro` briefly unhealthy, healthy a minute later), 4 skipped; tests 16 and 22 passed |
+| The branch, `install.sh --apply --from foundation` | 316 s. Portal rebuilt and recreated; first-run added the binding `portal <- ihc-users`, created `ihc-smoke-user` (the install had no `ops`, so it did not exist), the service account `ihc-portal`, the role `ihc-portal-reader` (`view_user`, `view_group`) and the token, written to `.env`; groups, providers, applications, outpost, routes and Gitea only reported "exists" or "reconciled". Smoke tests 18 passed, **1 failed: test 23**, the smoke user's probes 401 (below) |
+| The fix, then `--from first_run` | 144 s, exit 0, **19 passed, 0 failed, 4 skipped**. Test 23: "ihc-smoke-user signs in: catalog 200, people 403, platform status 403; admin /api/people 3 people; admin /api/groups 5 groups; portal token: users 200, groups 200, create group 403". The second first-run kept the token ("portal token valid") and the portal was not recreated |
+| A permission added by hand (`authentik_core.add_group` on `ihc-portal-reader`), then `scripts/first-run.sh` alone | 19 s; "extra permissions removed"; the role back to `view_group`, `view_user` |
+| `install.sh remove --dir --confirm ihc`, then `install.sh --non-interactive` on the same VM (images kept) | 311 s, exit 0, **19 passed, 0 failed, 4 skipped** (ops, storage, agent off; test 21 on). Test 16 push to green in 26 s, redeploy 15 s; test 22 ok; test 23 as above |
+| `/api/people` and `/api/groups` as admin | `akadmin` (`authentik Admins`, `ihc-admins`, `ihc-users`), `ihc-portal` (service account, no group), `ihc-smoke-user` (`ihc-users`); the Authentik outpost's internal account left out. Groups with their member counts |
+| `ihc doctor` | 14 checks ok in 7 s |
+
+**Found and fixed during the run.** The smoke user had no email, and the portal knows a person by the email the outpost sends: signed in, its API calls were 401 (anonymous) instead of 200 and 403. First-run now gives it `ihc-smoke-user@smoke.invalid` and reconciles it on every run; [`first-user.md`](first-user.md) says the email is required for the portal. The API listing of a role's global permissions is `GET /rbac/permissions/?role=<uuid>` in Authentik 2026.8 (`/rbac/permissions/roles/` lists object permissions); the helper reads both and removes anything else.
+
+**Not exercised.** A browser on the People page (the checks above go through the API with a real session for the smoke user and the outpost's headers for the admin); `ops`, `storage`, `agent`; `private` and `public` ingress; macOS with Docker Desktop. The VM was deleted.
+
 ## Onboarding run
 
 What happens after a successful install: the day-zero handoff, a real dry-run `--plan`, the smoke app removed after test 16, a short `status`, `stop`, `start` and `remove`. From a review of operability by a second agent on a Mac mini after the [macOS run](#macos-run-docker-desktop), in eight items: handoff, `--plan`, smoke app, `status`, the two try-it paths, cleanup, the portal as a placeholder, the first person.
