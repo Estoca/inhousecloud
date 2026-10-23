@@ -26,9 +26,9 @@ Derived from the internal portal of the reference installation.
 
 ## Documents
 
-- `docs/COMPANY_APP_YAML.md`: the app manifest contract.
 - `docs/DATABASE.md`: the portal's own database.
-- `docs/SEGURANCA.md`: how the portal is exposed (only behind the proxy with Authentik), who reaches each route and what still writes.
+- `docs/SECURITY.md`: how the portal is exposed (only behind the proxy with Authentik), who reaches each route and what still writes. It was `docs/SEGURANCA.md`, in Portuguese.
+- The app manifest contract is the cloud's `docs/app-contract.md` (schema `schemas/company-app.schema.json`). The portal's own Portuguese copy, `docs/COMPANY_APP_YAML.md`, was out of date and was removed.
 
 ## Validator
 

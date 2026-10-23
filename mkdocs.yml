@@ -1,0 +1,123 @@
+# The documentation site, built from docs/ as it is (no copies): `mkdocs build --strict`.
+# Built on every pull request and published to GitHub Pages from main (.github/workflows/docs.yml).
+# Local preview: pip install -r docs/requirements.txt && mkdocs serve
+site_name: InHouseCloud
+site_description: The company's own cloud on one machine, installed and operated by an agent.
+site_url: https://estoca.github.io/inhousecloud/
+repo_url: https://github.com/Estoca/inhousecloud
+repo_name: inhousecloud
+edit_uri: edit/main/docs/
+copyright: MIT licensed
+
+docs_dir: docs
+strict: true
+
+# Announcement drafts (Portuguese, not documentation) and the build's own files stay out.
+exclude_docs: |
+  announce.md
+  requirements.txt
+
+hooks:
+  - scripts/lib/mkdocs_hooks.py
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: info
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: info
+    unrecognized_links: warn
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+      # GitHub's anchors, so links like first-run.md#macos-run-docker-desktop work in both places.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Start:
+      - Try it in 10 minutes: try-it.md
+      - Day zero: day-zero.md
+      - The first person after you: first-user.md
+      - Install and deploy: install.md
+      - Quickstart: quickstart.md
+  - Concepts:
+      - One machine, one cloud: single-box.md
+      - The deploy loop: deploy-loop.md
+      - Why it exists: why.md
+  - Operate:
+      - ihc doctor: doctor.md
+      - Backup and restore: backup.md
+      - Stop or remove: cleanup.md
+      - Runbooks:
+          - runbooks/README.md
+          - Diagnose an app that is down: runbooks/diagnose-app-down.md
+          - Redeploy an app: runbooks/redeploy-app.md
+          - Restart a service: runbooks/restart-service.md
+          - Route and provider: runbooks/route-and-provider.md
+          - Disk pressure: runbooks/disk-pressure.md
+          - Backup stuck: runbooks/backup-stuck.md
+          - Database migration: runbooks/database-migration.md
+          - Incident record: runbooks/incident-record.md
+      - Security: security.md
+      - Install design: install-design.md
+  - Build apps:
+      - App contract: app-contract.md
+      - MCP in an app: app-mcp.md
+      - App rules example: app-rules-example.md
+      - GitOps flow: gitops-flow.md
+  - For agents:
+      - AGENTS.md: agents.md
+      - What an agent does: agent-experience.md
+      - LLM bootstrap: llm-bootstrap.md
+      - Agent setup contract: agent-setup-contract.md
+      - Operator contract: operator-contract.md
+      - Portal API: portal-api.md
+      - MCP gateway: mcp-gateway.md
+  - Reference:
+      - Architecture: architecture.md
+      - Smoke tests: smoke-tests.md
+      - First run and test records: first-run.md
+      - Repository layout: repository-layout.md
+      - Status and roadmap: roadmap.md
+      - Demo recordings: demo/README.md

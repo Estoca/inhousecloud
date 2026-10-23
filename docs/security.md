@@ -42,6 +42,8 @@ The portal's route lets in `ihc-admins` and `ihc-users` (two policy bindings on 
 - **To revoke:** Authentik > Directory > Tokens > `ihc-portal-api` > Delete (the People page then answers 503 until first-run runs again), or deactivate the user `ihc-portal`.
 - **What it reveals if leaked:** the directory (who works here, their emails and groups). Not a way in: no password, no write.
 
+Every route of the portal, who reaches it and what still writes: [`portal/docs/SECURITY.md`](../portal/docs/SECURITY.md).
+
 ## The MCP gateway: agents acting as a person
 
 The gateway ([`mcp-gateway.md`](mcp-gateway.md)) lets an AI client act as the signed-in person. What bounds it:
