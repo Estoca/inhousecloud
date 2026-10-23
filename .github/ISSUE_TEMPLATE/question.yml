@@ -1,0 +1,20 @@
+name: Question
+description: How do I, does it, why does it. When the docs did not answer it.
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: The question
+    validations:
+      required: true
+  - type: textarea
+    id: read
+    attributes:
+      label: What you already read
+      description: The docs or sections you looked at (README, docs/try-it.md, AGENTS.md, a contract, a runbook). A question the docs should have answered is a docs bug, and we fix the docs.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Your setup, if it matters (no secrets, no real names).
