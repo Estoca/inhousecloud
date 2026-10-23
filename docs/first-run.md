@@ -54,6 +54,7 @@ Containers resolve the public names to the proxy through network aliases, so Git
 | Admin user | `gitea admin user list --admin` | created with `GITEA_ADMIN_PASSWORD`, no forced password change |
 | Admin API token (`GITEA_ADMIN_TOKEN`) | the token answers `/api/v1/user` | generated with scope `all`, written to `.env` |
 | Organization (`GITEA_ORGANIZATION`) | `GET /api/v1/orgs/<org>` | visibility limited (members and signed-in users) |
+| Team `ihc-users` (named after `AUTHENTIK_APP_GROUP`) | `GET /api/v1/orgs/<org>/teams`, then `GET /api/v1/teams/<id>` | all repositories of the organization, `can_create_org_repo: true`, Write on code, issues, pulls, releases, wiki, projects, packages and actions; `PATCH`ed back when any of those drifted. Members are added by an admin ([`first-user.md`](first-user.md)) |
 | Repository `<org>/ihc-smoke` | `GET /api/v1/repos/...` | private, initialised with a README on `main`; the target of smoke test 12 (`GITEA_SMOKE_REPOSITORY`). Apps get their own repositories from `ihc-app new` ([`gitops-flow.md`](gitops-flow.md)); older installs created `<org>/deploy-requests`, which is kept |
 | Read-only API token (`GITEA_READONLY_TOKEN`) | the token answers `/api/v1/user` | scopes `read:misc,read:repository,read:organization,read:user`, written to `.env`; smoke test 6 uses it because the instance requires sign-in to view |
 | OIDC source `authentik` | `gitea admin auth list` | `add-oauth` or `update-oauth` with the client id and secret from `.env`, discovery URL `<AUTHENTIK_BASE_URL>/application/o/gitea/.well-known/openid-configuration`, scopes openid/profile/email, local 2FA skipped |
@@ -757,3 +758,32 @@ What it exposed, and what changed:
 - The template's `docker-compose.yml` makes `.env` mandatory (`env_file: ${COMPANY_ENV_FILE:-.env}`), so `docker compose up` on a laptop without `.env` fails; the agent copied it as is. The compose file `init` writes marks the env file `required: false`. The template was not changed here.
 
 Not covered: the Codex CLI (refused by this session's permission mode), an agent that runs `ihc-app init` itself (the run used `main`, before `init` existed), a laptop without Docker, ingress other than `local`, and a person without the tunnel already open. The VM was deleted.
+
+## Dry-run follow-ups run (2026-10-23)
+
+Four small fixes from the two dry runs above, checked on a clean Lima VM (Ubuntu 26.04.1, 2 CPU, 6 GiB, 30 GiB, Docker rootless; template `docker`, no mounts, no port forwards) with this branch installed by `install.sh --non-interactive`, profiles core, `ops` and backup, `ops.wetty.install_key: false`.
+
+| Check | Result |
+|---|---|
+| Install, all stages | 6 min 17 s; smoke tests **23 passed, 0 failed, 2 skipped** (19 object storage and 20 operator agent: profiles off) |
+| End-of-install summary | the web terminal's key line printed once (in the day-zero steps), not twice |
+| `install.sh handoff` alone, key not authorized | prints `Web terminal: its key is not authorized yet, so terminal.cloud.localhost cannot sign in. To allow it, run as <user>:` and `cat /opt/inhousecloud/local/wetty/id_ed25519.pub >> ~/.ssh/authorized_keys` |
+| After running that line, `handoff` again | no key line |
+| `install.sh --apply --from optional_profiles` with the key authorized | "ssh … with the dedicated key works from the container"; smoke tests again 23 passed, 0 failed, 2 skipped |
+| Gitea team after the install | `ihc-users` in `company`: all repositories, `can_create_org_repo: true`, Write on code, issues, pulls, releases, wiki, projects, packages and actions |
+| Team drifted by hand (`can_create_org_repo: false`, code read), then `scripts/first-run.sh` | "team ihc-users reconciled"; back to the values above. Run again: "team ihc-users exists" |
+| A local user `ana` with a token `write:organization` + `write:repository` | outside the team: create repository 403; added to the team: 201; same person, token `write:repository` only: 403 |
+| `ihc-app new envcheck --push` on the box | deployed; the container has `DATABASE_URL`, `REDIS_URL`, `APP_SLUG`, `PGPASSWORD` (names only checked); `/health` 200. The overlay's `env_file: !override` still points at `apps/<slug>/.env` |
+| Template `docker compose up --build` on the host (macOS, Compose 5.6), a copy of `templates/app` with no `.env` | up and healthy, `/health` 200. The template of `main` in the same folder: "env file … .env not found" |
+| `/tmp` of the box after the run | nothing left by the install, the smoke tests or this run (its own scripts lived in `~/.ihc-agent/` and were deleted) |
+
+What the Gitea API (28.2) accepts for a team, as used by `first-run.sh`: `POST /orgs/{org}/teams` and `PATCH /teams/{id}` take `name`, `description`, `permission`, `includes_all_repositories`, `can_create_org_repo` and `units_map`. When `units_map` is given the team reports `permission: "none"` and the units decide; a `PATCH` with `units_map` replaces the whole map (units left out are dropped), so the reconcile always sends the full body. `GET /api/v1/version` answered 403 without a token on this box.
+
+What changed:
+
+- **`install.sh handoff` repeats the web terminal's key line** while the key is missing from `~/.ssh/authorized_keys`, decided by the file (and `.env`: `ops` in `COMPOSE_PROFILES`, `OPS_TERMINAL=true`, the key on disk), not by `ops.wetty.install_key`. The end-of-install summary no longer prints its own copy: it ends with the day-zero steps, which carry it. `llm-bootstrap.md` 1.2 quotes the same two lines. `scripts/tests/handoff-wetty-key.sh` (CI) covers missing, another key present, authorized, terminal off and `ops` off.
+- **The template's `env_file` is optional** (`path: ${COMPANY_ENV_FILE:-.env}`, `required: false`, as `ihc-app init` writes), so `docker compose up` runs on a laptop with no `.env`. On the box the deploy's overlay replaces it with the app's env file, required.
+- **The first-run creates the people's team** `ihc-users` (named after the Authentik group) in the organization with write on every repository and "Create repositories", and puts it back on every run. `first-user.md` says to add each person to that team (membership is not synced) and gives the token's two scopes exactly: `write:organization` and `write:repository`.
+- **Agents keep their working files in a folder of their own** and delete it at the end; nothing stays in `/tmp` of the box or the laptop (`AGENTS.md`, `agent-setup-contract.md`).
+
+Not covered: a person who signs in through Authentik (the team test used a local Gitea user; the team's rights do not depend on how the account signs in), an agent following the new `/tmp` rule (it is a contract line, no run), ingress other than `local`. The VM was deleted.
