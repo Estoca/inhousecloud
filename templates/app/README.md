@@ -62,9 +62,10 @@ The bucket already exists; the key cannot create, list or delete buckets. Small 
 ## Run it on your machine
 
 ```bash
-cp .env.example .env
 docker compose up --build
 curl http://localhost:8080/health
 ```
+
+`.env` is optional here (`required: false` in `docker-compose.yml`): `cp .env.example .env` when the app needs a variable set locally. On the box the deploy points `env_file` at the app's own env file instead.
 
 Locally there is no database or Redis unless you start them yourself; `LOCAL_AUTH_MOCK_EMAIL` stands in for the sign-in on `/me`.

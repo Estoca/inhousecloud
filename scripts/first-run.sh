@@ -15,7 +15,8 @@
 #      optional profiles' hosts. The ops tools (Portainer, Glances, the web terminal,
 #      the file browser) each get a proxy provider and application bound to the admin
 #      group only, and a proxy host with forward auth and no public path.
-#   3. Gitea: admin, API tokens, organization, ihc-smoke repository, OIDC source.
+#   3. Gitea: admin, API tokens, organization, the people's team (can create repositories),
+#      ihc-smoke repository, OIDC source.
 #   4. The portal's read-only API token IHC_PORTAL_API_TOKEN (docs/portal-api.md), once.
 #   5. The MCP gateway (docs/mcp-gateway.md): OAuth2 provider and application ihc-mcp in
 #      Authentik (public client, authorization code with PKCE, explicit consent, bound to
@@ -298,6 +299,34 @@ if [ "$API_CODE" = 404 ]; then
   ok "organization $GITEA_ORGANIZATION created"
 else api_ok || die "probe organization: HTTP $API_CODE"; ok "organization $GITEA_ORGANIZATION exists"; fi
 record "gitea:org:$GITEA_ORGANIZATION"
+
+# The team people who build apps join (docs/first-user.md), named after their Authentik
+# group: write on every repository of the organization and allowed to create repositories,
+# so a laptop can put a new app on the air (`ihc-app init --push`). Reconciled on each run.
+TEAM="$AUTHENTIK_APP_GROUP"
+TEAM_UNITS='{"repo.code":"write","repo.issues":"write","repo.pulls":"write","repo.releases":"write","repo.wiki":"write","repo.actions":"write","repo.projects":"write","repo.packages":"write","repo.ext_issues":"read","repo.ext_wiki":"read"}'
+TEAM_BODY="$(jsonq build name="$TEAM" description="People who build apps: write on every repository, can create repositories (InHouseCloud)" permission=write includes_all_repositories:=true can_create_org_repo:=true units_map:="$TEAM_UNITS")"
+api GET "$GT/orgs/$GITEA_ORGANIZATION/teams?limit=50"
+api_ok || die "list teams of $GITEA_ORGANIZATION: HTTP $API_CODE"
+TEAM_ID="$(printf '%s' "$API_BODY" | jsonq find . name "$TEAM" id)"
+if [ -z "$TEAM_ID" ]; then
+  api POST "$GT/orgs/$GITEA_ORGANIZATION/teams" "$TEAM_BODY"
+  api_ok || die "create team $TEAM: HTTP $API_CODE $API_BODY"
+  ok "team $TEAM created in $GITEA_ORGANIZATION (write on all repositories, can create repositories)"
+else
+  api GET "$GT/teams/$TEAM_ID"
+  api_ok || die "probe team $TEAM: HTTP $API_CODE"
+  if printf '%s' "$API_BODY" | $PY -c 'import json,sys
+t=json.load(sys.stdin); want=json.loads(sys.argv[1]); u=t.get("units_map") or {}
+sys.exit(0 if t.get("can_create_org_repo") is True and t.get("includes_all_repositories") is True and all(u.get(k)==v for k,v in want.items()) else 1)' "$TEAM_UNITS"; then
+    ok "team $TEAM exists (write on all repositories, can create repositories)"
+  else
+    api PATCH "$GT/teams/$TEAM_ID" "$TEAM_BODY"
+    api_ok || die "reconcile team $TEAM: HTTP $API_CODE $API_BODY"
+    ok "team $TEAM reconciled (write on all repositories, can create repositories)"
+  fi
+fi
+record "gitea:team:$GITEA_ORGANIZATION/$TEAM"
 
 # A small private repository for smoke test 12 (authenticated clone). Deploys need no
 # repository of their own: push to main of the app's repository is the approval

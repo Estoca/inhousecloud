@@ -32,6 +32,7 @@ Hard rules (the full list is in the contract):
 - Apps never bring their own Postgres, Redis or object storage, never mount the Docker socket, never use host networking.
 - Never delete a database, bucket, route, repository, volume or the install directory.
 - Ask before applying an install plan, making an app public, or touching anything outside the box.
+- Working files go in one folder of your own (for example `~/.ihc-agent/<task>/`), not in `/tmp`, and you delete it when you finish: nothing you made stays in `/tmp` of the box or the laptop.
 
 To read the health of the cloud's services without a browser (a script, a monitor, an agent off the box), use the portal's read-only API: `GET <portal>/api/platform/status` with `Authorization: Bearer <IHC_PORTAL_API_TOKEN>` from `<install-dir>/.env`. The contract is [`docs/portal-api.md`](docs/portal-api.md); `install.sh status --json` and `ihc doctor --json` already read it and say `"source": "portal-api"` (or `"local"` when the portal does not answer).
 

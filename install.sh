@@ -1265,8 +1265,16 @@ ensure_wetty_key() {
 
 # wetty_key_authorized: the public key is in this user's authorized_keys.
 wetty_key_authorized() {
-  local pub; pub="$(awk '{print $2}' "$WETTY_KEY_DIR/id_ed25519.pub")"
+  local pub; pub="$(awk '{print $2}' "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}/id_ed25519.pub" 2>/dev/null)"
   [ -n "$pub" ] && [ -f "$HOME/.ssh/authorized_keys" ] && grep -qF "$pub" "$HOME/.ssh/authorized_keys"
+}
+
+# wetty_key_pending: the web terminal is installed (ops in COMPOSE_PROFILES, OPS_TERMINAL in
+# .env, its key on disk) and the key is not in authorized_keys now: it cannot sign in yet.
+# Read from .env and the files, so `install.sh handoff` alone knows it.
+wetty_key_pending() {
+  case ",$(env_get COMPOSE_PROFILES)," in *,ops,*) ;; *) return 1 ;; esac
+  [ "$(env_get OPS_TERMINAL)" = true ] && [ -s "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}/id_ed25519.pub" ] && ! wetty_key_authorized
 }
 
 # wetty_ssh_check HOST: from inside the Wetty container, an ssh with the key and the
@@ -1402,10 +1410,6 @@ inventory.save(sys.argv[3],new)' "$IHC_LIB" "$inv.new" "$inv"
     _out "  ops (admins only: $(env_get AUTHENTIK_PORTAL_GROUP))  $SCHEME://files.$BASE_DOMAIN  $SCHEME://portainer.$BASE_DOMAIN  $SCHEME://glances.$BASE_DOMAIN"
     if [ "$(docker inspect -f '{{.State.Running}}' "$(dc ps -q wetty 2>/dev/null | head -n 1)" 2>/dev/null)" = true ]; then
       _out "  terminal   $SCHEME://terminal.$BASE_DOMAIN   (a shell on this host as $(env_get WETTY_SSH_USER))"
-      if ! wetty_key_authorized; then
-        _out "  The web terminal's key is not authorized yet. To allow it, run as $(env_get WETTY_SSH_USER):"
-        _out "    cat $WETTY_KEY_DIR/id_ed25519.pub >> ~/.ssh/authorized_keys"
-      fi
     else
       _out "  terminal   not installed: the reason is in $STATE_FILE (stages.optional_profiles.probe.ops); docs/security.md"
     fi
@@ -1507,6 +1511,10 @@ day0_handoff() {
   _out "7. Only a test? Stop it (data kept) or remove it and get the space back (docs/cleanup.md):"
   _out "     $SELF stop $d"
   _out "     $SELF remove $d"
+  if wetty_key_pending; then
+    _out "Web terminal: its key is not authorized yet, so terminal.$(env_get BASE_DOMAIN) cannot sign in. To allow it, run as $(env_get WETTY_SSH_USER):"
+    _out "     cat ${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}/id_ed25519.pub >> ~/.ssh/authorized_keys"
+  fi
   _out "People: docs/first-user.md (groups $(env_get AUTHENTIK_APP_GROUP) and $(env_get AUTHENTIK_PORTAL_GROUP); mail, password recovery and invitations are off)."
   _out "These steps again: $SELF handoff $d"
 }
