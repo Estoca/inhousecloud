@@ -197,7 +197,7 @@ What the run exposed:
 | After the fix: `install.sh --apply --from foundation` (deployer image rebuilt), 16 passed | 44 s |
 | Deploy job, start to green, first deploy of a new app (round 1 / round 2) | 15 s / 15 s |
 
-Not covered: the install half of the path through an agent (since covered: "Cold install run" below), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (the fallback `codex exec` was not needed).
+Not covered: the install half of the path through an agent (since covered: "Cold install run" below), a box the agent runs on directly instead of through `ssh`, ingress other than `local`, and a run with another agent (since covered: "Cold install run with Codex" below).
 
 ## Cold install run
 
@@ -234,7 +234,61 @@ What the runs exposed, and what changed:
 - **The prerequisites, declared.** The README's "Getting Started" (now in [`install.md`](install.md#getting-started)) lists what the box must have before an agent starts, which is what these VMs had.
 - Not an issue of this project: the CLI hands the agent the signed-in account's email and the repository's commit history, and in both rounds the agent offered those as defaults for the admin email and company name. The answers replaced them. A cold run on another machine or account would offer others.
 
-Not covered: the `sudo ssh -L 80` tunnel itself in a browser (port 80 of the test host was held by another VM, so the flow was checked with `--connect-to` as above), a box without passwordless `sudo`, Docker through the `docker` group instead of rootless, ingress other than `local`, and the full day one in a single session: install, then the first app (that half is the "Cold agent run" above).
+Not covered: the `sudo ssh -L 80` tunnel itself in a browser (port 80 of the test host was held by another VM, so the flow was checked with `--connect-to` as above), a box without passwordless `sudo`, Docker through the `docker` group instead of rootless, ingress other than `local`, and the full day one in a single session: install, then the first app (that half is the "Cold agent run" above; since covered, with another agent: "Cold install run with Codex" below).
+
+## Cold install run with Codex
+
+The same day one with an agent that is not Claude Code, and in one session: install the cloud from the repository alone, then the first app. On 2026-10-23.
+
+**Setup.** A new Lima VM as in "Cold install run" (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.2 rootless, Compose 5.6.1, `git` 2.53, `python3` 3.14; 2 CPU, 4 GiB, 30 GiB; no mounts, every port forward ignored; passwordless `sudo`; `/opt` holding only `containerd`; nothing listening but `sshd` and the resolver). On the host, a `git archive` of `main` in a temporary folder: no history, no `.claude/`, no memory. The agent was the Codex CLI 0.163.0, `codex exec` (non-interactive), with its default model (`gpt-6.1-sol`), run from that folder.
+
+Codex has no per-tool allowlist like `claude -p --allowedTools`. What it has, and what was used:
+
+- **A separate `CODEX_HOME`** in a temporary folder holding only a copy of `auth.json` and this `config.toml`, so no user config, plugins, skills, memories, execpolicy rules or global `AGENTS.md` of the host account were loaded:
+
+  ```toml
+  approval_policy = "never"
+  sandbox_mode = "workspace-write"
+
+  [sandbox_workspace_write]
+  network_access = true
+  ```
+
+- **The sandbox** (Seatbelt on macOS): commands read the disk, write only in the working folder and the temporary directories, and reach the network only because `network_access` is on, which `ssh` needs (with it off, `ssh` fails with "Operation not permitted"). `approval_policy = "never"` because `exec` cannot stop to ask. So the limit was "write only here, network on", not "only `ssh` and `scp`"; in the run every command was a read of the folder, `ssh`/`scp` to the box, or a file in `/tmp` (below).
+- `codex exec --skip-git-repo-check -s workspace-write --json -o <last message> "<prompt>"`, the export not being a Git repository; each answer of the person in `codex exec resume <session id> "<answer>"`.
+- An `ssh -F <file> servidor` command whose config names the VM's port, user and key, with host key checks and multiplexing off.
+
+The prompt was the one of "Cold install run", word for word. The person was simulated with the same answers: a fictitious bakery and email, only this machine for now, admin tools yes, file storage no, no separate disk for backups, the passwords can be generated.
+
+**Result: installed and the first app on the air, without help.** 4 calls to the agent, 0 refused commands.
+
+| Call (person's message) | Agent time | What the agent did |
+|---|---|---|
+| 1. The request | 29 s | Codex loads `AGENTS.md` by itself (its project instructions file), so the table of `AGENTS.md` was in context before the first command; its first command read `agent-setup-contract.md` and `llm-bootstrap.md`. Section 0 on the box (no install), `git clone` of the repository there, `config.example.yaml` read. Then **6 questions in one message**, in plain words and each with a recommendation: admin email, company name, who reaches the apps (an SSH connection like the one given, the company network, or the internet), the default folders, a separate disk for backups, and the extras (none, file storage, file storage and admin panels) |
+| 2. The answers | 17 s | `sudo install -d` of `/opt/inhousecloud` (`sudo -n` works) and `local/config.yaml` written in the same command, then **`./install.sh --plan`**, no `[xx]`. Showed the plan in plain words, said the folder was prepared and the backups on the same disk do not survive that disk, and asked "Posso aplicar esse plano?", quoting the contract |
+| 3. "Sim, pode instalar." | 422 s | `./install.sh --non-interactive --json`, progress narrated in plain words; then `status --json`, `envfile.py keys` and `handoff` |
+| 4. "Cria um app interno de registro de despesas…" (the prompt of "Cold agent run" without the `ssh` line) | 258 s | `app-contract.md`, `status`, `ihc-app list`, `ihc-app new despesas --owner <the admin email>`; the app's `server.js` with `pg` (table on start, cents as integers, the owner from `X-authentik-email`, CSRF, validation, escaping), image built on the box, commit with the owner as author, push with a credential helper that reads the Gitea token on the box, `ihc-app wait`; then its own test script inside the container (two people, isolation, spoofed owner ignored, unsigned MCP call refused), `/health` 200, `/` 302 to the outpost |
+
+| | Result |
+|---|---|
+| Install, `state.json` created to completed | 363 s (smoke tests 68 s) |
+| `install.sh status` / smoke tests | `completed` / **23 passed, 0 failed, 2 skipped** (storage and agent profiles off); 17 of 17 containers healthy |
+| `ihc doctor` (run by hand afterwards) | 15 checks ok in 3.3 s, platform from `portal-api` |
+| Deploy of the app's commit | `success`; `ihc-app wait`: `/health` 200 through the proxy, anonymous `/` sent to the sign-in |
+| Checked by hand afterwards | `/health` 200; table `expenses` in `app_despesas` owned by the app's role (not superuser), 0 rows (its test rows removed); compose file unchanged; `despesas` in `ihc-app list` with the owner |
+| Password in the conversation | none: every `PASSWORD`, `TOKEN`, `SECRET` and `KEY` value of `.env` and of the app's env file (22 values) checked against the event stream and the session file, on the box, 0 found. The agent read the Gitea token only inside commands on the box (the push helper, a look at the run list) and never printed it; the person got the `envfile.py get` commands to run on their own screen |
+| How to open the URLs | the port-80 tunnel with the person's own `-F` config and `sudo`, kept open, then Chrome, Edge or Firefox; in both reports |
+| Handoff | URLs, `.env` and the names of the credentials, `akadmin`, change the password and enroll MFA, copy `BACKUP_ENCRYPTION_KEY` off the box, backups on the same disk, `claude mcp add … --client-id ihc-mcp`, `install.sh handoff` and `ihc-operator brief` to read the steps again |
+
+What did not match, and what changed:
+
+- **The web terminal's key was never asked.** Section 1.2 of the playbook listed the `ops` profile as "Portainer and Glances?" and nothing about `ops.wetty.install_key`, which defaults to `false` with `--non-interactive`. Codex followed the table; the install came up with the terminal "up, key not authorized", and its report said the terminal was "pending the key's authorization" without the command that authorizes it. (Claude Code in "Cold install run" asked, from the comment in `config.example.yaml`.) Section 1.2 and the contract now name all four admin tools and ask the terminal question; `quickstart.md` says the same.
+- **`install.sh handoff` alone does not repeat the key's command.** The command is in the end-of-install summary (on stderr, inside the `--json` run), not in the seven steps that `handoff` prints again, which is what the agent read back. Not changed here: a follow-up for the installer.
+- The `sudo install -d` ran in the same command that wrote the config and ran `--plan`, before the plan was shown; the plan message then said the folder was prepared. That is what section 1.2 allows ("say so with the plan").
+- The agent kept its work files (the build script, the test script, the credential helper) in the host's `/tmp`, which the sandbox lets it write, and copied them with `scp`; it left the copies in the box's `/tmp`. A first attempt to send a script inline through `ssh` broke on shell quoting. Neither touches the repository or the install.
+- Not an issue of this project: Codex reads `AGENTS.md` natively, as Claude Code reads `CLAUDE.md`, so the entry point worked as written for both. Nothing in `AGENTS.md` had to change for another agent.
+
+Not covered: the browser through the tunnel, a box without passwordless `sudo`, ingress other than `local`, another model than Codex's default, and the `sudo ssh -L 80` tunnel on the host (port 80 not tried). The VM, the export and the temporary `CODEX_HOME` were deleted.
 
 ## Test record: the ops tools (smoke tests 17 and 18)
 

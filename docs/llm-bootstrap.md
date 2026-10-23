@@ -57,7 +57,8 @@ Success: all of them print a version. If Docker or Compose is missing, **stop an
 | Gitea organization (the company name, lowercase) | `gitea.organization` | `company` |
 | Backup destination (a path on another disk) | `backup.destination` | `<install dir>/backups` (same disk: warned) |
 | Object storage (S3-compatible, Garage)? | `install.profile.storage` | `false` |
-| Portainer and Glances? | `install.profile.ops` | `false` |
+| Admin tools (Portainer, Glances, a web terminal, a file browser)? | `install.profile.ops` | `false` |
+| With the admin tools: may the web terminal sign in as the installing user (one key line added to its `~/.ssh/authorized_keys`)? | `ops.wetty.install_key` | `false`; ask, the interactive installer defaults to yes |
 
 For `private` and `public`, the TLS mode and tunnel follow the matrix in [`install-design.md`](install-design.md); a tunnel token is read from the environment variable named in the config (`ingress.cloudflared.tunnel_token_env`), which the human exports before the run.
 
