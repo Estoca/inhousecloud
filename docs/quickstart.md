@@ -36,7 +36,7 @@ What comes up, as Compose profiles of `docker/compose.yml` (`docs/install-design
 
 - `core`, always: Nginx Proxy Manager, Authentik with its own Postgres, Gitea with its two Actions runners (CI, and deploys by push to `main`), the shared Postgres and Redis for apps, and the app portal (`portal/`, read only, behind forward auth);
 - `storage`: Garage, S3-compatible object storage (a bucket and key per app);
-- `ops`: Portainer and Glances;
+- `ops`: Portainer, Glances, a web terminal and a file browser;
 - `cloudflared` or `tailscale`, chosen by the ingress mode.
 
 The installer generates every secret into `<install-dir>/.env` (mode 0600), waits for every healthcheck, runs the first access (`docs/first-run.md`: Gitea admin and organization, Authentik OIDC for Gitea, the portal's forward-auth route), starts the backup job and runs the first backup (`docs/backup.md`; the installer asks for the backup destination, ideally a directory on another disk; in a config file it is `backup.destination`), then the smoke tests (`docs/smoke-tests.md`), then prints the URLs. Re-running it changes nothing; after a failure it resumes at the failed stage (`install.sh --apply --from <stage>`); `install.sh status` shows where it stands; `install.sh handoff` prints the day-zero steps again.

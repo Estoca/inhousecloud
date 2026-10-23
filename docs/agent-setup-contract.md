@@ -31,7 +31,7 @@ Ask once, all together, offering the defaults from [`bootstrap/config.example.ya
 3. admin email;
 4. Gitea organization name;
 5. backup destination, ideally another disk;
-6. optional profiles: object storage (`storage`), Portainer and Glances (`ops`);
+6. optional profiles: object storage (`storage`), admin tools: Portainer, Glances, a web terminal and a file browser (`ops`; ask whether the web terminal may sign in as the installing user, `ops.wetty.install_key`);
 7. for `private` or `public`: the name of the environment variable that holds the tunnel token (they export it; you never see it).
 
 Then show `./install.sh --plan` and ask: "apply this plan?". That yes covers starting the services.
