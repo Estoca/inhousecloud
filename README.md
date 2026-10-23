@@ -4,7 +4,7 @@ The company's own cloud on one machine: an agent installs it, and an agent puts 
 
 One box runs what a small company needs around its internal apps: single sign-on (Authentik), Git with push-to-deploy (Gitea and Actions), shared Postgres and Redis, a portal, an MCP gateway for AI clients and a nightly backup, all behind one sign-in and under one contract an agent can read. The box can be a Mac with Docker Desktop, a VM on a laptop or a server in the office. Open source, MIT.
 
-**Documentation: <https://estoca.github.io/inhousecloud/>** (built from [`docs/`](docs/)).
+**Documentation: <https://inhousecloud.estoca.com.br/>** (built from [`docs/`](docs/)).
 
 > **Sibling project:** [Open Company OS](https://github.com/Estoca/open-company-os) is the people-and-work half (a personal LLM agent per person, a second brain, a shared tracker, a company compass). It runs on top of this cloud as ordinary apps and is adopted separately.
 
@@ -66,7 +66,7 @@ Usable on one box, with `local` ingress (on the machine itself) or `private` ing
 
 ## Documentation
 
-The site, <https://estoca.github.io/inhousecloud/>, has six parts, all from [`docs/`](docs/):
+The site, <https://inhousecloud.estoca.com.br/>, has six parts, all from [`docs/`](docs/):
 
 - **Start**: [try it](docs/try-it.md), [day zero](docs/day-zero.md), [the first person after you](docs/first-user.md), [install and deploy](docs/install.md), [quickstart](docs/quickstart.md).
 - **Concepts**: [one machine, one cloud](docs/single-box.md), [the deploy loop](docs/deploy-loop.md), [why it exists](docs/why.md).
