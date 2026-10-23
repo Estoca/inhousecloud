@@ -285,6 +285,8 @@ test -n "$IHC_GITEA_TOKEN" && echo token set                           # never p
 
 `000` from a `*.localhost` address: the port-80 tunnel to the box is not open; give the person the command of 1.6 to run in a terminal of their own and wait. A copy of this repository is needed for `scripts/ihc-app.sh`; if the person did not point you to one, `git clone https://github.com/Estoca/inhousecloud.git` next to the app.
 
+Docker on the laptop is not needed: `init` and the push do not use it, and the image is built on the box. If `docker` is missing, do not install it and do not ask for it; test the app the way it runs locally and leave the build to the deploy ([No Docker on the laptop](gitops-flow.md#no-docker-on-the-laptop)).
+
 ### 5.2 Make the app fit the contract
 
 The same rules as 2.3, applied to the existing code; change only what they need:
@@ -309,6 +311,8 @@ It adds `company-app.yaml`, the deploy workflow, a compose file and `.env.exampl
 | `the token cannot create repositories` | the person: a token with **organization** and **repository** Read and Write |
 | `cannot create repositories in <org>` | an admin: the person's team gets "Create repositories" ([`first-user.md`](first-user.md)) |
 | `no Dockerfile`, or a compose file with its own Postgres / Redis / S3 | you: write the `Dockerfile`, remove the service and use `DATABASE_URL` / `REDIS_URL` |
+| `cannot create <folder>/.git` or `cannot write <folder>/.git` | your sandbox keeps `.git` read-only (Codex's `workspace-write` does): ask to run the same line outside it, or give the person the line to run in their terminal. Do not make a second Git directory beside the project |
+| `Authentication failed` on a plain `git push` you ran | the laptop's credential helper (on a Mac, the Keychain) sent an old password: push with the `init … --push` line again, which uses only the token |
 
 ### 5.4 Wait and check
 
@@ -320,4 +324,4 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<domain>/health          
 curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<domain>/                                                # 302 to the sign-in
 ```
 
-A `failure`: the job's log is in the repository's Actions tab (`http://git.<domain>/<org>/<slug>/actions`), readable by the person; section 4 has the fixes. Report as in 3.4; the person's local data stays on the laptop, the cloud's database starts empty.
+A `failure`: the job's log is in the repository's Actions tab (`http://git.<domain>/<org>/<slug>/actions`), and you read it with the same token: `GET /api/v1/repos/<org>/<slug>/actions/runs/<run id>/jobs`, then `GET /api/v1/repos/<org>/<slug>/actions/jobs/<job id>/logs`. Without Docker on the laptop the `Dockerfile` is first built there, so its errors show up in that log; section 4 has the fixes. Later changes: commit, then the same `init … --push` line (it adds nothing on an adopted project and pushes with the token). Report as in 3.4; the person's local data stays on the laptop, the cloud's database starts empty.

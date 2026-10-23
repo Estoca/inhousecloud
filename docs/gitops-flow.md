@@ -48,7 +48,7 @@ What the person needs, once ([`first-user.md`](first-user.md)):
 - a Gitea account (the first "Sign in with authentik" at `http://git.<BASE_DOMAIN>`) in the organization's team `ihc-users`, which the install creates with write access and **Create repositories** ([`first-user.md`](first-user.md));
 - a personal token, Gitea > Settings > Applications, with **organization** and **repository** Read and Write, kept in the environment as `IHC_GITEA_TOKEN`;
 - with `local` ingress, the port-80 tunnel to the box kept open ([`llm-bootstrap.md`](llm-bootstrap.md#16-report-the-install)): the `*.localhost` names, Gitea's included, answer only through it;
-- a copy of this repository on the laptop, for `scripts/ihc-app.sh` (it needs `git`, `curl` and `python3`; Docker only for a local build).
+- a copy of this repository on the laptop, for `scripts/ihc-app.sh` (it needs `git`, `curl` and `python3`; not Docker, see [No Docker on the laptop](#no-docker-on-the-laptop)).
 
 Then, in the app's folder:
 
@@ -72,7 +72,19 @@ It runs `git init` on `main` when the folder is not a repository (and commits ev
 
 What `init` cannot do is change the code, so before the push the app must, as on the box: listen on `0.0.0.0` and `PORT` (a laptop app often binds `127.0.0.1` and a fixed port); answer `GET /health` with 200; keep its data in `DATABASE_URL` (Postgres, created empty) or under `DATA_DIR` (`/data`), never in a file next to the code, which a redeploy throws away; read the person from `X-authentik-email` ([`app-contract.md`](app-contract.md)). A laptop app on SQLite can keep it locally and use `DATABASE_URL` when it is set.
 
-From there on, every `git push` to `main` (of `origin` or `cloud`) is a deploy; follow it in `http://git.<BASE_DOMAIN>/<org>/<slug>/actions` with the same token (`GET /api/v1/repos/<org>/<slug>/actions/tasks`).
+From there on, every `git push` to `main` (of `origin` or `cloud`) is a deploy; follow it in `http://git.<BASE_DOMAIN>/<org>/<slug>/actions` with the same token (`GET /api/v1/repos/<org>/<slug>/actions/tasks`; a job's log: `GET .../actions/runs/<run>/jobs`, then `GET .../actions/jobs/<job>/logs`).
+
+**Pushing with the token.** `init` sends the token to `git` through `GIT_ASKPASS` and turns credential helpers off for its own `ls-remote` and push, so nothing the laptop keeps for the host is used or written: on a Mac, Apple's `git` stores every password that works in the Keychain (helper `osxkeychain`), and an old one, from a deleted token, would be sent before the token and fail with "Authentication failed". A plain `git push` later goes through those helpers. To push the current commit with the token again, run the same `init` line with `--push`: on an adopted project it adds nothing and only pushes. If a plain `git push` answers "Authentication failed", the laptop holds an old password for `git.<BASE_DOMAIN>`: remove it (Keychain Access, or `printf 'protocol=http\nhost=git.<BASE_DOMAIN>\n\n' | git credential reject`).
+
+**An agent in a sandbox.** `init` writes the project's `.git` (the first commit, the remote). Some agents run commands where `.git` is read-only: Codex's `workspace-write` sandbox protects the `.git` at the root of its folder. `init` then stops before writing anything, with "cannot create …/.git" (or "cannot write …"). The agent asks to run that one line outside the sandbox, or the person runs it in their own terminal; a second Git directory beside the project, which agents improvised in two runs, works for the push but leaves a folder plain `git` does not see.
+
+### No Docker on the laptop
+
+Nothing in this path needs Docker on the laptop: `init` reads a compose file with Docker when it is there and with its own YAML reader when not, and the image is built on the box by the deploy job. What changes without it:
+
+- the app runs on the laptop the way it was written (`python3 app.py`, `npm start`), reading `PORT`, `DATA_DIR` and `DATABASE_URL` with local defaults when they are not set; the compose file `init` writes is for the box and for laptops that have Docker;
+- the `Dockerfile` is not built before the push, so the first deploy is its first build. Keep it to the language's official slim image, `COPY` of what the app needs, the install of its dependencies (for Python, `requirements.txt`; none for the standard library) and the start command; a mistake there fails the run, not the app already on the air (the job's `docker compose up -d --build` builds before it replaces the running container);
+- when the run fails, its log says why (the build's error is in the `deploy` job): read it with the token as above, fix, commit, push again.
 
 ## 3. What the deploy job does
 

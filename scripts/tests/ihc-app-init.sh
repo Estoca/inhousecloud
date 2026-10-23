@@ -12,7 +12,9 @@
 # (3) creates the repository and pushes main with --push; (4) on a project that already
 # has a Git repository and an origin elsewhere, commits only what it added and uses the
 # remote `cloud`; (5) writes a Dockerfile for a Node project and keeps a compose file's
-# own service and port; (6) is idempotent. Fails (exit 1) on any surprise. Needs git, python3.
+# own service and port; (6) is idempotent; (7) pushes with the token over a stale stored
+# credential; (8) refuses a folder where .git cannot be created. Fails (exit 1) on any surprise.
+# Needs git, python3.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ihc-app-init.XXXXXX")"
@@ -161,5 +163,21 @@ S="$WORK/repoonly"; mkdir -p "$S"; printf 'FROM scratch\n' > "$S/Dockerfile"
 if IHC_GITEA_TOKEN=repo-only "$APP" init repoonly --dir "$S" --install-dir "$WORK/no-install" > "$WORK/out" 2>&1; then bad "repository-only token: init passed"; else
   grep -q "organization and repository Read and Write" "$WORK/out" && pass "repository-only token: says which token to make" || bad "repository-only token: $(cat "$WORK/out")"
 fi
+
+# A stale password kept for the host by a credential helper (macOS Keychain on a Mac): the
+# push still goes with the token, and the token is not stored.
+K="$WORK/stale"; mkdir -p "$K"; printf 'FROM scratch\n' > "$K/Dockerfile"
+printf 'http://ihc:stale@127.0.0.1:%s\n' "$PORT" > "$WORK/creds"
+if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0="store --file $WORK/creds" init stale --dir "$K" --push \
+   && [ "$(git -C "$WORK/srv/company/stale.git" rev-parse main 2>/dev/null)" = "$(git -C "$K" rev-parse HEAD)" ] && ! grep -q goodtoken "$WORK/creds"; then
+  pass "stale stored credential: pushed with the token, token not stored"
+else bad "stale stored credential: $(cat "$WORK/out")"; fi
+
+# A folder where .git cannot be created (an agent's sandbox): refused before writing anything.
+G="$WORK/locked"; mkdir -p "$G"; printf 'FROM scratch\n' > "$G/Dockerfile"; chmod 555 "$G"
+if [ -w "$G" ]; then pass "locked folder: skipped (running as root)"
+elif init locked --dir "$G"; then bad "locked folder: init passed"
+else [ "$(ls -A "$G")" = Dockerfile ] && grep -q "cannot create .*/locked/.git" "$WORK/out" && pass "no writable .git: refused before writing, says why" || bad "locked folder: $(cat "$WORK/out")"; fi
+chmod 755 "$G"
 
 [ "$FAILS" = 0 ] && echo "ihc-app-init: all cases pass" || { echo "ihc-app-init: FAILED"; exit 1; }
