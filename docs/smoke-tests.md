@@ -202,23 +202,27 @@ curl -K <same> -X POST -d '{"name":"ihc-smoke-must-not-exist-<pid>"}' http://127
 #     only). The token goes in a 0600 file and a curl config file, never on a command line
 curl -X POST -D - -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/mcp --data '{}'
 curl -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/.well-known/oauth-protected-resource/mcp
+curl "$AUTHENTIK_BASE_URL/application/o/ihc-mcp/.well-known/openid-configuration"   # its issuer
 scripts/sso-login-check.sh --install-dir "$IHC_INSTALL_DIR" --user ihc-smoke-outsider-<pid> \
   --password-env <var> --oauth-token <file> --expect denied     # a temporary user in no group
 scripts/sso-login-check.sh --install-dir "$IHC_INSTALL_DIR" --user ihc-smoke-user \
   --password-env AUTHENTIK_SMOKE_USER_PASSWORD --oauth-token <file>
 curl -K <mcp.cfg> -H "Host: mcp.$BASE_DOMAIN" http://127.0.0.1/mcp \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize",...}'   # then tools/list, tools/call
+docker compose -f "$IHC_COMPOSE_FILE" exec -T mcp node --input-type=module -e "...call(admin, 'ihc_platform_status')"
 docker compose -f "$IHC_COMPOSE_FILE" exec -T mcp node -e "fetch('http://smoke-app:8080/mcp/tools/ping/execute',{method:'POST'})..."
 # PASS: anonymous /mcp is 401 with WWW-Authenticate resource_metadata, and the metadata's
-#       authorization server is <AUTHENTIK_BASE_URL>/application/o/ihc-mcp/; the temporary
+#       authorization server is <AUTHENTIK_BASE_URL>/application/o/ihc-mcp/, which is
+#       exactly the issuer of Authentik's discovery at that URL (SEP-2352); the temporary
 #       user outside ihc-users is refused by Authentik at the authorize step and gets no
 #       token (then deleted); the smoke user gets an access token by authorization code
 #       with PKCE on a loopback redirect, initialize answers inhousecloud-mcp-gateway,
 #       tools/list has ihc_list_apps and smoke-app__ping and none of the admin tools,
 #       smoke-app__ping answers with the smoke user's email (the app checked the actor
 #       JWT), ihc_list_apps shows the portal healthy behind the SSO and hides smoke-app
-#       (marked a system test by then, shown to admins only), ihc_list_people is an error result, and
-#       smoke-app refuses a call without an actor JWT (401). After the redeploy that grants
+#       (marked a system test by then, shown to admins only), ihc_list_people is an error result,
+#       ihc_platform_status run as an admin inside the gateway (its real portal token) has
+#       stale false, age_seconds and a freshness sentence, and smoke-app refuses a call without an actor JWT (401). After the redeploy that grants
 #       smoke-app.read to ihc-admins only: smoke-app__ping is gone from tools/list and
 #       calling it is an error result "access denied" from the gateway
 ```

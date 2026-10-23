@@ -6,7 +6,8 @@ import { TOOL_SEPARATOR, grantedScopes, providerFromApp } from './mcp-providers.
 // Tools da propria plataforma, servidas pelo gateway MCP, todas so leitura:
 //   ihc_list_apps         todos de USER_GROUP: catalogo com descricao, saude, SSO e MCP
 //   ihc_platform_status   admin: o mesmo JSON de GET /api/platform/status do portal (PR do
-//                         status API, docs/portal-api.md), lido com IHC_PORTAL_API_TOKEN
+//                         status API, docs/portal-api.md), lido com IHC_PORTAL_API_TOKEN,
+//                         nunca stale quando o portal consegue sondar, com `freshness`
 //   ihc_list_people       admin: pessoas do Authentik (conta de servico ihc-portal)
 //   ihc_list_groups       admin: grupos do Authentik e seus membros
 // A mesma regra do portal: quem e so de ihc-users ve catalogo e saude dos apps, nao o
@@ -37,7 +38,7 @@ export const PLATFORM_TOOLS = Object.freeze([
   {
     name: 'ihc_platform_status',
     admin: true,
-    description: 'Health of the core services of the cloud (proxy, Authentik, Gitea, runners, Postgres, Redis, backup and the services of each profile). Admins only.',
+    description: 'Health of the core services of the cloud (proxy, Authentik, Gitea, runners, Postgres, Redis, backup and the services of each profile). Never served stale when the portal can probe; `freshness` says how old the reading is. Admins only.',
     inputSchema: EMPTY_INPUT,
   },
   {
@@ -90,6 +91,17 @@ function appSummary(app, user, { userGroup }) {
   };
 }
 
+// Uma frase para o agente: quando o dado foi lido e se ainda vale.
+export function freshnessOf(status, refreshError = null) {
+  const age = Number.isFinite(status?.age_seconds) ? Math.max(0, Math.round(status.age_seconds)) : null;
+  const when = status?.generated_at ?? status?.checked_at ?? 'an unknown time';
+  const ago = age === null ? `at ${when}` : `${age} s ago (${when})`;
+  if (status?.stale === true) {
+    return `STALE: this reading was probed ${ago}, older than the portal's cache lifetime of ${status.cache_ttl_seconds ?? '?'} s, and a fresh probe failed (${refreshError ?? 'unknown error'}). Do not treat it as the current state.`;
+  }
+  return `Probed ${ago}; current within the portal's cache lifetime of ${status?.cache_ttl_seconds ?? '?'} s.`;
+}
+
 export function createPlatformTools({
   env = process.env,
   listAppsFn = () => listApps(env),
@@ -116,12 +128,10 @@ export function createPlatformTools({
     };
   }
 
-  async function platformStatus() {
-    const token = String(portalApiToken ?? '').trim();
-    if (!token) throw new PlatformToolError('IHC_PORTAL_API_TOKEN is not set for the gateway: run install.sh --apply --from foundation', 'not_configured');
+  async function readStatus(token, { refresh = false } = {}) {
     let response;
     try {
-      response = await fetchFn(`${portalUrl.replace(/\/+$/, '')}/api/platform/status`, {
+      response = await fetchFn(`${portalUrl.replace(/\/+$/, '')}/api/platform/status${refresh ? '?refresh=1' : ''}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(timeoutMs),
         redirect: 'manual',
@@ -131,6 +141,25 @@ export function createPlatformTools({
     }
     if (!response.ok) throw new PlatformToolError(`the portal answered HTTP ${response.status}`, 'portal_unavailable');
     return response.json();
+  }
+
+  // O portal serve o status do cache (stale-while-revalidate): uma leitura stale vem na
+  // hora e a atualizacao roda por tras. Um agente nao "pergunta de novo depois", entao
+  // a tool pede ?refresh=1 (a mesma rota, o mesmo token) e devolve a leitura fresca; se o
+  // refresh falhar, devolve a stale dizendo isso. A frase em `freshness` diz a idade.
+  async function platformStatus() {
+    const token = String(portalApiToken ?? '').trim();
+    if (!token) throw new PlatformToolError('IHC_PORTAL_API_TOKEN is not set for the gateway: run install.sh --apply --from foundation', 'not_configured');
+    let status = await readStatus(token);
+    let refreshError = null;
+    if (status?.stale === true) {
+      try {
+        status = await readStatus(token, { refresh: true });
+      } catch (error) {
+        refreshError = error.message;
+      }
+    }
+    return { freshness: freshnessOf(status, refreshError), ...status };
   }
 
   async function directoryCall(what) {

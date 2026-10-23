@@ -48,7 +48,7 @@ Authorization: Bearer <IHC_PORTAL_API_TOKEN>
 | `links` | Public URLs of Gitea, Authentik and, with the ops profile, Portainer, Glances and the file browser (`null` when the profile is off). |
 | `topology` | The installation without secrets: `base_domain`, `portal_url`, `gitea_url`, `gitea_org`, `authentik_url`, `ingress`, `tunnel_provider`, `profiles`, `timezone`, `admin_group`, `user_group`, and the manifest's file name. |
 | `cached` | `true` when served from the portal's cache (Redis), `false` when probed for this request. |
-| `stale` | `true` when the cached reading is older than its TTL: a refresh is running in the background; ask again or use `?refresh=1`. |
+| `stale` | `true` when the cached reading is older than its TTL: a refresh is running in the background; ask again or use `?refresh=1`. A client that acts on the answer (an agent) should not use a stale reading as the current state: the MCP gateway's `ihc_platform_status` asks again with `?refresh=1` whenever it gets `stale: true` ([`mcp-gateway.md`](mcp-gateway.md#tools-of-the-platform)). |
 | `generated_at`, `age_seconds` | When the served reading was built, and its age. |
 | `cache_ttl_seconds`, `cache_expires_at` | The cache's lifetime for this reading (`PLATFORM_STATUS_TTL_SECONDS`, default 60). |
 
