@@ -62,6 +62,7 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
   2. `GET http://<slug>.<BASE_DOMAIN>/health` answers 200;
   3. `GET http://<slug>.<BASE_DOMAIN>/` answers 302 to the sign-in.
 - On a failed run, read the job log, fix the cause in the app repository and push again. The cloud's errors say what to change.
+- Keep its working files (scratch scripts, downloaded archives, copies of a template, test output) in one folder of its own, for example `~/.ihc-agent/<task>/`, never loose in `/tmp`, and delete that folder when the task ends. Nothing it made is left in `/tmp` of the box or of the person's computer. Secrets never go in it: they stay in `<install-dir>/.env`.
 - Report: the URL, the repository, the owner, what the human must do (sign in; for a non-local ingress, open the URL from the company network).
 
 ## The agent never

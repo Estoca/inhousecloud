@@ -64,6 +64,15 @@ Success: all of them print a version. If Docker or Compose is missing, **stop an
 
 For `private` and `public`, the TLS mode and tunnel follow the matrix in [`install-design.md`](install-design.md); a tunnel token is read from the environment variable named in the config (`ingress.cloudflared.tunnel_token_env`), which the human exports before the run.
 
+If the answer to the web terminal is no, the terminal comes up but cannot sign in until the human authorizes its key. Every `./install.sh handoff` says so for as long as the key is missing from `~/.ssh/authorized_keys` (it checks the file, not the config), with the line to run as the installing user:
+
+```
+Web terminal: its key is not authorized yet, so terminal.<BASE_DOMAIN> cannot sign in. To allow it, run as <user>:
+     cat <install dir>/local/wetty/id_ed25519.pub >> ~/.ssh/authorized_keys
+```
+
+Relay that line to the human; do not run it yourself unless they said yes to the question above.
+
 **Never ask for a password, token or key.** The installer generates every secret into `$DIR/.env` (mode 0600).
 
 If the install directory is under `/opt`, it has to exist and belong to the installing user before the plan: `sudo install -d -o "$USER" -g "$(id -gn)" /opt/inhousecloud`. If `sudo -n true` succeeds on the box, run that one command yourself and say so with the plan; otherwise ask the human to run it (it asks for their password, which you never see). Nothing else in the install needs `sudo`.

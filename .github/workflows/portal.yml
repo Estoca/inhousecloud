@@ -2,7 +2,8 @@
 # and pull request that touches it, plus, on the cloud's side, the inventory contract, the
 # status API (scripts/tests/portal-api.sh), the role the portal gives each Authentik group and
 # the MCP gateway (scripts/tests/mcp-gateway.sh) and adopting an existing app from a laptop
-# (scripts/tests/ihc-app-init.sh).
+# (scripts/tests/ihc-app-init.sh), and `install.sh handoff` repeating the web terminal's key
+# command (scripts/tests/handoff-wetty-key.sh).
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -50,3 +51,6 @@ jobs:
       - name: ihc-app init, an existing app adopted from a laptop (fake Gitea)
         working-directory: .
         run: scripts/tests/ihc-app-init.sh
+      - name: install.sh handoff repeats the web terminal's key command while it is needed
+        working-directory: .
+        run: scripts/tests/handoff-wetty-key.sh

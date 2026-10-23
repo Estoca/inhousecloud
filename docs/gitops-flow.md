@@ -45,7 +45,7 @@ The usual case: someone had a coding agent write an app on their own computer, i
 
 What the person needs, once ([`first-user.md`](first-user.md)):
 
-- a Gitea account (the first "Sign in with authentik" at `http://git.<BASE_DOMAIN>`) in a team of the organization with write access and **Create repositories**;
+- a Gitea account (the first "Sign in with authentik" at `http://git.<BASE_DOMAIN>`) in the organization's team `ihc-users`, which the install creates with write access and **Create repositories** ([`first-user.md`](first-user.md));
 - a personal token, Gitea > Settings > Applications, with **organization** and **repository** Read and Write, kept in the environment as `IHC_GITEA_TOKEN`;
 - with `local` ingress, the port-80 tunnel to the box kept open ([`llm-bootstrap.md`](llm-bootstrap.md#16-report-the-install)): the `*.localhost` names, Gitea's included, answer only through it;
 - a copy of this repository on the laptop, for `scripts/ihc-app.sh` (it needs `git`, `curl` and `python3`; Docker only for a local build).
