@@ -6,6 +6,7 @@ This repository installs a company cloud on one machine and puts internal apps o
 |---|---|---|
 | "set up this machine as our company cloud" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 1 | `./install.sh --plan`, then `--non-interactive` after a yes |
 | "build an app for X and put it on the air" | [`docs/agent-setup-contract.md`](docs/agent-setup-contract.md), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 2 | `scripts/ihc-app.sh new <slug>`, write the app, `git push origin main` |
+| "put this app on our cloud" (the code already exists, outside the box: on the person's laptop) | [`docs/gitops-flow.md`](docs/gitops-flow.md#from-a-laptop), [`docs/llm-bootstrap.md`](docs/llm-bootstrap.md) section 5 | `scripts/ihc-app.sh init <slug> --push` in the app's folder, with `IHC_GITEA_URL` and the person's `IHC_GITEA_TOKEN`; no `ssh` to the box |
 | "why is it down", "is the backup ok", "the disk is full", "is it on the air" (an installed box) | [`docs/operator-contract.md`](docs/operator-contract.md), then the runbook in [`docs/runbooks/`](docs/runbooks/) | `scripts/ihc-doctor.sh --install-dir <dir> --json` first (what is wrong and what to do), then `scripts/ihc-operator.sh brief --install-dir <dir>` |
 
 First, always: find out whether the cloud is installed (`llm-bootstrap.md`, section 0). Every command runs from a checkout of this repository **on the box**; on a fresh box, clone it there first (`git clone https://github.com/Estoca/inhousecloud.git ~/inhousecloud`, or `scp -r` this folder):
@@ -26,7 +27,7 @@ http://<slug>.<BASE_DOMAIN>    the app, behind the company sign-in
 
 Hard rules (the full list is in the contract):
 
-- Commands run on the box, as the user that installed it. From elsewhere, through `ssh`.
+- Commands run on the box, as the user that installed it. From elsewhere, through `ssh`. The exception is an app that already exists on a laptop: it reaches the box by `git push` with the person's own token.
 - Never ask for or print passwords, tokens or keys: the installer generates them into `<install-dir>/.env`.
 - Apps never bring their own Postgres, Redis or object storage, never mount the Docker socket, never use host networking.
 - Never delete a database, bucket, route, repository, volume or the install directory.

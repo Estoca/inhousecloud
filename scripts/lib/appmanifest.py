@@ -7,6 +7,10 @@
   appmanifest.py overlay SLUG SERVICE ENV_FILE NETWORK
                                            compose JSON on stdin; print compose.ihc.yml
   appmanifest.py slug-check SLUG           exit 1 with the reason when SLUG is not usable
+  appmanifest.py inspect COMPOSE_FILE|- [SERVICE]
+                                           an existing project's compose file (or its compose
+                                           JSON on stdin): print SERVICE and PORT of its one app
+                                           service, or refuse local infrastructure (ihc-app init)
 
 Errors go to stderr, one per line, each saying what to change. Exit 1 on any error.
 Schema: schemas/company-app.schema.json. Rules: docs/app-contract.md.
@@ -226,6 +230,55 @@ def cmd_compose_check(service):
         sys.exit(1)
 
 
+def container_port(svc):
+    """The port the service listens on, from `ports` ("8000:8000", "127.0.0.1:80:8000",
+    long syntax) or `expose`; "" when the file does not say."""
+    for p in (svc.get("ports") or []) + (svc.get("expose") or []):
+        if isinstance(p, dict):
+            p = p.get("target", "")
+        p = str(p).split("/", 1)[0]
+        if p:
+            return p.rsplit(":", 1)[-1]
+    return ""
+
+
+def cmd_inspect(compose_file, service=""):
+    """For `ihc-app init` on an existing project: print SERVICE and PORT of the one service
+    that is the app (or of SERVICE), or exit 1 saying what to change. Reads the file as
+    written (no interpolation), or `docker compose config --format json` on stdin for "-"."""
+    if compose_file == "-":
+        data = json.load(sys.stdin)
+    else:
+        try:
+            data = config.load(compose_file) or {}
+        except Exception as e:  # the installer's small reader does not know every YAML form
+            sys.exit("compose: cannot read %s without Docker (%s): pass --service and --port" % (compose_file, e))
+    services = data.get("services") or {}
+    app, errors = [], []
+    for name, svc in services.items():
+        svc = svc or {}
+        img = image_name(svc.get("image") or "") if svc.get("image") and not svc.get("build") else ""
+        kind = next((k for k, names in INFRA.items() if img in names or name.lower() in names), "")
+        if kind:
+            errors.append("service %r is a local %s; %s" % (name, {"s3": "S3 server"}.get(kind, kind), ALTERNATIVE[kind]))
+        else:
+            app.append((name, svc))
+    if service:
+        app = [(n, s) for n, s in app if n == service]
+        if not app:
+            errors.append("%s has no service %r" % (compose_file, service))
+    if not errors and len(app) != 1:
+        errors.append("%s has %d app services (%s): the cloud runs one; keep the one that serves "
+                      "HTTP, or pass --service" % (compose_file, len(app), ", ".join(n for n, _ in app) or "none"))
+    if errors:
+        for e in errors:
+            print("compose: " + e, file=sys.stderr)
+        sys.exit(1)
+    name, svc = app[0]
+    print("SERVICE=%s" % shlex.quote(name))
+    print("PORT=%s" % shlex.quote(container_port(svc)))
+
+
 def cmd_overlay(slug, service, env_file, network, data_dir=""):
     data = json.load(sys.stdin)
     lines = [
@@ -267,6 +320,8 @@ def main():
         cmd_compose_check(sys.argv[2])
     elif cmd == "overlay":
         cmd_overlay(*sys.argv[2:7])
+    elif cmd == "inspect":
+        cmd_inspect(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "")
     elif cmd == "slug-check":
         p = slug_problem(sys.argv[2])
         if p:

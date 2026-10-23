@@ -7,6 +7,7 @@ What a terminal-connected coding agent may ask, must do and must never do on a c
 ```text
 "Set up this machine as our company cloud."              -> install (llm-bootstrap.md, section 1)
 "Build an internal app for X and put it on the air."      -> create an app (llm-bootstrap.md, section 2)
+"Put this app (already on my laptop) on our cloud."       -> adopt it from the laptop (llm-bootstrap.md, section 5)
 ```
 
 Before either, run section 0 of the playbook to learn whether the cloud is already installed. A box with `status: completed` is never reinstalled.
@@ -53,8 +54,8 @@ Pick the slug yourself from the request (`despesas`, `expense-report`) and say i
 
 ## The agent must
 
-- Run commands on the box, as the user that installed it, from a checkout of this repository on the box (clone or copy it there first). From another machine, through `ssh`.
-- Use `install.sh` to install and `scripts/ihc-app.sh new` to create an app. Never assemble containers, routes or SSO by hand.
+- Run commands on the box, as the user that installed it, from a checkout of this repository on the box (clone or copy it there first). From another machine, through `ssh`. For an app that already exists on the person's laptop, run `scripts/ihc-app.sh init` there instead, with their `IHC_GITEA_URL` and `IHC_GITEA_TOKEN`: the push is the only thing that reaches the box.
+- Use `install.sh` to install, `scripts/ihc-app.sh new` to create an app and `scripts/ihc-app.sh init` to adopt one that exists. Never assemble containers, routes or SSO by hand.
 - Keep the app inside [`app-contract.md`](app-contract.md): listen on `PORT`, answer `/health`, read `DATABASE_URL` and `REDIS_URL`, create its tables on start, take the user from the `X-authentik-*` headers.
 - Push to `main` to deploy, then confirm three things before saying it is live:
   1. the deploy run of the pushed commit is `success`;
