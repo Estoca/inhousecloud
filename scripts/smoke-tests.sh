@@ -274,13 +274,15 @@ print("; ".join(bad) or "ok %d apps (schema %s)" % (len(apps), d.get("schema_ver
 }
 
 # 25. the MCP gateway (docs/mcp-gateway.md), with APP (smoke-app of test 16, on the air):
-#     anonymous /mcp is 401 and names its metadata, which points at the Authentik provider;
+#     anonymous /mcp is 401 and names its metadata, which points at the Authentik provider,
+#     whose discovery echoes that exact issuer;
 #     a person outside the users group is refused at sign-in; the smoke user gets a token by
 #     the authorization code flow with PKCE (as Claude Code), lists the platform's tools
 #     (catalog only: no admin tools) and APP's ping, calls it (the app checks the actor JWT
 #     and answers with the smoke user's email), sees the portal healthy in ihc_list_apps
 #     (APP is a system test by then: admins only), is refused
-#     ihc_list_people, and APP refuses a call that carries no actor JWT. Then test 16's
+#     ihc_list_people, ihc_platform_status (as an admin, inside the gateway) is not stale
+#     and says its age, and APP refuses a call that carries no actor JWT. Then test 16's
 #     redeploy grants APP's scope to the admin group only: the ping disappears from the
 #     list and the call is refused by the gateway. The token stays in a 0600 file and
 #     travels in curl config files, never on a command line.
@@ -317,13 +319,17 @@ t25_outsider() { # a user in no group: Authentik refuses the MCP client's sign-i
   if [ -s "$T25_WORK/outsider" ]; then T25_BAD="$T25_BAD outsider-got-a-token"; fi
 }
 t25_granted() { # APP
-  local app="$1" out code body
+  local app="$1" out code body iss
   T25_DONE=true
   T25_WORK="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke25.XXXXXX")"; chmod 700 "$T25_WORK"
   out="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' -D "$T25_WORK/h" -X POST -H 'Content-Type: application/json' --data '{}' $(proxy_args "mcp.$BASE_DOMAIN") "$(proxy_url "mcp.$BASE_DOMAIN" /mcp)" 2>/dev/null || echo 000)"
   if [ "$out" = 401 ] && grep -qi '^www-authenticate: Bearer resource_metadata=' "$T25_WORK/h"; then
     body="$(curl -sS --max-time 15 $(proxy_args "mcp.$BASE_DOMAIN") "$(proxy_url "mcp.$BASE_DOMAIN" /.well-known/oauth-protected-resource/mcp)" 2>/dev/null | jsonq get authorization_servers.0)"
     [ "$body" = "$AUTHENTIK_BASE_URL/application/o/${MCP_OIDC_CLIENT_ID:-ihc-mcp}/" ] && T25_GOOD="anonymous 401 with metadata naming $body" || T25_BAD="$T25_BAD metadata:'$body'"
+    # The issuer the client binds its credentials to (RFC 8414 echo, SEP-2352): Authentik's
+    # own discovery must say exactly the string the metadata names.
+    iss="$(curl -sS --max-time 15 $INSECURE $(curl_resolve "$AUTHENTIK_BASE_URL") "${body}.well-known/openid-configuration" 2>/dev/null | jsonq get issuer)"
+    [ -n "$body" ] && [ "$iss" = "$body" ] && T25_GOOD="$T25_GOOD; Authentik's discovery echoes that issuer" || T25_BAD="$T25_BAD issuer-echo:'$iss'"
   else T25_BAD="$T25_BAD anonymous:$out"; fi
   t25_outsider
   out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --oauth-token "$T25_WORK/token" 2>/dev/null | tail -n 1 || true)"
@@ -362,6 +368,12 @@ print("; ".join(bad) or "ok")' "$app")"
   [ "$out" = ok ] && T25_GOOD="$T25_GOOD; ihc_list_apps shows the portal healthy behind the SSO and hides the system test $app" || T25_BAD="$T25_BAD list_apps:$out"
   out="$(mcp_rpc tools/call '{"name":"ihc_list_people","arguments":{}}')"; body="${out%$'\n'*}"
   [ "$(printf '%s' "$body" | jsonq get result.isError)" = true ] && T25_GOOD="$T25_GOOD; ihc_list_people refused" || T25_BAD="$T25_BAD list_people-not-refused"
+  # ihc_platform_status as an admin, inside the gateway with its real portal token: the
+  # reading is never stale and says its age (the smoke user is not an admin).
+  out="$(dc exec -T mcp node --input-type=module -e 'import { createPlatformTools } from "./src/mcp-platform-tools.js";
+const s = await createPlatformTools({ directory: { configured: false } }).call({ admin: true, groups: [] }, "ihc_platform_status");
+console.log(s.stale === false && typeof s.freshness === "string" && Number.isFinite(s.age_seconds) ? "ok " + s.freshness : "bad stale=" + s.stale + " " + (s.freshness ?? "no freshness"))' 2>&1 | tail -n 1)"
+  case "$out" in ok*) T25_GOOD="$T25_GOOD; ihc_platform_status is fresh (${out#ok })" ;; *) T25_BAD="$T25_BAD platform_status:'$(printf '%.160s' "$out")'" ;; esac
   code="$(dc exec -T mcp node -e 'fetch(process.argv[1],{method:"POST",body:"{}"}).then(r=>console.log(r.status)).catch(()=>console.log("000"))' "http://$app:8080/mcp/tools/ping/execute" 2>/dev/null | tr -d '[:space:]')"
   [ "$code" = 401 ] && T25_GOOD="$T25_GOOD; $app refuses a call without an actor JWT (401)" || T25_BAD="$T25_BAD app-without-jwt:$code"
 }

@@ -8,7 +8,9 @@
 #      Authentik access token (ihc-users in, anyone else 403, userinfo fallback, key
 #      rotation), routing by the <slug>__ prefix, scopes granted per group, the last good
 #      catalog on a provider down or slow and never on a 403, the MCP endpoint over HTTP,
-#      and the template app checking a real actor JWT;
+#      one issuer string in the resource metadata, the legacy metadata and the token check
+#      (SEP-2352), ihc_platform_status never answering stale when the portal can probe and
+#      saying the age of its reading, and the template app checking a real actor JWT;
 #   2. the cloud side: the slug mcp is reserved; the loopback redirect rule first-run gives
 #      the OAuth2 provider takes the redirects of local MCP clients and nothing else; the
 #      compose service mcp runs as uid 1000 with no capability, no published port, no
@@ -22,7 +24,7 @@ pass() { printf '[ok] %s\n' "$*"; }
 bad()  { printf '[xx] %s\n' "$*"; FAILS=$((FAILS+1)); }
 
 if (cd "$ROOT/portal" && node --test --test-reporter=dot test/mcp-gateway.test.js >/dev/null 2>&1); then
-  pass "portal/test/mcp-gateway.test.js: actor JWT, access token, routing, scopes, fallback, HTTP, template app"
+  pass "portal/test/mcp-gateway.test.js: actor JWT, access token, one issuer, routing, scopes, fallback, fresh status, HTTP, template app"
 else
   (cd "$ROOT/portal" && node --test test/mcp-gateway.test.js 2>&1 | grep -E '^not ok|✖' | head -20) || true
   bad "portal/test/mcp-gateway.test.js failed (run it in portal/ for the detail)"

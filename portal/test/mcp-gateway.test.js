@@ -17,8 +17,8 @@ import {
   providerFromApp,
   splitToolName,
 } from '../src/mcp-providers.js';
-import { createGatewayApp, protectedResourceMetadata } from '../src/mcp-gateway.js';
-import { createPlatformTools, platformToolsFor } from '../src/mcp-platform-tools.js';
+import { authorizationServerMetadata, createGatewayApp, gatewayConfigFromEnv, protectedResourceMetadata } from '../src/mcp-gateway.js';
+import { createPlatformTools, freshnessOf, platformToolsFor } from '../src/mcp-platform-tools.js';
 import { validateManifest } from '../src/validate-manifest.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -340,6 +340,55 @@ describe('platform tools', () => {
     assert.deepEqual(seen, { url: 'http://portal:8080/api/platform/status', auth: 'Bearer tok' });
     assert.equal((await tools.call(admin, 'ihc_list_people')).count, 1);
   });
+
+  const reading = (extra) => ({ overall: 'healthy', services: [], cached: true, stale: false, generated_at: '2026-10-23T12:00:00.000Z', age_seconds: 12, cache_ttl_seconds: 60, ...extra });
+
+  test('ihc_platform_status: a fresh cached reading is served as is, with its age in a sentence', async () => {
+    const urls = [];
+    const tools = createPlatformTools({
+      portalApiToken: 'tok',
+      fetchFn: async (url) => { urls.push(url); return jsonResponse(200, reading()); },
+      directory: { configured: false },
+    });
+    const out = await tools.call(admin, 'ihc_platform_status');
+    assert.deepEqual(urls, ['http://portal:8080/api/platform/status']);
+    assert.equal(out.stale, false);
+    assert.equal(Object.keys(out)[0], 'freshness', 'the sentence comes first in the text the agent reads');
+    assert.match(out.freshness, /^Probed 12 s ago \(2026-10-23T12:00:00\.000Z\); current within the portal's cache lifetime of 60 s\.$/);
+  });
+
+  test('ihc_platform_status: a stale reading is never the answer when the portal can probe', async () => {
+    const urls = [];
+    const tools = createPlatformTools({
+      portalApiToken: 'tok',
+      fetchFn: async (url) => {
+        urls.push(url);
+        return jsonResponse(200, url.endsWith('?refresh=1')
+          ? reading({ cached: false, age_seconds: 0, generated_at: '2026-10-23T13:00:00.000Z' })
+          : reading({ stale: true, age_seconds: 3400, overall: 'degraded' }));
+      },
+      directory: { configured: false },
+    });
+    const out = await tools.call(admin, 'ihc_platform_status');
+    assert.deepEqual(urls, ['http://portal:8080/api/platform/status', 'http://portal:8080/api/platform/status?refresh=1']);
+    assert.deepEqual([out.stale, out.cached, out.overall, out.age_seconds], [false, false, 'healthy', 0]);
+    assert.match(out.freshness, /^Probed 0 s ago \(2026-10-23T13:00:00\.000Z\)/);
+  });
+
+  test('ihc_platform_status: when the fresh probe fails, the stale reading comes back saying so', async () => {
+    const tools = createPlatformTools({
+      portalApiToken: 'tok',
+      fetchFn: async (url) => (url.endsWith('?refresh=1') ? jsonResponse(502, { error: 'bad gateway' }) : jsonResponse(200, reading({ stale: true, age_seconds: 3400 }))),
+      directory: { configured: false },
+    });
+    const out = await tools.call(admin, 'ihc_platform_status');
+    assert.equal(out.stale, true);
+    assert.match(out.freshness, /^STALE: this reading was probed 3400 s ago .*a fresh probe failed \(the portal answered HTTP 502\)\. Do not treat it as the current state\.$/);
+  });
+
+  test('freshnessOf copes with a reading that has no cache fields (an older portal)', () => {
+    assert.equal(freshnessOf({ checked_at: '2026-10-23T12:00:00.000Z' }), "Probed at 2026-10-23T12:00:00.000Z; current within the portal's cache lifetime of ? s.");
+  });
 });
 
 describe('the gateway over HTTP', () => {
@@ -395,6 +444,20 @@ describe('the gateway over HTTP', () => {
     assert.equal(metadata.resource, `${GATEWAY}/mcp`);
     const as = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
     assert.deepEqual(as.code_challenge_methods_supported, ['S256']);
+  });
+
+  test('one issuer everywhere (SEP-2352): resource metadata, the legacy metadata and the token check name the same string', () => {
+    // The client keys its stored credentials by the issuer of Authentik's own discovery
+    // document, after checking it echoes the URL taken from authorization_servers
+    // (RFC 8414 3.3, exact string). So the gateway must publish Authentik's issuer
+    // verbatim, trailing slash included, and verify tokens against that same string.
+    const derived = gatewayConfigFromEnv({ BASE_DOMAIN: 'cloud.test' });
+    assert.equal(derived.issuer, ISSUER);
+    assert.equal(gatewayConfigFromEnv({ BASE_DOMAIN: 'cloud.localhost' }).issuer, 'http://auth.cloud.localhost/application/o/ihc-mcp/');
+    assert.deepEqual(protectedResourceMetadata(derived).authorization_servers, [derived.issuer]);
+    assert.equal(authorizationServerMetadata(derived).issuer, derived.issuer);
+    assert.equal(authorizationServerMetadata(derived).jwks_uri, `${ISSUER}jwks/`);
+    assert.equal(protectedResourceMetadata(derived).resource, `${GATEWAY}/mcp`);
   });
 
   test('someone outside ihc-users: 403', async () => {

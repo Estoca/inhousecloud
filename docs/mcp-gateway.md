@@ -43,21 +43,40 @@ The sequence a client goes through:
 
 1. `POST /mcp` without a token → `401`, `WWW-Authenticate: Bearer resource_metadata="https://mcp.<BASE_DOMAIN>/.well-known/oauth-protected-resource/mcp"`.
 2. `GET` that URL (RFC 9728) → `{"resource": "https://mcp.<BASE_DOMAIN>/mcp", "authorization_servers": ["https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/"], …}`. The same document is at `/.well-known/oauth-protected-resource`; `/.well-known/oauth-authorization-server` on the gateway lists Authentik's endpoints for clients of the 2025-03-26 specification.
-3. The client reads `https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/.well-known/openid-configuration` and opens the browser on the `authorize` endpoint with `client_id=ihc-mcp`, its redirect URI, `code_challenge` (S256) and `state`.
+3. The client reads `https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/.well-known/openid-configuration`, checks that its `issuer` is exactly the URL it came from (RFC 8414 §3.3; Authentik answers `https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/`, trailing slash included), records that issuer as the authorization server of this resource, and opens the browser on the `authorize` endpoint with `client_id=ihc-mcp`, its redirect URI, `code_challenge` (S256), `state` and `resource`.
 4. The person signs in (password, MFA if set) and consents once. Not in `ihc-users`: Authentik shows "access denied" and no code is issued.
-5. The client exchanges the code with its `code_verifier` at the `token` endpoint and keeps the access and refresh tokens.
+5. The client exchanges the code with its `code_verifier` at the `token` endpoint of the same issuer and keeps the access and refresh tokens, bound to that issuer (below).
 6. Every `POST /mcp` carries `Authorization: Bearer <access token>`. The gateway checks the signature against the provider's JWKS (read inside the network, `http://authentik-server:9000/application/o/ihc-mcp/jwks/`, cached 5 minutes, read again when an unknown `kid` arrives), `iss`, `aud = ihc-mcp` and `exp`. It takes `email` and `groups` from the token, or from Authentik's `userinfo` when the token lacks them (cached until the token expires). Not in `ihc-users` (`USER_GROUP`): `403` with `error="insufficient_scope"`. In `ihc-admins` (`ADMIN_GROUP`): admin tools too.
 
 Authentik down: `503`, never a `401` that would make the client discard a good token.
+
+### One issuer, and the client's "no issuer stamp" warning (SEP-2352)
+
+[SEP-2352](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2352) (in the specification's draft since March 2026, "Authorization Server Binding") asks the **client** to keep its client credentials and tokens per authorization server, keyed by the server's `issuer`, and to re-register or re-authorize when the resource metadata names another one. Nothing in it changes what a server sends: the binding key is the `issuer` of the authorization server's own metadata, which the client reaches through `authorization_servers` of the resource metadata.
+
+What the server side owes, and what the gateway does (unit test "one issuer everywhere", smoke test 25 against a real Authentik):
+
+- `authorization_servers` in the resource metadata is Authentik's issuer verbatim, `https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/`;
+- Authentik's discovery document at that issuer echoes the same string, so the client's RFC 8414 check passes and its stamp is that string;
+- the gateway verifies `iss` of every access token against the same string (`MCP_OIDC_ISSUER`, derived from `AUTHENTIK_URL`), and its own `/.well-known/oauth-authorization-server` (for 2025-03-26 clients, which read it at the gateway's origin; a current client never does, because the resource metadata answers first) carries that issuer and Authentik's endpoints, never others.
+
+The TypeScript SDK (v2, which the MCP Inspector 2.x uses) stamps every token and client registration it saves with that issuer and compares the stamp when it reads them back. When a stored value has no stamp it logs `[mcp-sdk] SEP-2352: stored OAuth credential has no 'issuer' stamp … ensure your provider round-trips the issuer field` and carries on (`discardIfIssuerMismatch` in `packages/client/src/client/auth.ts`). That is the warning a reviewer saw with the Inspector against this gateway, and it is **the client's**: the Inspector returns a client id typed in its form (a *pre-registered* client: `ihc-mcp`, since Authentik does not do dynamic client registration) from a slot that is not keyed by issuer, so the value comes back unstamped. No header, metadata field or token response from the server sets or removes that stamp; the sign-in and the calls work, and the warning is harmless here because there is one authorization server. It goes away on the client's side (a client that keys pre-registered credentials by issuer, or dynamic or metadata-document registration), not on the gateway's.
 
 ## Tools of the platform
 
 | Tool | Who | What |
 |---|---|---|
 | `ihc_list_apps` | `ihc-users` | every app of the catalog (and the portal): name, description, owner, URL, health (its health path through the proxy), SSO (required by the manifest, effective at `/`), and `mcp`: whether it has a provider, its prefix `<slug>__`, and whether the caller has access. Apps a smoke test created only for admins. Optional `query` |
-| `ihc_platform_status` | `ihc-admins` | the JSON of the portal's `GET /api/platform/status` ([`portal-api.md`](portal-api.md)), read with `IHC_PORTAL_API_TOKEN` from inside the network |
+| `ihc_platform_status` | `ihc-admins` | the JSON of the portal's `GET /api/platform/status` ([`portal-api.md`](portal-api.md)), read with `IHC_PORTAL_API_TOKEN` from inside the network, never stale (below), with a `freshness` sentence first |
 | `ihc_list_people` | `ihc-admins` | Authentik's users (username, name, email, active, groups), through the read-only service account `ihc-portal` (`AUTHENTIK_PORTAL_TOKEN`) |
 | `ihc_list_groups` | `ihc-admins` | Authentik's groups and members, the same way |
+
+**Freshness of `ihc_platform_status`.** The portal serves the status from its cache with stale-while-revalidate: a reading older than its TTL (`PLATFORM_STATUS_TTL_SECONDS`, 60 s) comes back at once with `stale: true` while a probe runs behind it. A person reloads the page; an agent would take the old reading as the state of the cloud. So when the first read says `stale: true`, the tool reads again with `?refresh=1` (the same route and token, a fresh probe of every service, a few seconds) and returns that. If the probe fails, it returns the stale reading and says so. Either way the answer starts with `freshness`, one sentence for the agent:
+
+- `Probed 3 s ago (2026-10-23T12:00:00.000Z); current within the portal's cache lifetime of 60 s.`
+- `STALE: this reading was probed 3400 s ago (…), older than the portal's cache lifetime of 60 s, and a fresh probe failed (the portal answered HTTP 502). Do not treat it as the current state.`
+
+The portal's own fields (`stale`, `cached`, `generated_at`, `age_seconds`, `cache_ttl_seconds`) follow unchanged.
 
 The rule is the portal's: someone in `ihc-users` sees the catalog and the apps' health, not the machine's detail nor the list of people. Admin tools are not listed for others, and calling one answers an error result ("access denied").
 
