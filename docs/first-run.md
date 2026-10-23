@@ -640,3 +640,18 @@ On the air in the first round, without help: 35 turns, 34 tool calls (none refus
 - First-run waits up to two minutes for Authentik's OAuth2 scope mappings (the race of "Portal API run", where the worker applied the blueprint late) before creating any provider.
 
 **Not exercised.** The OAuth sign-in from Claude Code or claude.ai with a browser (the flow was driven by `sso-login-check.sh`, the same requests, and Claude Code was given a token); TLS `internal`, `private` and `public` ingress (claude.ai needs the last); a provider that is down while listed (the fallback catalog is unit-tested: `scripts/tests/mcp-gateway.sh`); `ops`, `storage`, `agent`; macOS with Docker Desktop. The VM was deleted.
+
+## MCP gateway follow-up run (issuer, fresh status)
+
+Two observations from an outside review with the MCP Inspector against the gateway ([`mcp-gateway.md`](mcp-gateway.md)): the SDK warned that the stored OAuth credential had no `issuer` stamp (SEP-2352), and the first `ihc_platform_status` came back healthy but `stale: true`. On 2026-10-23.
+
+**Setup.** One new Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1 LTS, Docker 29.9.2 rootless), 2 CPU, 6 GiB, 30 GiB, no mounts and every port forward off, the branch brought in as a git bundle, `bootstrap/config.example.yaml` (core, backup on, `local` ingress, TLS off).
+
+| Step | Result |
+|---|---|
+| `install.sh --non-interactive` with the branch | 309 s, exit 0, **21 passed, 0 failed, 4 skipped** |
+| Test 25 | as in "MCP gateway run", plus "Authentik's discovery echoes that issuer" and "ihc_platform_status is fresh (Probed 6 s ago …; current within the portal's cache lifetime of 60 s.)" |
+| `ihc_platform_status` as an admin inside the gateway, then again after 75 s | first: `cached` true, `stale` false, age 37 s, 33 ms; second (the cached reading was 112 s old, past its 60 s TTL): `cached` false, `stale` false, age 0, 3.2 s: the tool asked for the fresh probe instead of returning the stale reading |
+| The SEP-2352 warning, with the MCP TypeScript SDK the Inspector uses (`@modelcontextprotocol/client` 2.3.1, on the box), `auth()` against `http://mcp.cloud.localhost/mcp` | both runs discovered the resource metadata, resolved the issuer `http://auth.cloud.localhost/application/o/ihc-mcp/` (Authentik's echo accepted) and stopped at the redirect to `authorize` with `resource=http://mcp.cloud.localhost/mcp`. A provider that returns the pre-registered `client_id` as typed, the way the Inspector stores it: the warning `[mcp-sdk] SEP-2352: stored OAuth credential has no 'issuer' stamp …`. A provider that keys it by `ctx.issuer`: no warning. Same server, same answers: the warning is the client's storage, as [`mcp-gateway.md`](mcp-gateway.md#one-issuer-and-the-clients-no-issuer-stamp-warning-sep-2352) explains, and no change on the gateway makes it go away |
+
+**Not exercised.** The Inspector's own web UI in a browser: the Mac session could not hold port 80 for the tunnel to the box (the resource metadata and the issuer name port 80, so a tunnel on another port cannot carry the sign-in), so the SDK's code path was run headless on the box instead. The VM was deleted.
