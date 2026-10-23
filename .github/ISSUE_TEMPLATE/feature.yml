@@ -1,0 +1,25 @@
+name: Feature
+description: Something the cloud should do that it does not do yet.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you, your team or your agent are trying to do, and where the cloud gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: The behavior you have in mind. A command, a flag, a stage, a portal page, an app contract field.
+  - type: textarea
+    id: security
+    attributes:
+      label: Does it change a rule of docs/security.md?
+      description: For example an app that needs its own service, a deploy that is not a push to main, a tool that writes. Say which rule and why it is worth it.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead

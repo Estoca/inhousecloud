@@ -1,0 +1,55 @@
+name: Bug
+description: Something in the installer, a script, the portal or the gateway does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A vulnerability goes to a private advisory instead (SECURITY.md), not here.
+        Before pasting anything: remove passwords, tokens and keys, and replace real domains, IP addresses, emails and company names with placeholders (`acme`, `cloud.example`, `admin@example.com`).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The commands, from a clean box if you can (the Lima path of docs/try-it.md is a good start).
+      placeholder: |
+        1. ./install.sh --non-interactive --config bootstrap/config.example.yaml
+        2. ...
+  - type: textarea
+    id: doctor
+    attributes:
+      label: ihc doctor --json
+      description: "On the box: `cd /opt/inhousecloud && ./ihc doctor --json` (or `scripts/ihc-doctor.sh --install-dir <dir> --json`). It prints no secret; check it for names anyway."
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: install.sh status
+      description: "The relevant part of `./install.sh status --install-dir <dir>`, and of the install log if the install failed (the stage and the lines around the error)."
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`git rev-parse --short HEAD` of the checkout that installed it."
+    validations:
+      required: true
+  - type: textarea
+    id: box
+    attributes:
+      label: The box
+      description: OS and version, CPU and memory, how Docker runs (rootless, docker group, Docker Desktop) and its version, the ingress mode (local, private, public) and the profiles on.
+      placeholder: Ubuntu 26.04, 2 CPU, 4 GiB, Docker 29.9 rootless, local ingress, no optional profiles
+    validations:
+      required: true
