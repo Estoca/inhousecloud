@@ -1,7 +1,8 @@
 # Docs
 
-Documentos de referencia do portal do InHouseCloud.
+Reference documents of the InHouseCloud portal.
 
-1. `COMPANY_APP_YAML.md`: o contrato do manifesto dos apps.
-2. `DATABASE.md`: o banco do proprio portal.
-3. `SEGURANCA.md`: exposicao, autenticacao das rotas e o que ainda escreve.
+1. `DATABASE.md`: the portal's own database.
+2. `SECURITY.md`: exposure, route authentication and what still writes (formerly `SEGURANCA.md`).
+
+The app manifest contract (formerly `COMPANY_APP_YAML.md`) is the cloud's `docs/app-contract.md`, with the schema in `schemas/company-app.schema.json`.

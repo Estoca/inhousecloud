@@ -193,7 +193,7 @@ Day zero, in this order:
 People: docs/first-user.md (groups ihc-users and ihc-admins; mail, password recovery and invitations are off).
 ```
 
-`./install.sh handoff` prints these steps again. Whenever something looks wrong later, `cd /opt/inhousecloud && ./ihc doctor` checks the whole box in a few seconds and prints, for each problem, what to do. The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`) and to `private` ingress. Smoke test 16 deploys a test app (`smoke-app`) and removes it afterwards, so `ihc-app list` starts empty. Run `./install.sh` without arguments instead to answer the questions yourself; [`../README.md`](../README.md#install) has the options.
+`./install.sh handoff` prints these steps again. Whenever something looks wrong later, `cd /opt/inhousecloud && ./ihc doctor` checks the whole box in a few seconds and prints, for each problem, what to do. The 4 skipped tests belong to the optional profiles (`ops`, `storage`, `agent`) and to `private` ingress. Smoke test 16 deploys a test app (`smoke-app`) and removes it afterwards, so `ihc-app list` starts empty. Run `./install.sh` without arguments instead to answer the questions yourself; [`install.md`](install.md#install) has the options.
 
 ## 4. Open the portal
 
@@ -266,6 +266,6 @@ Mac with Docker Desktop: [Mac 5](#mac-5-operate-check-stop-remove). Any other bo
 
 ## What this does not show yet
 
-- **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (Cloudflare tunnel or DNS) exists in the installer and is not tested end to end. `local`, used here, answers on the box (and on the Mac through Lima's forward).
-- **The portal, beyond reading.** It shows the catalog, health, SSO, deploys, the platform status and who is in which Authentik group, and only reads; a token for agents on its status API and the MCP gateway are next ([`../README.md`](../README.md#roadmap)).
+- **Reaching it from other computers.** `private` ingress (Tailscale) is tested end to end: every app at `https://<slug>.<domain>` on the tailnet only, with the installation's own CA and split DNS; it needs a Tailscale auth key and one DNS setting in the Tailscale admin console ([`install-design.md`](install-design.md#private-ingress-private--internal--tailscale)). `public` (a Cloudflare tunnel or public DNS), for a cloud on the open internet, is a later step: the installer has the modes, and they get their own run first. `local`, used here, answers on the box (and on the Mac through Lima's forward).
+- **The portal, beyond reading.** It shows the catalog, health, SSO, deploys, the platform status and who is in which Authentik group, and only reads. Agents read its status through a read-only API token ([`portal-api.md`](portal-api.md)) and use the cloud through the MCP gateway ([`mcp-gateway.md`](mcp-gateway.md)); write tools in the gateway are next ([`roadmap.md`](roadmap.md)).
 - **Mail.** Authentik and Gitea are installed with SMTP off: no password recovery and no invitations; an admin creates each person and sets the first password ([`first-user.md`](first-user.md)).
