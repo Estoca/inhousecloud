@@ -45,9 +45,11 @@ export function dockerGet(path, { env = process.env, timeoutMs = 10_000 } = {}) 
   });
 }
 
-// "0.0.0.0:8200->8000/tcp, 8080/tcp", como o `docker ps` escreve.
-export function formatPorts(ports = []) {
-  return [...ports]
+// "0.0.0.0:8200->8000/tcp, 8080/tcp", como o `docker ps` escreve. Docker Desktop (API 1.56)
+// devolve `Ports: null` para um container sem portas; o Engine devolve `[]`. Um default de
+// parâmetro não cobre `null`, por isso o `?? []`.
+export function formatPorts(ports) {
+  return [...(Array.isArray(ports) ? ports : [])]
     .sort((a, b) => (a.PrivatePort - b.PrivatePort) || String(a.IP ?? '').localeCompare(String(b.IP ?? '')))
     .map((port) => {
       const inner = `${port.PrivatePort}/${port.Type || 'tcp'}`;
