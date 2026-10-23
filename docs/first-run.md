@@ -787,3 +787,66 @@ What changed:
 - **Agents keep their working files in a folder of their own** and delete it at the end; nothing stays in `/tmp` of the box or the laptop (`AGENTS.md`, `agent-setup-contract.md`).
 
 Not covered: a person who signs in through Authentik (the team test used a local Gitea user; the team's rights do not depend on how the account signs in), an agent following the new `/tmp` rule (it is a contract line, no run), ingress other than `local`. The VM was deleted.
+
+## Laptop run with Codex and ihc-app init
+
+"Laptop run: an existing app deployed by push" again, with the two things it could not cover: an agent that is not Claude Code, and `ihc-app init` already on `main`. On 2026-10-23.
+
+**The cloud.** A clean Lima VM as before (Lima 2.2.1, `template:docker`, Ubuntu 26.04.1, Docker rootless; 2 CPU, 4 GiB, 30 GiB; no mounts, every port forward ignored), `main` installed with `install.sh --non-interactive` from `bootstrap/config.example.yaml` (core and backup, `local` ingress): 5 min 27 s, completed, smoke tests 21 passed, 0 failed, 4 skipped, 13 of 13 services healthy. The person, as [`first-user.md`](first-user.md) says: a user `bia` with a fictitious email in `ihc-users` (Authentik's API, the three steps of the UI), her first "Sign in with authentik" in Gitea in a browser, the admin adding her to the team `ihc-users` that the install now makes (API; the team came with "Create repositories"), and a token she made in Gitea's UI with exactly the two scopes the doc names. **The doc was enough**: the screen matched it field for field, and the token created the repository on the first try. The port-80 tunnel was open on the host for the whole run.
+
+**The laptop.** The Codex CLI 0.163.0 (`gpt-6.1-sol`) with the isolated `CODEX_HOME` of "Cold install run with Codex" (only `auth.json`; `approval_policy = "never"`, `sandbox_mode = "workspace-write"`, network on), `codex exec --skip-git-repo-check --json` in an empty folder for the app, `codex exec resume` for the person's answers. Its environment held only `HOME`, `PATH`, `LANG`, `CODEX_HOME`, a global Git config with the person's fictitious name and email, and, from phase (b) on, `IHC_GITEA_TOKEN`. A `git archive` of `main` in another folder of the home directory, readable by the agent; Docker Desktop running on the host.
+
+The prompts of the earlier run, with another app:
+
+> (a) Oi! Faz um app de controle de empréstimos de equipamentos, simples, com banco de dados, nessa pasta. Quero testar aqui no meu computador primeiro. Me fala como abrir quando estiver pronto.
+>
+> (b) Ficou ótimo, testei aqui e funciona! Agora coloca isso no ar na nuvem da empresa, para o pessoal usar. O endereço é http://portal.cloud.localhost, o git da empresa é http://git.cloud.localhost, meu token está na variável IHC_GITEA_TOKEN, e a pasta ~/<the export> é uma cópia do repositório da cloud se precisar.
+
+**Result: on the air with no stop.** One call per phase; the person never had to answer.
+
+| Call | Agent time | What happened |
+|---|---|---|
+| (a) | 143 s | Python standard library and SQLite in `dados/emprestimos.db` next to the code, `127.0.0.1:8000`, equipment, loans, returns, overdue and history, one open loan per item (a partial unique index). Tested by itself. Run by the person: `http://127.0.0.1:8000` answered |
+| (b) | 111 s | Read `AGENTS.md` (Codex loads it by itself), `gitops-flow.md`, `app-contract.md`, section 5 of `llm-bootstrap.md` and `ihc-app.sh`. Changed the code as section 5.2 says: `HOST`/`PORT` from the environment, SQLite under `DATA_DIR`, `/health` that touches the database, `X-authentik-email` required when deployed; wrote a Python `Dockerfile`. **Ran `ihc-app init emprestimos --port 8000`**, which wrote its files and then failed on `.git: Operation not permitted`. Set `database.required` and `redis.required` to `false` (it keeps SQLite under `/data`), ran `init` again with `GIT_DIR` pointing to a second Git directory beside the project; that one went through (commit, repository, Actions). Its own push with `GIT_ASKPASS` failed with "Authentication failed"; it read the cause and pushed again with `-c credential.helper=`. Followed the run with the token, checked `/health` and the anonymous redirect |
+
+| | Result |
+|---|---|
+| Deploy run | `success`, 13 s (15:35:37 to 15:35:50) |
+| Phase (b), request to the run green | **1 min 27 s** (dry run 3: 6 min 15 s with three stops) |
+| Checked by hand | `/health` 200, `/` 302 to the outpost through the tunnel; `emprestimos.db` in `/data` of the container (a bind mount backed up with the install); `emprestimos` in `ihc-app list` with the person as owner; author of the commit the person |
+| Docker on the laptop | never called: it wrote the `Dockerfile` without building it, and the first build was the box's |
+| Token and password in the transcripts | the token and the person's password checked against both event streams, the Codex session files and the project folder: 0 found |
+
+What it exposed, and what changed:
+
+- **Codex's `workspace-write` sandbox keeps the folder's `.git` read-only**, so `init` could not create the repository; it had already written its files and stopped halfway with Git's bare error. `init` now checks that it can create (or write) the Git directory before it writes anything, and says why when it cannot: "an agent's sandbox, such as Codex's workspace-write, keeps .git read-only. Run init again outside the sandbox, or ask the person to run it in their own terminal". Checked under Codex's own sandbox (`codex sandbox` with `workspace-write`): refused, folder unchanged. The agent's way around it, a second Git directory, deploys but leaves a folder where plain `git` sees no repository; section 5.3 now says not to.
+- **A password the Mac kept for the host beat the token.** Apple's `git` has the `osxkeychain` credential helper on, so after a push with `GIT_ASKPASS` succeeds, `git` stores that token in the Keychain; dry run 3's `init --push` had stored its token there. With that token dead, the Keychain answered first, the push failed with "Authentication failed", and the sandbox would not let `git` erase it. Every laptop that ever rotates a token hits the same. `init` (its probe and its push) now runs `git -c credential.helper=`: only the token answers, and nothing is stored. Run on the host with that stale Keychain entry: pushed in 1 s, deploy green, the Keychain entry left as it was. `gitops-flow.md` explains it, says that `init … --push` again is how to push later with the token (checked: a second commit, pushed and deployed), and how to clear the old entry.
+- `scripts/tests/ihc-app-init.sh` (CI) has both cases: a stale password in a credential helper (the push still uses the token and the token is not stored; on `main` the token ended up in the helper) and a folder where `.git` cannot be created (refused, nothing written).
+- The token the doc asks for cannot list organizations (`GET /user/orgs` needs `read:user`), so every `init` prints "using company". Expected and right on a default install; left as is.
+- The agent chose SQLite under `/data` over Postgres, which the contract allows; the person's local records stayed on the laptop, as section 5.4 says.
+
+## Laptop run without Docker
+
+The same day, the same cloud and person, a second Codex session on a laptop where `docker` does not exist: the agent cannot run the app in a container, only code, Git and the push.
+
+**Setup.** As above, plus: `PATH` without `/usr/local/bin` (where Docker Desktop links `docker`), a `ZDOTDIR` whose `.zprofile` puts first a folder where `docker`, `docker-compose`, `podman`, `nerdctl`, `limactl` and `lima` answer `zsh: command not found` with status 127 (Codex runs every command in `zsh -lc`, and macOS's `path_helper` puts `/usr/local/bin` back in a login shell), and no `DOCKER_HOST`. Checked from the agent's shell: `docker ps` gives `command not found`, 127; `git`, `python3` (Apple's), `node` and `curl` there. The Docker socket stayed on the host; nothing used it. The app was another one, so the slug would not meet the first run's: "um app de controle de visitantes da recepção", the rest of both prompts word for word.
+
+**Result: on the air with no stop, and Docker never tried.**
+
+| Call | Agent time | What happened |
+|---|---|---|
+| (a) | 163 s | Python and SQLite under `data/`, its own `test_app.py`; tests passed. Run by the person: 200 |
+| (b) | 161 s | Read the same docs; adapted the code (`PORT`, `DATA_DIR`, `/health`, the person's header), wrote a Python `Dockerfile`, ran its unit tests with `python3 -m unittest` and `appmanifest.py vars` on the manifest. `init visitantes --port 8000`: the same `.git: Operation not permitted`. Copied the project into a `.deploy-repo` subfolder (the sandbox protects only the `.git` at the root) and ran `init --dir .deploy-repo --push` there: commit, repository, Actions, then **15 tries of the probe failing on "Authentication failed"**: the stale Keychain entry, inside `init` itself. Pushed by hand with `-c credential.helper=`, followed the run, checked |
+
+| | Result |
+|---|---|
+| Deploy run | `success`, 11 s (15:43:47 to 15:43:58): the image's first build was on the box |
+| Phase (b), request to the run green | **2 min 26 s**; the extra minute against the run with Docker was the probe's 30 s and the copy into a subfolder, not Docker |
+| `docker` in the transcripts | no command called it (no `command not found` anywhere); the agent never asked for it and never said the app needed it |
+| `init` without Docker | worked: with no compose file in the project it never calls Docker; with one, it reads it with the installer's YAML reader |
+| Checked by hand | `/health` 200, `/` 302 to the outpost; `visitantes` in `ihc-app list` with the person as owner |
+| Token and password in the transcripts | 0 found, as above |
+
+What the doc should tell a person without Docker, now in [`gitops-flow.md`](gitops-flow.md#no-docker-on-the-laptop), section 5.1 of `llm-bootstrap.md` and `AGENTS.md`: Docker is not needed on the laptop; run the app as it was written and let the box build; keep the `Dockerfile` plain because the first deploy is its first build; a failed build fails the run, not the app already on the air (the job's `docker compose up -d --build` builds before it replaces the container: read from the workflow, not tried here, since this session's permission mode refused the test push of a broken `Dockerfile`); and read the failed job's log with the person's token (`GET …/actions/runs/<run>/jobs`, then `…/actions/jobs/<job>/logs`: checked, 200 with the token of `first-user.md`).
+
+Not covered: a Codex session with approvals (`on-request`), which could have run `init` outside the sandbox on the person's yes; a broken `Dockerfile` pushed without Docker; Windows and Linux laptops; ingress other than `local`. The VM, the exports, the app folders and the temporary `CODEX_HOME` were deleted.

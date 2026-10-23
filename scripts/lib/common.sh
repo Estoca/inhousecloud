@@ -48,13 +48,14 @@ ihc_compat_env
 # of URL (credentials through the GIT_ASKPASS helper ASKPASS) until it answers, so a push
 # right after the repository was created does not meet a Gitea that is not ready. Sets
 # GIT_PROBE_TRIES and GIT_PROBE_ERR (the last line git said); returns 1 when it never answered.
+# No credential helper: only the askpass answers (see push_main in ihc-app.sh).
 git_auth_probe() {
   local url="$1" ap="$2" max="${3:-30}" every="${4:-2}" t0 err
   t0=$(date +%s); GIT_PROBE_TRIES=0; GIT_PROBE_ERR=""
   err="$(mktemp "${TMPDIR:-/tmp}/ihc-probe.XXXXXX")"
   while :; do
     GIT_PROBE_TRIES=$((GIT_PROBE_TRIES + 1))
-    if GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$url" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
+    if GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote "$url" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
     GIT_PROBE_ERR="$(tail -n 1 "$err")"
     [ $(( $(date +%s) - t0 + every )) -gt "$max" ] && break
     sleep "$every"

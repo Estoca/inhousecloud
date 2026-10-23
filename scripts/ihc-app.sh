@@ -188,13 +188,15 @@ gitea_repo() {
 }
 
 # push_main DIR: the current commit of DIR to main of the repository: the deploy. The
-# token goes to git through GIT_ASKPASS, never in a URL or an argument.
+# token goes to git through GIT_ASKPASS, never in a URL or an argument, and no credential
+# helper takes part: an old password the laptop keeps for this host (macOS Keychain, through
+# the osxkeychain helper of Apple's git) would be sent instead, and the token would be stored.
 push_main() {
   local ap
   ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; askpass "$ap" "ihc"
   IHC_GIT_TOKEN="$G_TOKEN" git_auth_probe "$G_PUSH" "$ap" 30 2 || { rm -f "$ap"; die "git on $G_ORG/$SLUG does not answer with the token after $GIT_PROBE_TRIES tries: ${GIT_PROBE_ERR:-no message}"; }
   [ "$GIT_PROBE_TRIES" -le 1 ] || log "git answered with the token after $GIT_PROBE_TRIES tries"
-  IHC_GIT_TOKEN="$G_TOKEN" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$1" push -q "$G_PUSH" HEAD:main || { rm -f "$ap"; die "push to $G_ORG/$SLUG failed"; }
+  IHC_GIT_TOKEN="$G_TOKEN" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -c credential.helper= -C "$1" push -q "$G_PUSH" HEAD:main || { rm -f "$ap"; die "push to $G_ORG/$SLUG failed"; }
   rm -f "$ap"
   ok "pushed main: the deploy workflow runs now ($G_URL/$G_ORG/$SLUG/actions)"
 }
@@ -282,7 +284,7 @@ cmd_init() {
   [ -n "$SLUG" ] || die "usage: ihc-app init SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--port P] [--service S] [--health PATH] [--push]"
   $PY "$IHC_LIB/appmanifest.py" slug-check "$SLUG" || exit 1
   have git || die "git is required"
-  local dir tmpl vars json f fresh=false created="" remote cur
+  local dir tmpl vars json f gd fresh=false created="" remote cur
   dir="${DIR:-.}"
   [ -d "$dir" ] || die "$dir is not a folder: run init in the app's folder (a new app from nothing: ihc-app new $SLUG)"
   dir="$(cd "$dir" && pwd)"; tmpl="$IHC_ROOT/templates/app"
@@ -316,6 +318,16 @@ cmd_init() {
   [ -n "$OWNER" ] || OWNER="$(git -C "$dir" config user.email 2>/dev/null || true)"
   [ -n "$OWNER" ] || die "--owner EMAIL is required: the person who answers for the app"
   [ -n "$NAME" ] || NAME="$(printf '%s' "$SLUG" | tr '-' ' ' | $PY -c 'import sys;print(sys.stdin.read().strip().title())')"
+  # The commit needs a writable Git directory. An agent's sandbox may protect it (Codex's
+  # workspace-write keeps .git read-only): say so before writing anything, not halfway.
+  gd="$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  if [ -n "$gd" ]; then
+    { : > "$gd/ihc-write-check" && rm -f "$gd/ihc-write-check"; } 2>/dev/null \
+      || die "cannot write $gd: this shell may not change the Git repository (an agent's sandbox, such as Codex's workspace-write, keeps .git read-only). Run init again outside the sandbox, or ask the person to run it in their own terminal"
+  elif [ -z "${GIT_DIR:-}" ]; then
+    { mkdir "$dir/.git" && rmdir "$dir/.git"; } 2>/dev/null \
+      || die "cannot create $dir/.git: this shell may not create a Git repository there (an agent's sandbox, such as Codex's workspace-write, protects .git). Run init again outside the sandbox, or ask the person to run it in their own terminal"
+  fi
 
   step "adopt $dir as the app $SLUG"
   if [ ! -f "$dir/Dockerfile" ] && [ -f "$dir/package.json" ]; then
