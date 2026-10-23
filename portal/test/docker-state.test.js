@@ -28,6 +28,10 @@ test('normalizeApiContainer gives the docker ps shape with compose labels', () =
   assert.equal(row.docker_service, 'app');
   assert.equal(row.size_writable_bytes, 1500000);
   assert.equal(formatPorts([{ IP: '::', PrivatePort: 80, PublicPort: 80, Type: 'tcp' }]), '[::]:80->80/tcp');
+  // Docker Desktop devolve null, não [], para um container sem portas (visto na API 1.56).
+  assert.equal(formatPorts(null), '');
+  assert.equal(formatPorts(undefined), '');
+  assert.equal(normalizeApiContainer({ Id: 'abc', Names: ['/x'], Ports: null }).ports, '');
 });
 
 test('normalizeApiStats computes what docker stats shows', () => {
