@@ -25,7 +25,7 @@ scripts/ihc-app.sh new expense-report --owner maria@example.com --install-dir /o
 cd expense-report
 ```
 
-It copies [`templates/app`](../templates/app) (a runnable Node app, `company-app.yaml`, `docker-compose.yml`, `.env.example`, `.gitea/workflows/deploy.yml`), fills in the slug, name, owner and `<slug>.<BASE_DOMAIN>`, makes the first commit on `main`, creates the private repository `<org>/<slug>` through the Gitea API with Actions enabled, and sets it as `origin`. Away from the box it reads `IHC_GITEA_URL`, `IHC_GITEA_TOKEN` (the person's own token, with repository write), `IHC_GITEA_ORG` and `IHC_BASE_DOMAIN` from the environment instead of the install's `.env`. `--push` pushes right away.
+It copies [`templates/app`](../templates/app) (a runnable Node app, `company-app.yaml`, `docker-compose.yml`, `.env.example`, `.gitea/workflows/deploy.yml`), fills in the slug, name, owner and `<slug>.<BASE_DOMAIN>`, makes the first commit on `main`, creates the private repository `<org>/<slug>` through the Gitea API with Actions enabled, and sets it as `origin`. Away from the box it reads the person's own `IHC_GITEA_URL` and `IHC_GITEA_TOKEN` from the environment instead of the install's `.env` ([From a laptop](#from-a-laptop)). `--push` pushes right away. For an app that already exists in a folder, `ihc-app init` instead (below).
 
 The slug is the repository name, the hostname, the Compose project, the network alias and the base of every resource name. It is 3 to 32 lowercase letters, digits and hyphens; names the platform uses (`portal`, `git`, `auth`, `postgres`, `redis`, the other Compose services, `app-*`, `ihc-*`) are refused.
 
@@ -38,6 +38,41 @@ git push -u origin main
 ```
 
 That is the deploy. There is nothing else to request or approve: whoever can push to `main` of a repository in the organization can put that repository on the air. Control it where it belongs, in Gitea: organization membership, team permissions and branch protection on `main` (required reviews, if the team wants a second pair of eyes before a deploy). Pull requests run whatever CI the repository declares on the CI runner, never the deploy.
+
+## From a laptop
+
+The usual case: someone had a coding agent write an app on their own computer, it runs there, and now it should be on the company cloud. Nothing has to happen on the box and nobody needs `ssh` to it: the code arrives by `git push`, like every deploy.
+
+What the person needs, once ([`first-user.md`](first-user.md)):
+
+- a Gitea account (the first "Sign in with authentik" at `http://git.<BASE_DOMAIN>`) in a team of the organization with write access and **Create repositories**;
+- a personal token, Gitea > Settings > Applications, with **organization** and **repository** Read and Write, kept in the environment as `IHC_GITEA_TOKEN`;
+- with `local` ingress, the port-80 tunnel to the box kept open ([`llm-bootstrap.md`](llm-bootstrap.md#16-report-the-install)): the `*.localhost` names, Gitea's included, answer only through it;
+- a copy of this repository on the laptop, for `scripts/ihc-app.sh` (it needs `git`, `curl` and `python3`; Docker only for a local build).
+
+Then, in the app's folder:
+
+```bash
+export IHC_GITEA_URL=http://git.cloud.localhost      # IHC_GITEA_TOKEN is already set
+~/inhousecloud/scripts/ihc-app.sh init room-booking --port 8000 --push
+```
+
+`ihc-app init` adopts the project as it is: it never edits the app's code or a compose file the project already has. It refuses before writing anything when the project cannot run on the cloud (no `Dockerfile` and no compose file; a compose file with its own Postgres, Redis or S3 server, with the alternative), then adds only what is missing:
+
+| File | When | What |
+|---|---|---|
+| `company-app.yaml` | always, unless present | the template's manifest with the slug, owner (`git config user.email`, or `--owner`), domain, the compose service and port (`--port`, else the compose file's, else 8080), `--health` (default `/health`); no `mcp` section, since the app serves no tools yet |
+| `.gitea/workflows/deploy.yml` | unless present | the template's deploy job |
+| `docker-compose.yml` | only when there is no compose file | one service, `build: .`, the port, the env file optional so it also runs on the laptop |
+| `Dockerfile` | only for a Node project without one | `npm install`, `npm start`; any other language brings its own |
+| `.env.example` | unless present | `PORT` |
+| `.gitignore` | adds what is missing | `.env` and local database files (`*.db`, `*.sqlite`, `*.sqlite3`): the cloud gives the app a fresh database |
+
+It runs `git init` on `main` when the folder is not a repository (and commits everything not ignored), or commits only the files it added when it is; creates the private `<org>/<slug>` with Actions on; and adds it as the remote `origin`, or `cloud` when `origin` already points elsewhere. `--push` pushes the current commit to `main`: the deploy. The token reaches `git` through `GIT_ASKPASS`, never in a URL or `.git/config`. Run twice, it changes nothing. The organization is the one the token belongs to (when the token can list them) or `company`; `IHC_GITEA_ORG` and `IHC_BASE_DOMAIN` override.
+
+What `init` cannot do is change the code, so before the push the app must, as on the box: listen on `0.0.0.0` and `PORT` (a laptop app often binds `127.0.0.1` and a fixed port); answer `GET /health` with 200; keep its data in `DATABASE_URL` (Postgres, created empty) or under `DATA_DIR` (`/data`), never in a file next to the code, which a redeploy throws away; read the person from `X-authentik-email` ([`app-contract.md`](app-contract.md)). A laptop app on SQLite can keep it locally and use `DATABASE_URL` when it is set.
+
+From there on, every `git push` to `main` (of `origin` or `cloud`) is a deploy; follow it in `http://git.<BASE_DOMAIN>/<org>/<slug>/actions` with the same token (`GET /api/v1/repos/<org>/<slug>/actions/tasks`).
 
 ## 3. What the deploy job does
 

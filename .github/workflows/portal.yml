@@ -1,7 +1,8 @@
 # The portal (portal/): the private names check, its tests and its build, on every push
 # and pull request that touches it, plus, on the cloud's side, the inventory contract, the
 # status API (scripts/tests/portal-api.sh), the role the portal gives each Authentik group and
-# the MCP gateway (scripts/tests/mcp-gateway.sh).
+# the MCP gateway (scripts/tests/mcp-gateway.sh) and adopting an existing app from a laptop
+# (scripts/tests/ihc-app-init.sh).
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -46,3 +47,6 @@ jobs:
       - name: copy_portal leaves a tree the image's node user can read
         working-directory: .
         run: scripts/tests/copy-portal-perms.sh
+      - name: ihc-app init, an existing app adopted from a laptop (fake Gitea)
+        working-directory: .
+        run: scripts/tests/ihc-app-init.sh

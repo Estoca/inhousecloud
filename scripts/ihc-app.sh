@@ -5,6 +5,14 @@
 #       Generate the app repository from templates/app (manifest, compose file,
 #       .gitea/workflows/deploy.yml), create SLUG in the Gitea organization and set it as
 #       origin. --push pushes main, which is the deploy.
+#   ihc-app init SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--port P] [--service S]
+#                [--health PATH] [--push]
+#       Adopt a project that already exists (DIR, default the current folder): add what
+#       the deploy needs and is missing (company-app.yaml, .gitea/workflows/deploy.yml,
+#       .env.example; docker-compose.yml and a Dockerfile only when there are none),
+#       never touching the app's code; git init and commit them, create SLUG in the Gitea
+#       organization and set it as a remote (origin, or `cloud` when origin is taken).
+#       --push pushes the current commit to main, which is the deploy.
 #   ihc-app provision SLUG [--manifest FILE]
 #       The executor, run on the box by the deploy job: validates the manifest and the
 #       compose file, then ensures the app's database and role on the shared Postgres,
@@ -24,8 +32,10 @@
 # Idempotent: every step probes first; a second run keeps every password. Only `remove`
 # deletes a database, role, bucket, route or Authentik object, and only for a system test. Secrets go to the app's env file
 # and travel on stdin or in the environment, never on a command line or in the output.
-# `new` away from the box reads IHC_GITEA_URL, IHC_GITEA_TOKEN, IHC_GITEA_ORG
-# and IHC_BASE_DOMAIN from the environment when there is no readable install .env.
+# `new` and `init` away from the box (a laptop) read IHC_GITEA_URL and IHC_GITEA_TOKEN (the
+# person's own token, with repository write) from the environment when there is no
+# readable install .env; IHC_GITEA_ORG (default: the one organization the token belongs to)
+# and IHC_BASE_DOMAIN (default: IHC_GITEA_URL's host without `git.`) are optional.
 set -eu
 # Deploy jobs run through `docker exec`, whose umask is 0000: set ours. Env files are
 # created 0600 on top of this.
@@ -39,6 +49,7 @@ usage() { sed -n '2,/^set -eu/p' "$IHC_ROOT/scripts/ihc-app.sh" | sed '$d' | sed
 INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 SLUG=""; DIR=""; NAME=""; OWNER=""; PUSH=false; MANIFEST="company-app.yaml"; TIMEOUT=240; ALL=false; YES=false
+PORT_OPT=""; SERVICE_OPT=""; HEALTH_OPT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -47,6 +58,9 @@ while [ $# -gt 0 ]; do
     --name) NAME="$2"; shift ;;
     --owner) OWNER="$2"; shift ;;
     --push) PUSH=true ;;
+    --port) PORT_OPT="$2"; shift ;;
+    --service) SERVICE_OPT="$2"; shift ;;
+    --health) HEALTH_OPT="$2"; shift ;;
     --manifest) MANIFEST="$2"; shift ;;
     --timeout) TIMEOUT="$2"; shift ;;
     --json) JSON_OUTPUT=true ;;
@@ -103,46 +117,111 @@ askpass() {
   chmod 700 "$1"
 }
 
-# ======================================================================== new
+# ================================================================ new, init
+# gitea_target: where the app's repository goes. On the box, the install's .env (the
+# admin token, the loopback endpoints); elsewhere (a laptop), the person's own
+# IHC_GITEA_URL and IHC_GITEA_TOKEN. Sets G_URL (what people clone), G_TOKEN, G_ORG,
+# G_DOMAIN, G_PUSH (where this run pushes) and GT.
+gitea_target() {
+  local host orgs
+  if [ -r "$ENV_FILE" ]; then
+    load_env; endpoints
+    G_URL="${GITEA_BASE_URL%/}"; G_TOKEN="$GITEA_ADMIN_TOKEN"; G_ORG="$GITEA_ORGANIZATION"; G_DOMAIN="$BASE_DOMAIN"
+    G_PUSH="$GT_ROOT/$G_ORG/$SLUG.git"
+    [ -n "$OWNER" ] || OWNER="$GITEA_ADMIN_EMAIL"
+    api_init gt "Authorization: token $G_TOKEN"
+    return 0
+  fi
+  G_URL="${IHC_GITEA_URL:-}"; G_URL="${G_URL%/}"; G_TOKEN="${IHC_GITEA_TOKEN:-}"
+  [ -n "$G_URL" ] && [ -n "$G_TOKEN" ] || die "no readable $ENV_FILE: set IHC_GITEA_URL (the company's Git, http://git.<domain>) and IHC_GITEA_TOKEN (a token of yours with repository write: Gitea > Settings > Applications, docs/first-user.md), or pass --install-dir on the box"
+  GT="$G_URL/api/v1"
+  api_init gt "Authorization: token $G_TOKEN"
+  G_ORG="${IHC_GITEA_ORG:-}"
+  if [ -z "$G_ORG" ]; then
+    api GET "$GT/user/orgs"
+    case "$API_CODE" in
+      2*) orgs="$(printf '%s' "$API_BODY" | $PY -c 'import json,sys;print(" ".join(o["username"] for o in json.load(sys.stdin)))')" ;;
+      # Listing them needs the token's user scope; without it, the installer's default.
+      403) orgs=company; warn "the token cannot list your organizations (no user scope): using company; set IHC_GITEA_ORG if yours has another name" ;;
+      *) die "$G_URL does not accept IHC_GITEA_TOKEN (HTTP $API_CODE): make a new token (Gitea > Settings > Applications) with repository and organization read and write" ;;
+    esac
+    case "$orgs" in
+      "") die "your Gitea account is in no organization: an admin adds you to a team that can create repositories (docs/first-user.md)" ;;
+      *" "*) die "your Gitea account is in several organizations ($orgs): set IHC_GITEA_ORG to the one for apps" ;;
+      *) G_ORG="$orgs" ;;
+    esac
+  fi
+  G_DOMAIN="${IHC_BASE_DOMAIN:-}"
+  if [ -z "$G_DOMAIN" ]; then
+    host="${G_URL#*://}"; host="${host%%/*}"; host="${host%%:*}"
+    case "$host" in git.*) G_DOMAIN="${host#git.}" ;; *) die "set IHC_BASE_DOMAIN: the cloud's domain (apps answer at <slug>.<domain>)" ;; esac
+  fi
+  G_PUSH="$G_URL/$G_ORG/$SLUG.git"
+}
+
+# gitea_repo MODE: the private repository <org>/SLUG with Actions on. `new` refuses one
+# that already has commits; `init` accepts it (the push must then continue its history).
+gitea_repo() {
+  api GET "$GT/repos/$G_ORG/$SLUG"
+  if [ "$API_CODE" = 404 ]; then
+    api POST "$GT/orgs/$G_ORG/repos" "$(jsonq build name="$SLUG" description="$NAME (company app, deployed on push to main)" private:=true auto_init:=false default_branch=main)"
+    if [ "$API_CODE" = 403 ]; then
+      case "$API_BODY" in
+        *scope*) die "the token cannot create repositories: make a new one (Gitea > Settings > Applications) with organization and repository Read and Write" ;;
+        *) die "your Gitea account cannot create repositories in $G_ORG: an admin gives your team \"Create repositories\" (docs/first-user.md)" ;;
+      esac
+    fi
+    api_ok || die "create repository $G_ORG/$SLUG: HTTP $API_CODE $API_BODY"
+    ok "repository $G_ORG/$SLUG created in Gitea"
+  else
+    api_ok || die "probe repository $G_ORG/$SLUG: HTTP $API_CODE"
+    if [ "$(printf '%s' "$API_BODY" | jsonq get empty)" = true ]; then
+      ok "repository $G_ORG/$SLUG exists and is empty"
+    elif [ "$1" = new ]; then
+      die "repository $G_ORG/$SLUG already has commits: clone it instead of generating a new one"
+    else
+      ok "repository $G_ORG/$SLUG exists (it has commits: a push must continue its history)"
+    fi
+  fi
+  api PATCH "$GT/repos/$G_ORG/$SLUG" '{"has_actions":true}'
+  api_ok && ok "Actions enabled on $G_ORG/$SLUG" || warn "could not enable Actions on $G_ORG/$SLUG (HTTP $API_CODE): an admin enables them in the repository settings"
+}
+
+# push_main DIR: the current commit of DIR to main of the repository: the deploy. The
+# token goes to git through GIT_ASKPASS, never in a URL or an argument.
+push_main() {
+  local ap
+  ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; askpass "$ap" "ihc"
+  IHC_GIT_TOKEN="$G_TOKEN" git_auth_probe "$G_PUSH" "$ap" 30 2 || { rm -f "$ap"; die "git on $G_ORG/$SLUG does not answer with the token after $GIT_PROBE_TRIES tries: ${GIT_PROBE_ERR:-no message}"; }
+  [ "$GIT_PROBE_TRIES" -le 1 ] || log "git answered with the token after $GIT_PROBE_TRIES tries"
+  IHC_GIT_TOKEN="$G_TOKEN" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$1" push -q "$G_PUSH" HEAD:main || { rm -f "$ap"; die "push to $G_ORG/$SLUG failed"; }
+  rm -f "$ap"
+  ok "pushed main: the deploy workflow runs now ($G_URL/$G_ORG/$SLUG/actions)"
+}
+
+# commit_as DIR MESSAGE: commit what is staged, as the person in git config or the owner.
+commit_as() {
+  git -C "$1" -c user.name="${GIT_AUTHOR_NAME:-$(git -C "$1" config user.name 2>/dev/null || echo "${OWNER%@*}")}" \
+    -c user.email="${GIT_AUTHOR_EMAIL:-$(git -C "$1" config user.email 2>/dev/null || echo "$OWNER")}" commit -q -m "$2"
+}
+
 cmd_new() {
   [ -n "$SLUG" ] || die "usage: ihc-app new SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--push]"
   $PY "$IHC_LIB/appmanifest.py" slug-check "$SLUG" || exit 1
-  local gitea_url token org domain dir tmpl ap push_url
-  if [ -r "$ENV_FILE" ]; then
-    load_env; endpoints
-    gitea_url="$GITEA_BASE_URL"; token="$GITEA_ADMIN_TOKEN"; org="$GITEA_ORGANIZATION"; domain="$BASE_DOMAIN"
-    push_url="$GT_ROOT/$org/$SLUG.git"
-    [ -n "$OWNER" ] || OWNER="$GITEA_ADMIN_EMAIL"
-  else
-    gitea_url="${IHC_GITEA_URL:-}"; token="${IHC_GITEA_TOKEN:-}"; org="${IHC_GITEA_ORG:-company}"; domain="${IHC_BASE_DOMAIN:-}"
-    [ -n "$gitea_url" ] && [ -n "$token" ] && [ -n "$domain" ] || die "no readable $ENV_FILE: set IHC_GITEA_URL, IHC_GITEA_TOKEN (a token of yours with repository write) and IHC_BASE_DOMAIN, or pass --install-dir on the box"
-    GT="${gitea_url%/}/api/v1"; push_url="${gitea_url%/}/$org/$SLUG.git"
-  fi
+  local dir tmpl
+  gitea_target
   [ -n "$OWNER" ] || OWNER="$(git config user.email 2>/dev/null || true)"
   [ -n "$OWNER" ] || die "--owner EMAIL is required: the person who answers for the app"
   [ -n "$NAME" ] || NAME="$(printf '%s' "$SLUG" | tr '-' ' ' | $PY -c 'import sys;print(sys.stdin.read().strip().title())')"
   dir="${DIR:-$SLUG}"
-  if [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then die "$dir exists and is not empty"; fi
+  if [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then die "$dir exists and is not empty (an app that already exists: ihc-app init $SLUG --dir $dir)"; fi
   have git || die "git is required"
 
   step "app repository $SLUG in $dir"
   mkdir -p "$dir"
   tmpl="$IHC_ROOT/templates/app"
   (cd "$tmpl" && tar cf - .) | (cd "$dir" && tar xf -)
-  $PY - "$dir" "$SLUG" "$NAME" "$OWNER" "$SLUG.$domain" "${AUTHENTIK_APP_GROUP:-ihc-users}" <<'PY'
-import os, sys
-root, slug, name, owner, domain, group = sys.argv[1:7]
-subs = {"__APP_SLUG__": slug, "__APP_NAME__": name, "__OWNER_EMAIL__": owner, "__APP_DOMAIN__": domain, "__APP_GROUP__": group}
-for d, dirs, files in os.walk(root):
-    dirs[:] = [x for x in dirs if x != ".git"]
-    for f in files:
-        p = os.path.join(d, f)
-        try: s = open(p).read()
-        except UnicodeDecodeError: continue
-        t = s
-        for k, v in subs.items(): t = t.replace(k, v)
-        if t != s: open(p, "w").write(t)
-PY
+  fill_placeholders "$dir"
   $PY "$IHC_LIB/appmanifest.py" vars "$dir/company-app.yaml" "$SLUG" >/dev/null || die "generated manifest does not validate"
   ! grep -rl '__APP_[A-Z]*__\|__OWNER_EMAIL__' "$dir" >/dev/null 2>&1 || die "template placeholders left in $dir: $(grep -rl '__APP_[A-Z]*__\|__OWNER_EMAIL__' "$dir" | head -n 3 | tr '\n' ' ')"
   ok "files from templates/app: company-app.yaml, docker-compose.yml, Dockerfile, .gitea/workflows/deploy.yml"
@@ -150,36 +229,177 @@ PY
     cd "$dir"
     git init -q -b main 2>/dev/null || { git init -q; git checkout -q -b main; }
     git add -A
-    git -c user.name="${GIT_AUTHOR_NAME:-$(git config user.name 2>/dev/null || echo "${OWNER%@*}")}" -c user.email="${GIT_AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo "$OWNER")}" commit -q -m "New app $SLUG from the cloud template"
-    git remote add origin "${gitea_url%/}/$org/$SLUG.git"
+    commit_as . "New app $SLUG from the cloud template"
+    git remote add origin "$G_URL/$G_ORG/$SLUG.git"
   )
-  ok "git repository on main, origin ${gitea_url%/}/$org/$SLUG.git"
+  ok "git repository on main, origin $G_URL/$G_ORG/$SLUG.git"
+  gitea_repo new
+  if [ "$PUSH" = true ]; then push_main "$dir"; else log "next: cd $dir && git push -u origin main   (push to main is the deploy)"; fi
+  log "the app will answer at ${G_URL%%://*}://$SLUG.$G_DOMAIN once the workflow is green"
+}
 
-  api_init gt "Authorization: token $token"
-  api GET "$GT/repos/$org/$SLUG"
-  if [ "$API_CODE" = 404 ]; then
-    api POST "$GT/orgs/$org/repos" "$(jsonq build name="$SLUG" description="$NAME (company app, deployed on push to main)" private:=true auto_init:=false default_branch=main)"
-    api_ok || die "create repository $org/$SLUG: HTTP $API_CODE $API_BODY"
-    ok "repository $org/$SLUG created in Gitea"
-  else
-    api_ok || die "probe repository $org/$SLUG: HTTP $API_CODE"
-    [ "$(printf '%s' "$API_BODY" | jsonq get empty)" = true ] || die "repository $org/$SLUG already has commits: clone it instead of generating a new one"
-    ok "repository $org/$SLUG exists and is empty"
-  fi
-  api PATCH "$GT/repos/$org/$SLUG" '{"has_actions":true}'
-  api_ok && ok "Actions enabled on $org/$SLUG" || warn "could not enable Actions on $org/$SLUG (HTTP $API_CODE): enable them in the repository settings"
+# fill_placeholders DIR [FILE...]: the template's __APP_*__ values, in FILEs or every file.
+fill_placeholders() {
+  $PY - "$SLUG" "$NAME" "$OWNER" "$SLUG.$G_DOMAIN" "${AUTHENTIK_APP_GROUP:-ihc-users}" "$@" <<'PY'
+import os, sys
+slug, name, owner, domain, group, root = sys.argv[1:7]
+only = sys.argv[7:]
+subs = {"__APP_SLUG__": slug, "__APP_NAME__": name, "__OWNER_EMAIL__": owner, "__APP_DOMAIN__": domain, "__APP_GROUP__": group}
+paths = [os.path.join(root, f) for f in only]
+if not only:
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x != ".git"]
+        paths += [os.path.join(d, f) for f in files]
+for p in paths:
+    try: s = open(p).read()
+    except UnicodeDecodeError: continue
+    t = s
+    for k, v in subs.items(): t = t.replace(k, v)
+    if t != s: open(p, "w").write(t)
+PY
+}
 
-  if [ "$PUSH" = true ]; then
-    ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; askpass "$ap" "ihc"
-    IHC_GIT_TOKEN="$token" git_auth_probe "$push_url" "$ap" 30 2 || { rm -f "$ap"; die "git on $org/$SLUG does not answer with the token after $GIT_PROBE_TRIES tries: ${GIT_PROBE_ERR:-no message}"; }
-    [ "$GIT_PROBE_TRIES" -le 1 ] || log "git answered with the token after $GIT_PROBE_TRIES tries"
-    IHC_GIT_TOKEN="$token" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -C "$dir" push -q "$push_url" main:main || { rm -f "$ap"; die "push to $org/$SLUG failed"; }
-    rm -f "$ap"
-    ok "pushed main: the deploy workflow runs now ($gitea_url/$org/$SLUG/actions)"
-  else
-    log "next: cd $dir && git push -u origin main   (push to main is the deploy)"
+# The manifest for an adopted project: the template's, with the project's service, port,
+# compose file and health path, and without the template's MCP tools and npm test (the
+# project has neither until someone writes them).
+init_manifest() {
+  $PY - "$1" "$SERVICE" "$PORT" "$COMPOSE" "$HEALTH" <<'PY'
+import re, sys
+path, service, port, compose, health = sys.argv[1:6]
+s = open(path).read()
+s = s.replace("  compose_file: docker-compose.yml", "  compose_file: " + compose, 1)
+s = s.replace("  service: app\n", "  service: %s\n" % service, 1)
+s = s.replace("  port: 8080\n", "  port: %s\n" % port, 1)
+s = s.replace("    path: /health\n", "    path: %s\n" % health, 1)
+s = re.sub(r"\n# Tools for AI agents.*?\nmcp:\n(?:  .*\n)+", "\n", s, flags=re.S)
+s = s.replace("  test_command: npm test\n", "")
+s = s.replace("# ihc-app provision reads it on every push to main.", "# ihc-app provision reads it on every push to main. Written by ihc-app init.")
+open(path, "w").write(s)
+PY
+}
+
+cmd_init() {
+  [ -n "$SLUG" ] || die "usage: ihc-app init SLUG [--dir DIR] [--name NAME] [--owner EMAIL] [--port P] [--service S] [--health PATH] [--push]"
+  $PY "$IHC_LIB/appmanifest.py" slug-check "$SLUG" || exit 1
+  have git || die "git is required"
+  local dir tmpl vars json f fresh=false created="" remote cur
+  dir="${DIR:-.}"
+  [ -d "$dir" ] || die "$dir is not a folder: run init in the app's folder (a new app from nothing: ihc-app new $SLUG)"
+  dir="$(cd "$dir" && pwd)"; tmpl="$IHC_ROOT/templates/app"
+  [ -f "$dir/company-app.yaml" ] && [ "$(sed -n 's/^  slug: *//p' "$dir/company-app.yaml" | head -n 1)" != "$SLUG" ] \
+    && die "$dir/company-app.yaml names another slug: fix app.slug or pass that slug"
+
+  # What the project already has decides the rest; nothing is written before every check passed.
+  COMPOSE=""
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do [ -f "$dir/$f" ] && { COMPOSE="$f"; break; }; done
+  SERVICE="${SERVICE_OPT:-app}"; PORT=""
+  if [ -f "$dir/company-app.yaml" ]; then
+    # Adopted before: the manifest says which compose file, service and port.
+    vars="$($PY "$IHC_LIB/appmanifest.py" vars "$dir/company-app.yaml" "$SLUG")" || die "company-app.yaml does not validate: fix the lines above"
+    eval "$vars"; COMPOSE="$M_COMPOSE_FILE"; SERVICE="$M_SERVICE"; PORT="$M_PORT"
+  elif [ -n "$COMPOSE" ]; then
+    # Docker's own reading when the laptop has Docker; the installer's YAML reader otherwise.
+    if have docker && json="$(cd "$dir" && COMPANY_ENV_FILE=/dev/null docker compose -f "$COMPOSE" config --format json 2>/dev/null)"; then
+      vars="$(printf '%s' "$json" | $PY "$IHC_LIB/appmanifest.py" inspect - "$SERVICE_OPT")"
+    else
+      vars="$($PY "$IHC_LIB/appmanifest.py" inspect "$dir/$COMPOSE" "$SERVICE_OPT")"
+    fi || die "$COMPOSE cannot run on the cloud as it is: fix the lines above (init never edits it)"
+    eval "$vars"
   fi
-  log "the app will answer at $(printf '%s' "${gitea_url%%://*}")://$SLUG.$domain once the workflow is green"
+  # Without a compose file of its own, the project builds from a Dockerfile at its root.
+  if { [ -z "$COMPOSE" ] || [ ! -f "$dir/$COMPOSE" ]; } && [ ! -f "$dir/Dockerfile" ] && [ ! -f "$dir/package.json" ]; then
+    die "no Dockerfile in $dir: write one that installs what the app needs and starts it listening on 0.0.0.0 and the port in \$PORT, then run init again (init writes one only for a Node project with package.json)"
+  fi
+  PORT="${PORT_OPT:-${PORT:-8080}}"; HEALTH="${HEALTH_OPT:-/health}"
+  case "$PORT" in *[!0-9]*|"") die "--port must be a number: the port the app listens on in its container" ;; esac
+  gitea_target
+  [ -n "$OWNER" ] || OWNER="$(git -C "$dir" config user.email 2>/dev/null || true)"
+  [ -n "$OWNER" ] || die "--owner EMAIL is required: the person who answers for the app"
+  [ -n "$NAME" ] || NAME="$(printf '%s' "$SLUG" | tr '-' ' ' | $PY -c 'import sys;print(sys.stdin.read().strip().title())')"
+
+  step "adopt $dir as the app $SLUG"
+  if [ ! -f "$dir/Dockerfile" ] && [ -f "$dir/package.json" ]; then
+    cat > "$dir/Dockerfile" <<EOF
+# Written by ihc-app init for a Node project: npm start must listen on \$PORT.
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY . .
+ENV PORT=$PORT
+EXPOSE $PORT
+CMD ["npm", "start"]
+EOF
+    created="$created Dockerfile"
+    [ -e "$dir/.dockerignore" ] || { printf '.git\n.gitea\n.env\nnode_modules\n' > "$dir/.dockerignore"; created="$created .dockerignore"; }
+  fi
+  if [ -z "$COMPOSE" ] || [ ! -f "$dir/$COMPOSE" ]; then
+    COMPOSE="${COMPOSE:-docker-compose.yml}"
+    cat > "$dir/$COMPOSE" <<EOF
+# Written by ihc-app init. Runs the same way on a laptop (docker compose up --build) and
+# on the box, where the deploy adds the cloud network and the app's env file on top.
+# Never add postgres, redis or object storage services here: the cloud provides them.
+services:
+  $SERVICE:
+    build: .
+    env_file:
+      - path: \${COMPANY_ENV_FILE:-.env}
+        required: false
+    ports:
+      - "\${PORT:-$PORT}:$PORT"
+    restart: unless-stopped
+EOF
+    created="$created $COMPOSE"
+  fi
+  if [ ! -e "$dir/.env.example" ]; then
+    printf '# Variables the app reads. No real values here, ever. On the box the deploy writes the\n# real file: PORT, APP_BASE_URL, DATA_DIR, DATABASE_URL (and PG*), REDIS_URL, REDIS_PREFIX.\nPORT=%s\n' "$PORT" > "$dir/.env.example"
+    created="$created .env.example"
+  fi
+  if [ ! -e "$dir/.gitea/workflows/deploy.yml" ]; then
+    mkdir -p "$dir/.gitea/workflows"; cp "$tmpl/.gitea/workflows/deploy.yml" "$dir/.gitea/workflows/deploy.yml"
+    fill_placeholders "$dir" .gitea/workflows/deploy.yml; created="$created .gitea/workflows/deploy.yml"
+  fi
+  if [ ! -e "$dir/company-app.yaml" ]; then
+    cp "$tmpl/company-app.yaml" "$dir/company-app.yaml"
+    fill_placeholders "$dir" company-app.yaml; init_manifest "$dir/company-app.yaml"; created="$created company-app.yaml"
+  fi
+  # Secrets and local data stay on the laptop: the cloud gives the app its own.
+  touch "$dir/.gitignore"
+  for f in .env '*.db' '*.sqlite' '*.sqlite3'; do
+    grep -qxF "$f" "$dir/.gitignore" || { printf '%s\n' "$f" >> "$dir/.gitignore"; case " $created " in *" .gitignore "*) ;; *) created="$created .gitignore" ;; esac; }
+  done
+  $PY "$IHC_LIB/appmanifest.py" vars "$dir/company-app.yaml" "$SLUG" >/dev/null || die "company-app.yaml does not validate: fix the lines above"
+  if [ -n "$created" ]; then ok "added:$created (the app's code untouched)"; else ok "nothing to add: the project already has every file the deploy needs"; fi
+
+  if [ ! -d "$dir/.git" ]; then
+    git -C "$dir" init -q -b main 2>/dev/null || { git -C "$dir" init -q; git -C "$dir" checkout -q -b main; }
+    fresh=true
+  fi
+  if [ "$fresh" = true ]; then
+    git -C "$dir" add -A
+  elif [ -n "$created" ]; then
+    # shellcheck disable=SC2086
+    (cd "$dir" && git add -- $created)
+  fi
+  if ! git -C "$dir" diff --cached --quiet 2>/dev/null || [ "$fresh" = true ]; then
+    commit_as "$dir" "$([ "$fresh" = true ] && echo "$NAME, ready for the company cloud" || echo "Deploy on the company cloud (ihc-app init)")"
+    ok "committed on $(git -C "$dir" rev-parse --abbrev-ref HEAD)"
+  fi
+  [ -z "$(git -C "$dir" status --porcelain)" ] || warn "uncommitted changes in $dir stay out of the deploy until you commit them"
+
+  remote=origin; cur="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+  if [ -n "$cur" ] && [ "$cur" != "$G_URL/$G_ORG/$SLUG.git" ]; then
+    remote=cloud; cur="$(git -C "$dir" remote get-url cloud 2>/dev/null || true)"
+    [ -z "$cur" ] || [ "$cur" = "$G_URL/$G_ORG/$SLUG.git" ] || die "remotes origin and cloud both point elsewhere: remove one, then run init again"
+  fi
+  [ -n "$cur" ] || git -C "$dir" remote add "$remote" "$G_URL/$G_ORG/$SLUG.git"
+  ok "remote $remote: $G_URL/$G_ORG/$SLUG.git"
+  gitea_repo init
+  if [ "$PUSH" = true ]; then push_main "$dir"; else log "next: git push $remote HEAD:main   (push to main is the deploy)"; fi
+  log "the app must: listen on 0.0.0.0:\$PORT ($PORT); answer GET $HEALTH with 200 (no sign-in there);"
+  log "  keep data in DATABASE_URL (Postgres, created empty) or under \$DATA_DIR (/data), never next to the code;"
+  log "  read the person from the X-authentik-email header (docs/app-contract.md)"
+  log "the app will answer at ${G_URL%%://*}://$SLUG.$G_DOMAIN once the workflow is green ($G_URL/$G_ORG/$SLUG/actions)"
 }
 
 # ================================================================== provision
@@ -535,6 +755,7 @@ PY
 . "$IHC_LIB/garage.sh"
 case "$CMD" in
   new) cmd_new ;;
+  init) cmd_init ;;
   provision) cmd_provision ;;
   checkout) cmd_checkout ;;
   wait) cmd_wait ;;

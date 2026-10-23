@@ -7,6 +7,7 @@ Conventions in this file:
 - `$IHC` is this repository's checkout on the box (the folder `install.sh` is in).
 - `$DIR` is the install directory. Default `/opt/inhousecloud`.
 - Every command runs **on the box**, as the user that ran the install (the one who can read `$DIR/.env`). If your terminal is on another machine, run each command through `ssh <box> '<command>'` and write files on the box (a heredoc through ssh, or `scp`).
+- One exception: an app that already exists on the person's own computer goes on the air from there, by `git push`, with no `ssh` to the box (section 5).
 
 Operating a box that is already installed (diagnosis, disk, backup, restarts) is a different job with its own rules: [`operator-contract.md`](operator-contract.md) and [`runbooks/`](runbooks/); `scripts/ihc-operator.sh brief` prints the map of the box.
 
@@ -31,6 +32,7 @@ cd "$IHC"
 | JSON with `"status": "completed"` | the cloud is installed | section 2 |
 | JSON with a stage `failed` | install stopped half way | section 1.5 |
 | `no state.json in <dir>` | nothing installed in `$DIR` (or another install directory: ask) | section 1 |
+| you have no `ssh` to the box, only the cloud's addresses (`http://portal.<domain>`, `http://git.<domain>`) and a token in `IHC_GITEA_TOKEN`, and the app is in a folder on this computer | the cloud is installed; the app comes by push | section 5 |
 
 ## 1. Install
 
@@ -260,3 +262,53 @@ Lines with `[xx]` are the cloud's own errors and say what to change. Then:
 | run stays `waiting` | `docker ps --filter name=gitea-deployer` | the deploy runner is down: ask the human, then `./install.sh --apply --install-dir "$DIR" --from foundation` |
 
 After a fix, commit and push again (2.4). The deploy is idempotent and keeps the app's database and passwords.
+
+## 5. An app that already exists, from a laptop
+
+The person had an agent (maybe you) write an app on their own computer, it runs there, and they want it on the company cloud. You have the cloud's addresses, a token in `IHC_GITEA_TOKEN` and the app's folder; you may have no `ssh` to the box, and you do not need it: the code goes by `git push` and the deploy runs on the box ([`gitops-flow.md`](gitops-flow.md#from-a-laptop)). Do not ask the person for `ssh`, `sudo` or a password.
+
+### 5.1 Check what you have
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://portal.<domain>/       # 302 or 200: the cloud answers
+test -n "$IHC_GITEA_TOKEN" && echo token set                           # never print it
+```
+
+`000` from a `*.localhost` address: the port-80 tunnel to the box is not open; give the person the command of 1.6 to run in a terminal of their own and wait. A copy of this repository is needed for `scripts/ihc-app.sh`; if the person did not point you to one, `git clone https://github.com/Estoca/inhousecloud.git` next to the app.
+
+### 5.2 Make the app fit the contract
+
+The same rules as 2.3, applied to the existing code; change only what they need:
+
+- listen on `0.0.0.0` and `PORT` (laptop apps often bind `127.0.0.1` and a fixed port), and answer `GET /health` with 200;
+- data in `DATABASE_URL` (the shared Postgres, created empty: create the tables on start) or files under `DATA_DIR` (`/data`). A local SQLite file next to the code does not survive a redeploy; keeping SQLite for the laptop and Postgres when `DATABASE_URL` is set works;
+- the signed-in person from `X-authentik-email` / `X-authentik-name`; no login page;
+- a `Dockerfile` that installs what the app imports (for Python, a `requirements.txt` with the Postgres driver).
+
+### 5.3 Adopt and push
+
+```bash
+cd <the app's folder>
+IHC_GITEA_URL=http://git.<domain> ~/inhousecloud/scripts/ihc-app.sh init <slug> --port <the port the app listens on> --push
+```
+
+It adds `company-app.yaml`, the deploy workflow, a compose file and `.env.example` when missing, keeps the code and any compose file the project has, ignores `.env` and local database files, commits, creates `<org>/<slug>` and pushes `main`. Read the manifest it wrote and set `database.required`, `dependencies.redis.required` and the owner if they are wrong, commit and push again. The owner is the person's email from `git config user.email` (or `--owner`), not yours.
+
+| `init` stops with | Who fixes it |
+|---|---|
+| `does not accept IHC_GITEA_TOKEN` (401) | the person: a new token ([`first-user.md`](first-user.md)) |
+| `the token cannot create repositories` | the person: a token with **organization** and **repository** Read and Write |
+| `cannot create repositories in <org>` | an admin: the person's team gets "Create repositories" ([`first-user.md`](first-user.md)) |
+| `no Dockerfile`, or a compose file with its own Postgres / Redis / S3 | you: write the `Dockerfile`, remove the service and use `DATABASE_URL` / `REDIS_URL` |
+
+### 5.4 Wait and check
+
+Without access to the box, follow the run with the person's token, then check as in 3.3:
+
+```bash
+curl -s -H "Authorization: token $IHC_GITEA_TOKEN" "http://git.<domain>/api/v1/repos/<org>/<slug>/actions/tasks"   # status of the run of your commit
+curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<domain>/health                                          # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<slug>.<domain>/                                                # 302 to the sign-in
+```
+
+A `failure`: the job's log is in the repository's Actions tab (`http://git.<domain>/<org>/<slug>/actions`), readable by the person; section 4 has the fixes. Report as in 3.4; the person's local data stays on the laptop, the cloud's database starts empty.

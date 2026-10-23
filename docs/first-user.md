@@ -23,11 +23,16 @@ In Authentik's admin interface, <http://auth.cloud.localhost/if/admin/>, signed 
 
 The person then opens <http://portal.cloud.localhost>, an app, or <http://git.cloud.localhost> with "Sign in with authentik", and at <http://auth.cloud.localhost/if/user/> changes the password and enrolls MFA (Settings > MFA Devices).
 
-**Gitea.** The first "Sign in with authentik" creates their Gitea account. To let them push to an app's repository (a push to `main` is a deploy), add them, after that first sign-in, to a team of the organization with write access: Gitea > `company` > Teams. Without it they see nothing: every app repository is private.
+**Gitea.** The first "Sign in with authentik" creates their Gitea account. To let them push to an app's repository (a push to `main` is a deploy), add them, after that first sign-in, to a team of the organization with write access: Gitea > `company` > Teams. Without it they see nothing: every app repository is private. For people who build apps, one team is enough: **New Team**, access to all repositories, **Write** on Code and Actions, and **Create repositories** ticked. Without "Create repositories" they can push to apps that exist but cannot put a new one on the air from their laptop: Gitea answers "User is not allowed to create repositories in this organization".
+
+**A token for their laptop.** A coding agent on their own computer pushes with a personal token, not a password (they sign in through Authentik and have no Gitea password). The person makes it, signed in to Gitea: avatar > **Settings > Applications > Generate New Token**, a name (`laptop`), **organization: Read and Write** and **repository: Read and Write**, then **Generate Token** and copy it: it is shown once. Repository alone is not enough: creating the app's repository answers 403 ("required scope write:organization"). They keep it in an environment variable, `IHC_GITEA_TOKEN`, where `ihc-app` reads it ([`gitops-flow.md`](gitops-flow.md#from-a-laptop)), and never paste it into a chat or a file in a repository. To revoke it: the same page, **Delete**.
 
 **Check it.** Portal > People (admins) lists every user with email, active or not, and groups, and every group with its members, as Authentik has them now (up to a minute old; Refresh reads again). It only reads: adding, removing and changing groups stays in Authentik.
 
-**Remove a person.** Authentik > Directory > Users > the person > Deactivate. It closes every app and Gitea at once (they all sign in through Authentik); their Gitea account stays, without access.
+**Remove a person.** Two steps, both needed:
+
+1. Authentik > Directory > Users > the person > **Deactivate**. It closes every app, the portal and the Gitea sign-in at once (they all sign in through Authentik).
+2. Gitea > Site Administration > User Accounts > the person > Edit > **Disable sign-in**, then Update Account. Step 1 does not reach Gitea's personal tokens: a person deactivated in Authentik still pushed to `main` with their laptop token, and the push deployed. With sign-in disabled, Gitea refuses the token (API 403, `git` fails). Their Gitea account and history stay.
 
 ## Off until mail is set up
 
