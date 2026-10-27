@@ -4,7 +4,7 @@ InHouseCloud: the company's own cloud, installed and operated with one command. 
 
 One box runs what a small company needs around its internal apps: single sign-on, Git with push-to-deploy, shared Postgres and Redis, object storage, backups, ops tools and an optional operator agent. A coding agent can install the whole thing from this repository on a clean server, and then turn a one-sentence request into an app behind the company sign-in, with its own database, a health check and a backup, without production credentials.
 
-> **Sibling project:** [Open Company OS](https://github.com/Estoca/open-company-os) is the people-and-work half: a protocol for giving every person a personal LLM agent, a private second brain, a shared tracker and a company compass. It runs on top of this cloud (its services are ordinary apps on it) and is adopted separately.
+> **Sibling project:** [InHouseOS](https://github.com/Estoca/inhouseos) is the people-and-work half: a protocol for giving every person a personal LLM agent, a private second brain, a shared tracker and a company compass. It runs on top of this cloud (its services are ordinary apps on it) and is adopted separately.
 
 ## What this is
 
