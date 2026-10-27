@@ -6,7 +6,7 @@ One box runs what a small company needs around its internal apps: single sign-on
 
 **Documentation: <https://inhousecloud.estoca.com.br/>** (built from [`docs/`](docs/)).
 
-> **Sibling project:** [Open Company OS](https://github.com/Estoca/open-company-os) is the people-and-work half (a personal LLM agent per person, a second brain, a shared tracker, a company compass). It runs on top of this cloud as ordinary apps and is adopted separately.
+> **Sibling project:** [InHouseOS](https://github.com/Estoca/inhouseos) is the people-and-work half (a personal LLM agent per person, a second brain, a shared tracker, a company compass). It runs on top of this cloud as ordinary apps and is adopted separately.
 
 ## Try it in 10 minutes
 

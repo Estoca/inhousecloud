@@ -232,7 +232,7 @@ What is built ([`backup.md`](backup.md)) and what is next:
 The project has had three names, none of them announced:
 
 - Until 2026-10-20, **Open Company App Harness** (repository `open-company-app-harness`). It began as a harness around coding agents and became the company's cloud on one machine.
-- From 2026-10-20 to 2026-10-21, **Open Company Cloud** (`open-company-cloud`, prefix `occ`), the name of what it is, next to its sibling Open Company OS. A trademark search the next day showed "OpenCompany" already carried three open-source AI-agent projects and "OpenCloud" live marks held by other companies.
+- From 2026-10-20 to 2026-10-21, **Open Company Cloud** (`open-company-cloud`, prefix `occ`), the name of what it is, next to its sibling, then Open Company OS (InHouseOS since 2026-10-27). A trademark search the next day showed "OpenCompany" already carried three open-source AI-agent projects and "OpenCloud" live marks held by other companies.
 - Since 2026-10-21, **InHouseCloud** (`inhousecloud`, prefix `ihc`): the company's own cloud, with no collision in trademark databases, GitHub or package registries. The prose name is InHouseCloud; slugs, directories, images and networks use `inhousecloud`; commands, variables and groups use `ihc`.
 
 Every name changed at once, both times:
