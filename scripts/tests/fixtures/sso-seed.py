@@ -23,7 +23,7 @@ s.mark_proven(other.id)
 client, secret = s.create_oidc_client(acme.id, "ihc test", [
     "http://auth.cloud.localhost/source/oauth/callback/inhouse-technology/"], "ana@acme.test")
 bridge = os.environ["BRIDGE"]
-env = dict(IHT_PUBLIC_URL=f"https://{bridge}:9443", IHT_DATA_DIR=str(root / "data"),
+env = dict(IHT_PUBLIC_URL=f"https://{bridge}:18340", IHT_DATA_DIR=str(root / "data"),
            IHT_GOOGLE_ISSUER=f"http://{bridge}:9081", MOCK_ISSUER=f"http://{bridge}:9081",
            IHT_GOOGLE_CLIENT_ID=secrets.token_hex(16), IHT_GOOGLE_CLIENT_SECRET=secrets.token_hex(32),
            IHC_IHT_CLIENT_SECRET=secret, ACME_ID=acme.id)

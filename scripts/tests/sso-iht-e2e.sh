@@ -18,6 +18,7 @@ while [ $# -gt 0 ]; do
 done
 [ -f "$IHT_SOURCE/src/iht/oidc_provider.py" ] || { echo "Missing local iht source: use --iht-source PATH" >&2; exit 2; }
 command -v limactl >/dev/null
+locked=false
 owned=false
 cleanup() {
   rc=$?
@@ -26,12 +27,19 @@ cleanup() {
     elif limactl delete --force "$VM"; then echo "Deleted VM $VM";
     else echo "FAILED to delete VM $VM" >&2; rc=1; fi
   fi
+  if $locked && { ! $owned || ! limactl list --format '{{.Name}}' | grep -qx "$VM"; }; then rmdir /tmp/inhouse-lima-ihc.lock; fi
   if [ "$rc" -ne 0 ]; then printf "| check | result |\n| --- | --- |\n| harness | FAIL (exit %s; see preceding output) |\n" "$rc"; fi
   exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+for attempt in $(seq 1 61); do
+  if mkdir /tmp/inhouse-lima-ihc.lock 2>/dev/null; then locked=true; break; fi
+  [ "$attempt" -lt 61 ] || { echo "Lima mutex unavailable after 2 hours" >&2; exit 1; }
+  echo "Waiting for shared Lima mutex (retry in 2 minutes)..."
+  sleep 120
+done
 if limactl list --format '{{.Name}}' | grep -qx "$VM"; then
   $REUSE || { echo "$VM exists; refusing to touch it without --reuse" >&2; exit 2; }
   limactl shell "$VM" bash -c 'test -f ~/sso-e2e/.owned-by-sso-harness'

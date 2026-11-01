@@ -79,12 +79,14 @@ for key in ('IHT_DISCOVERY_URL', 'IHT_CLIENT_ID', 'IHT_CLIENT_SECRET'):
     assert '!Env ' + key in s
 assert 'provider_type: openidconnect' in s
 assert 'user_creation_mode: always_create' in s
-assert 'authentication_flow: !Find' in s
+assert 'authentication_flow: !KeyOf authentication' in s
+assert 'default-source-authentication' not in s
+assert 'slug: ihc-iht-authentication' in s
 assert 'enrollment_flow: !KeyOf enrollment' in s
 ids = set(re.findall(r'^    id: (.+)$', s, re.M))
 assert set(re.findall(r'!KeyOf ([\w-]+)', s)) <= ids
 expressions = re.findall(r'      expression: \|\n((?:        .*\n|\n)+)', s)
-assert len(expressions) == 2
+assert len(expressions) == 3
 def expression(text, **env):
     properties = env.setdefault('properties', {'groups': ['admin', 'member', 'unknown']})
     code = 'def evaluate():\n' + '\n'.join('    '+l[8:] for l in text.splitlines())
@@ -108,11 +110,13 @@ for bad in (dict(info, sub=''), dict(info, groups='admin')):
     try: expression(expressions[0], info=bad)
     except ValueError: pass
     else: raise AssertionError('invalid claims accepted')
+assert expression(expressions[1], ak_is_sso_flow=True) is True
+assert expression(expressions[1], ak_is_sso_flow=False) is False
 from types import SimpleNamespace as NS
 for user, allowed in ((None, False), (NS(username='akadmin',is_active=True), True),
                       (NS(username='iht-admin',is_active=True), False),
                       (NS(username='akadmin',is_active=False), False)):
-    assert expression(expressions[1], request=NS(context={'pending_user': user})) is allowed
+    assert expression(expressions[2], request=NS(context={'pending_user': user})) is allowed
 assert 'evaluate_on_plan: false' in s and 're_evaluate_policies: true' in s
 compose = (root/'docker/compose.yml').read_text()
 for service in ('authentik-server', 'authentik-worker'):
