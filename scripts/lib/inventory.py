@@ -96,6 +96,10 @@ def record(path, env=os.environ):
     cur.setdefault("created_at", now)
     if env.get("GITHUB_REPOSITORY"): cur["repository"] = env["GITHUB_REPOSITORY"]
     if env.get("GITHUB_SHA"): cur["last_commit"] = env["GITHUB_SHA"]
+    # ihc-app apply and rollback: the release being put on the air (deploy journal, docs/gitops-flow.md).
+    if env.get("IHC_RELEASE"):
+        cur["release"] = env["IHC_RELEASE"]
+        if env.get("IHC_RELEASE_COMMIT"): cur["last_commit"] = env["IHC_RELEASE_COMMIT"]
     apps[slug] = cur
     save(path, inv)
 

@@ -9,7 +9,7 @@
 ```bash
 $H/scripts/ihc-app.sh list --install-dir "$I"                       # repository, last deployed commit
 docker inspect -f '{{.Config.Image}} {{.Image}} {{.State.StartedAt}}' <slug>-app-1
-docker image ls <slug>-app                                              # the image kept for rollback, if any
+$H/scripts/ihc-app.sh journal <slug> --install-dir "$I"             # what each apply and rollback changed, newest first
 ```
 
 *(agent)* `ihc-ro ps`, `ihc-ro inspect <slug>-app-1`, `ihc-ro gitea /repos/<org>/<slug>/actions/tasks?limit=5`, `ihc-ro gitea /repos/<org>/<slug>/commits?sha=main&limit=5`
@@ -32,13 +32,10 @@ Then one of:
 
 - **Re-run the last run** in Gitea Actions (the web UI, "Re-run all jobs"), as a person with write access to the repository. *(agent)* only with `AGENT_GITEA_TOKEN`, which a human created for it; otherwise it asks.
 - **An empty commit on `main`**, by the person who asked: `git commit --allow-empty -m "redeploy" && git push origin main`.
-- **Rollback**: `git revert` of the bad commits on `main` and push. The cloud has no out-of-band deploy, on purpose: the history of `main` is the history of what ran.
+- **Rollback, now**: `$H/scripts/ihc-app.sh rollback <slug> --install-dir "$I" --reason "<why>"` on the box, by a person (the agent has no shell there: it asks). It goes back to the release the newest journaled deploy replaced (its images and config), under the app's lock, journaled and health-checked; it refuses, changing nothing, when there is no previous release, and never retries if the old release is unhealthy too. It is the brake, not the fix: the next push to `main` deploys over it.
+- **Rollback, for good**: `git revert` of the bad commits on `main` and push. The history of `main` is the history of what the deploys applied; the journal says when a rollback ran in between.
 
-Never `docker compose up` an app by hand from another directory: the Compose project name comes from the directory unless named, and a second project with the same containers is how a rollout misses the running stack. If a manual start is unavoidable, the deploy job's command is the only form:
-
-```bash
-cd <checkout of the commit> && COMPANY_ENV_FILE="$I/apps/<slug>/.env" docker compose -p <slug> -f docker-compose.yml -f "$I/apps/<slug>/compose.ihc.yml" up -d --build
-```
+Never `docker compose up` an app by hand: it bypasses the lock and the journal, and the Compose project name comes from the directory unless named, so a second project with the same containers is how a rollout misses the running stack. A release already on the box is put back with `ihc-app rollback`; anything else goes through a push to `main`.
 
 ## Post-checks
 
@@ -46,7 +43,7 @@ cd <checkout of the commit> && COMPANY_ENV_FILE="$I/apps/<slug>/.env" docker com
 $H/scripts/ihc-app.sh wait <slug> --install-dir "$I"     # from the app's checkout: health through the proxy, then / to the SSO
 ```
 
-Then checks 1 (the run's `head_sha` is the commit asked for), 4, 5, 6 and 7 of the contract. Keep the rollback tag until the next green deploy; remove it then ([disk-pressure](disk-pressure.md)).
+Then checks 1 (the run's `head_sha` is the commit asked for, or after a rollback the journal's last line is `rollback ok`), 4, 5, 6 and 7 of the contract. The release tags (`ihc-release/<slug>/*`) of the newest five releases stay on the box for rollbacks; `apply` removes older ones ([disk-pressure](disk-pressure.md)).
 
 ## Example
 

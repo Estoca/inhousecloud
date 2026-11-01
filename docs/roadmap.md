@@ -4,8 +4,8 @@
 
 Usable on one box, with `local` or `private` ingress. Proven on clean VMs and on a Mac with Docker Desktop, and recorded in [`first-run.md`](first-run.md):
 
-- `install.sh` brings up the core cloud and passes its [smoke tests](smoke-tests.md) (21 of 25 on the core; the others need the `ops` or `agent` profile or `private` ingress).
-- `ihc-app` takes an app from `new` to the air behind the sign-in by a push to `main`.
+- `install.sh` brings up the core cloud and passes its [smoke tests](smoke-tests.md) (22 of 26 on the core; the others need the `ops` or `agent` profile or `private` ingress).
+- `ihc-app` takes an app from `new` to the air behind the sign-in by a push to `main`; every deploy is journaled before it changes anything, and `ihc-app rollback` goes back to the previous release ([`gitops-flow.md`](gitops-flow.md#rollback)).
 - A coding agent that has never seen the cloud installs it from a layperson's request (about 8 minutes, no password in the conversation) and puts a new app on the air (about 2 minutes).
 - `private` ingress (Tailscale) is tested end to end, with a sign-in from another device on the tailnet.
 - The portal shows the catalog, health, SSO, deploys, the platform's status and, for admins, Authentik's people and groups; its status API answers agents with a read-only token ([`portal-api.md`](portal-api.md)).
@@ -42,11 +42,13 @@ Done:
 - PR 25: the portal's read-only status API for agents: `GET /api/platform/status` with a service token, `IHC_PORTAL_API_TOKEN` ([`portal-api.md`](portal-api.md)); `install.sh status --json` and `ihc doctor --json` read it.
 - PR 26: the MCP layer. **The cloud's own MCP**: one gateway per company at `mcp.<BASE_DOMAIN>`, behind the SSO, that knows which person is calling, with the platform's tools read only (apps, status, people, groups) and a route to each app's provider by audience and scope ([`mcp-gateway.md`](mcp-gateway.md)). Apps never expose MCP on their own; the gateway does. This is the endpoint [InHouseOS](https://github.com/Estoca/inhouseos) assumes exists. **Every app is born agent-ready**: an `mcp` section in `company-app.yaml` (audience, paths, scopes granted to groups), a `ping` tool in the app template behind the actor JWT check, and the deploy recording the provider in the inventory ([MCP in an app](app-mcp.md)). Smoke test 25.
 - PR 28: the installer normalizes the file modes of the copied portal tree, so the image's `node` user can read it whatever the checkout's umask.
+- PR 42: deploys as transactions. The template's deploy is `ihc-app build` (a release from the commit's files: images tagged per release, no cloud credentials, no build secrets or contexts outside the repository) then `ihc-app apply` (the reconciler: a per-app lock, only the head of `main`, a write-ahead journal of what it will change, provision, the release's images, the healthcheck). `ihc-app rollback <slug>` undoes the newest deploy in reverse order, journaled and health-checked, and refuses when there is nothing to go back to; the portal shows the journal to admins. Smoke test 26.
 
 Next:
 
 - **Write tools and an audit log in the MCP gateway.** Tools that change something, each call recorded with the person, the tool and the arguments; today every tool reads.
-- **Restoring one app** from a snapshot (`ihc-app restore <slug>`), without restoring the whole box. The dumps are already per database.
+- **Deploy jobs without the Docker socket.** Today `build` and `apply` are two steps of one job that has the socket, so a repository's own workflow can still skip `apply`. Next: the reconciler (lock, merged-commit check, journal) runs outside Gitea Actions and fetches the commit itself, the build runs as an unprivileged user (rootless BuildKit, the image pushed to Gitea's registry), and no job on the box gets the socket; with that, no code from an unmerged branch runs on the machine.
+- **Restoring one app** from a snapshot (`ihc-app restore <slug>`), without restoring the whole box. The dumps are already per database, and the deploy journal says which release ran when, so a restore can put back the data and the release together.
 - **The off-site backup copy** and the monthly restore rehearsal ([`backup.md`](backup.md#next)).
 - **`public` ingress**, for a cloud reachable from the internet (a Cloudflare tunnel or public DNS with Let's Encrypt): the installer already has the modes; they get their own run and documentation when the local and private paths are settled. claude.ai as an MCP client needs it.
 

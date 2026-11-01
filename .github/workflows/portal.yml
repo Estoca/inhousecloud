@@ -4,7 +4,8 @@
 # the MCP gateway (scripts/tests/mcp-gateway.sh) and adopting an existing app from a laptop
 # (scripts/tests/ihc-app-init.sh), and `install.sh handoff` repeating the web terminal's key
 # command (scripts/tests/handoff-wetty-key.sh), and env_secret working in a stage that runs
-# without stage_secrets (scripts/tests/install-env-secret.sh).
+# without stage_secrets (scripts/tests/install-env-secret.sh), and the deploy journal with
+# rollback's refusals and apply's merged-commit gate (scripts/tests/deploy-journal.sh).
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -58,3 +59,6 @@ jobs:
       - name: env_secret in a stage run without stage_secrets (the upgrade path, --from foundation)
         working-directory: .
         run: scripts/tests/install-env-secret.sh
+      - name: deploy journal, rollback's refusals and apply's merged-commit gate (fake Gitea)
+        working-directory: .
+        run: scripts/tests/deploy-journal.sh

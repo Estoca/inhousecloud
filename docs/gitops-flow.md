@@ -9,11 +9,17 @@ git push origin main          the approval: who can push to main decides what ru
         │
 Gitea Actions (gitea-deployer runner, label ihc-deploy, on the box)
   1. ihc-app checkout                   the pushed commit
-  2. ihc-app provision <slug>           database, Redis, env file, route, SSO, inventory
-  3. docker compose up -d --build           on the ihc network, no host port
-  4. ihc-app wait <slug>                the manifest's healthcheck, through the proxy
+  2. ihc-app build <slug>               a release: the commit's files and images, tagged per release;
+                                        no cloud credentials, nothing that runs changes
+  3. ihc-app apply <slug>               the reconciler, under the app's lock, head of main only:
+                                        journal first, then provision (database, Redis, env file,
+                                        route, SSO, inventory), start the release's images on the
+                                        ihc network, the manifest's healthcheck through the proxy
         │
 https://<slug>.<BASE_DOMAIN>                behind forward auth; /health public
+
+ihc-app rollback <slug>               on the box: back to the release the newest deploy replaced
+ihc-app journal <slug>                what every apply and rollback changed (also in the portal)
 ```
 
 ## 1. Create the app
@@ -83,31 +89,69 @@ From there on, every `git push` to `main` (of `origin` or `cloud`) is a deploy; 
 Nothing in this path needs Docker on the laptop: `init` reads a compose file with Docker when it is there and with its own YAML reader when not, and the image is built on the box by the deploy job. What changes without it:
 
 - the app runs on the laptop the way it was written (`python3 app.py`, `npm start`), reading `PORT`, `DATA_DIR` and `DATABASE_URL` with local defaults when they are not set; the compose file `init` writes is for the box and for laptops that have Docker;
-- the `Dockerfile` is not built before the push, so the first deploy is its first build. Keep it to the language's official slim image, `COPY` of what the app needs, the install of its dependencies (for Python, `requirements.txt`; none for the standard library) and the start command; a mistake there fails the run, not the app already on the air (the job's `docker compose up -d --build` builds before it replaces the running container);
-- when the run fails, its log says why (the build's error is in the `deploy` job): read it with the token as above, fix, commit, push again.
+- the `Dockerfile` is not built before the push, so the first deploy is its first build. Keep it to the language's official slim image, `COPY` of what the app needs, the install of its dependencies (for Python, `requirements.txt`; none for the standard library) and the start command; a mistake there fails the run, not the app already on the air (the job builds the release before `apply` touches the running container);
+- when the run fails, its log says why (the build's error is in the `deploy` job, step "Build the release"): read it with the token as above, fix, commit, push again.
 
 ## 3. What the deploy job does
 
-The workflow in the template ([`templates/app/.gitea/workflows/deploy.yml`](../templates/app/.gitea/workflows/deploy.yml)) has four steps, each readable on its own:
+The workflow in the template ([`templates/app/.gitea/workflows/deploy.yml`](../templates/app/.gitea/workflows/deploy.yml)) has three steps, each readable on its own. Who builds is separated from who applies: the build makes an artifact and changes nothing that runs; the apply is the only step that changes the app, one at a time per app, and only for a commit merged into `main`.
 
 1. **`ihc-app checkout`** fetches the pushed commit from Gitea over the internal network with the job's own token (through `GIT_ASKPASS`, never in a URL).
-2. **`ihc-app provision <slug>`** is the executor. It refuses before changing anything when the manifest or the compose file breaks a rule, then makes sure, idempotently, of:
-   - a valid manifest whose slug is the repository name and the argument;
-   - a compose file that brings no Postgres, Redis or S3 server of its own (the rule below);
-   - with `database.required: true`, a database `app_<slug>` owned by a role `app_<slug>` on the shared Postgres: `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`, random password, `CONNECT` and `TEMPORARY` revoked from `PUBLIC`;
-   - with `dependencies.redis.required: true`, a Redis ACL user `app-<slug>` that can only touch keys and channels under `<slug>:`, persisted in the ACL file the shared Redis loads at start;
-   - with `object_storage.required: true` and the `storage` profile on, a bucket `app-<slug>` on Garage and an access key `app-<slug>` that reads and writes that bucket only (never Garage's RPC secret or admin token; [`scripts/lib/garage.sh`](../scripts/lib/garage.sh)); with the profile off, a clear failure before anything changes;
-   - `<install-dir>/apps/<slug>/.env`, mode `0600`, with `PORT`, `APP_SLUG`, `APP_BASE_URL`, `DATABASE_URL` and `PG*`, `REDIS_URL` and `REDIS_PREFIX`, `S3_*`, plus the keys of the app's `.env.example` it does not have yet (`LOCAL_*` keys excluded). Existing values are kept: a second run never changes a password;
-   - `<install-dir>/apps/<slug>/compose.ihc.yml`, an overlay that puts every service of the app on the ihc network (the main one with the alias `<slug>`), drops published host ports and points `env_file` at the file above;
-   - an Authentik proxy provider `app-<slug>` (forward auth, single application, the healthcheck path skipped), an application `<slug>` bound to the users group (`AUTHENTIK_APP_GROUP`), and the provider added to the embedded outpost;
-   - the proxy host `<slug>.<BASE_DOMAIN>` to `<slug>:<runtime.port>` with the same forward-auth snippet as the portal (from [`scripts/lib/sso.sh`](../scripts/lib/sso.sh), shared with `first-run.sh`), the healthcheck path left public;
-   - the app in `<install-dir>/inventory.json` under `apps.<slug>`: name, owner, URL, repository, last commit, the resources above, `runtime` (the service, port, health path, expected status and `auth.required` of the manifest: what `ihc-doctor` checks), `created_at` on the first run and `provisioned_at` on every run.
-3. **`docker compose -p <slug> -f docker-compose.yml -f <install-dir>/apps/<slug>/compose.ihc.yml up -d --build`** builds and starts the app.
-4. **`ihc-app wait <slug>`** polls the manifest's healthcheck through the proxy until it answers the expected status, then checks that an anonymous `GET /` is sent to the Authentik sign-in. If the container exits or the time runs out it fails the job with the status it got, the container's state and the last 40 lines of its log.
+2. **`ihc-app build <slug>`** makes a *release* `<UTC time>-<commit>` in `<install-dir>/deploys/<slug>/releases/<release>/`, without loading the install's `.env` (it needs no credential of the cloud):
+   - `src/`: the files of the commit (`git archive`), never what else lies in the workspace; the build context is this copy;
+   - the manifest and compose file validated (the same rules as `provision`), plus the build rules: no build secrets, no SSH agent, no host network, no context, Dockerfile or extra context outside the repository (Compose would read those on the machine that runs the build, which has the install directory);
+   - `docker compose build`, then every service's image, built or pulled, tagged `ihc-release/<slug>/<service>:<release>`, so the image a rollback finds is exactly the one the release ran;
+   - `pin.yml`, the overlay that runs each service from its release tag (`build` reset, `pull_policy: never`), and `release.json`: commit, repository, who built it, the sha256 of the manifest and compose file, and every image with its id.
+3. **`ihc-app apply <slug>`** is the reconciler. In order:
+   - takes the app's lock (`<install-dir>/deploys/<slug>/lock`, a `flock` released if the process dies): one apply or rollback per app at a time; a second one waits, then refuses saying who holds it;
+   - checks in Gitea that the release's commit is the head of `main` of `<org>/<slug>`. A run for any other ref is refused; an older commit of `main` (a newer push is queued behind it) is skipped as superseded, exit 0, nothing changed; a commit that is not on `main` is refused;
+   - writes the `begin` of the transaction to the deploy journal, **before changing anything**: the release before and after, their commits and image ids, the sha256 of the compose overlay and the names of the keys of the env file;
+   - **provision** with the release's manifest: it refuses before changing anything when the manifest or the compose file breaks a rule, then makes sure, idempotently, of:
+     - a valid manifest whose slug is the repository name and the argument;
+     - a compose file that brings no Postgres, Redis or S3 server of its own (the rule below);
+     - with `database.required: true`, a database `app_<slug>` owned by a role `app_<slug>` on the shared Postgres: `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`, random password, `CONNECT` and `TEMPORARY` revoked from `PUBLIC`;
+     - with `dependencies.redis.required: true`, a Redis ACL user `app-<slug>` that can only touch keys and channels under `<slug>:`, persisted in the ACL file the shared Redis loads at start;
+     - with `object_storage.required: true` and the `storage` profile on, a bucket `app-<slug>` on Garage and an access key `app-<slug>` that reads and writes that bucket only (never Garage's RPC secret or admin token; [`scripts/lib/garage.sh`](../scripts/lib/garage.sh)); with the profile off, a clear failure before anything changes;
+     - `<install-dir>/apps/<slug>/.env`, mode `0600`, with `PORT`, `APP_SLUG`, `APP_BASE_URL`, `DATABASE_URL` and `PG*`, `REDIS_URL` and `REDIS_PREFIX`, `S3_*`, plus the keys of the app's `.env.example` it does not have yet (`LOCAL_*` keys excluded). Existing values are kept: a second run never changes a password;
+     - `<install-dir>/apps/<slug>/compose.ihc.yml`, an overlay that puts every service of the app on the ihc network (the main one with the alias `<slug>`), drops published host ports and points `env_file` at the file above;
+     - an Authentik proxy provider `app-<slug>` (forward auth, single application, the healthcheck path skipped), an application `<slug>` bound to the users group (`AUTHENTIK_APP_GROUP`), and the provider added to the embedded outpost;
+     - the proxy host `<slug>.<BASE_DOMAIN>` to `<slug>:<runtime.port>` with the same forward-auth snippet as the portal (from [`scripts/lib/sso.sh`](../scripts/lib/sso.sh), shared with `first-run.sh`), the healthcheck path left public;
+     - the app in `<install-dir>/inventory.json` under `apps.<slug>`: name, owner, URL, repository, last commit, the release, the resources above, `runtime` (the service, port, health path, expected status and `auth.required` of the manifest: what `ihc-doctor` checks), `created_at` on the first run and `provisioned_at` on every run;
+   - journals the env keys provision added, removed or changed (names only, never a value);
+   - **`docker compose -p <slug> -f <compose file> -f compose.ihc.yml -f pin.yml up -d --no-build --pull never --remove-orphans`** from the release's files: the apply never builds and never pulls, it starts what the build produced; journals `applied`;
+   - waits for the manifest's healthcheck through the proxy until it answers the expected status, then checks that an anonymous `GET /` is sent to the Authentik sign-in (`ihc-app wait` is the same check on its own). If the container exits or the time runs out it fails the job with the status it got, the container's state and the last 40 lines of its log; the journal ends the transaction `unhealthy`, and the job says how to roll back;
+   - keeps the newest five releases (plus the one running and the one it replaced) and removes the others' files and tags.
 
-The job is the record: who pushed, which commit, what each step printed, in the repository's Actions tab. The portal reads those runs; nobody writes to it.
+The job is the record of who pushed and what each step printed, in the repository's Actions tab; the deploy journal is the record of what changed on the box. The portal reads both; nobody writes to it.
 
 `provision` never deletes a database, role, bucket, ACL user, route or Authentik object, and never takes over what it did not create: a slug registered in `inventory.json` for another repository, or a proxy host for `<slug>.<BASE_DOMAIN>` that points somewhere else, stops the job with nothing changed. Removing an app is a human's job, by hand.
+
+An app whose repository still has the workflow from before the journal (checkout, provision, `docker compose up -d --build`, wait) keeps deploying that way, with no lock, no journal and nothing for rollback to go back to; `ihc-app wait` says so in the job's log. Copy the template's `deploy.yml` into the repository (`sed s/__APP_SLUG__/<slug>/`) and push to switch it.
+
+## The deploy journal
+
+`<install-dir>/catalog/deploys/<slug>.jsonl`, append-only, one JSON line per event ([`scripts/lib/deployjournal.py`](../scripts/lib/deployjournal.py) has the format). Every apply and rollback is a transaction:
+
+| Line | Written | What it holds |
+|---|---|---|
+| `begin` | before anything changes | `op` (`deploy`, `rollback`), who (`actor`: the pusher, or the person on the box), the run URL, `reason`, `reverts` (for a rollback), `before` (release, commit, image of each running service, sha256 of the overlay, the env file's key names) and `after` (release, commit, images, sha256 of manifest and compose file) |
+| `step provision` | after provision | the env keys added, removed and changed (names), the overlay's new sha256 |
+| `step applied` | once the containers run the new release | the images running |
+| `end` | at the end | `result`: `ok`, `unhealthy` (running, healthcheck failed), `failed` (stopped at `step`, with the error); none means interrupted |
+
+No value of the env file ever reaches the journal, only key names. Admins read it with `ihc-app journal <slug>` (`--json`) on the box and in the portal, on the app's page ("Journal de deploys", `GET /api/apps/<slug>/deploy-journal`, admins only); the portal mounts `catalog/` read only and never writes it.
+
+## Rollback
+
+```bash
+scripts/ihc-app.sh rollback <slug> --install-dir /opt/inhousecloud [--reason "..."] [--yes]
+```
+
+On the box, as the user that installed it. It undoes the newest deploy in the journal that changed the app and has not been undone yet, going back to the release that deploy replaced: its images (by release tag, checked against the recorded image ids) and its config (its manifest and compose file, provisioned again, so the overlay, route and health path are the old ones). It takes the same lock as `apply`, is a journaled transaction (`op: rollback`, `reverts: <tx>`) and is health-checked the same way. A second rollback undoes the deploy before that one: deploys are undone in reverse order.
+
+It refuses, changing nothing and writing nothing to the journal, when there is nothing to go back to: no journal, the app's first deploy (it replaced nothing), a deploy made before the journal existed, a target release already pruned (five are kept), a release image that is gone or different. If the rolled-back release is unhealthy too, it says so, records `unhealthy` and stops: it never rolls back again on its own.
+
+What it does not undo: the env file's values (provision only adds keys and keeps every password, so the old release reads the same credentials), database migrations (that is [database-migration](runbooks/database-migration.md)), and the history of `main`. The next push to `main` deploys over a rollback, so the rollback is the brake, not the fix: `git revert` the bad commit on `main` (or fix it) and push.
 
 ## The rule: no local infrastructure
 
@@ -135,9 +179,11 @@ The core runs two `act_runner` daemons ([`docker/compose.yml`](../docker/compose
 | Install directory | no | mounted at the same path, `IHC_INSTALL_DIR` set |
 | Capacity | 2 | 1 (deploys run one at a time) |
 
-What the deploy runner needs, and why: the socket to build and start containers; the ihc network to reach the services by name (`IHC_ENDPOINTS=internal` tells `ihc-app` to use `http://authentik-server:9000`, `http://gitea:3000` and `http://proxy:81` instead of the loopback control ports); the install directory at the same path, because `.env` holds the credentials `provision` uses and because Compose reads the app's env file and overlay by host path. `force_pull: false` lets it use the locally built image. The deployer image is rebuilt on every `install.sh` foundation run, so it follows the cloud checkout: after updating the cloud, run `install.sh --apply --from foundation`.
+What the deploy runner needs, and why: the socket to build and start containers (both steps, `build` and `apply`, still run in the same job); the ihc network to reach the services by name (`IHC_ENDPOINTS=internal` tells `ihc-app` to use `http://authentik-server:9000`, `http://gitea:3000` and `http://proxy:81` instead of the loopback control ports); the install directory at the same path, because `.env` holds the credentials `provision` uses and because Compose reads the app's env file and overlay by host path. `force_pull: false` lets it use the locally built image. The deployer image is rebuilt on every `install.sh` foundation run, so it follows the cloud checkout: after updating the cloud, run `install.sh --apply --from foundation`.
 
 **A job on the deploy runner is root on the box.** The Docker socket alone is root-equivalent, and the job can read every secret in `.env`. That is acceptable only because the runner serves the organization's repositories and nothing else: anyone with write access to a repository in the organization can deploy, and anyone who can push a workflow that says `runs-on: ihc-deploy` can run anything on the box. Give write access in the organization to people you would give a shell on the box. Gitea asks for approval before running workflows from forks of first-time contributors; do not approve a fork's run that touches `.gitea/workflows`.
+
+What the build/apply split guarantees today, and what not yet. `apply` refuses anything but the head of `main`, and the template's workflow runs only on a push to `main`, so a pull request or a branch never reaches the running app through the template. But the guarantee lives in the workflow, which the repository owns: a workflow that says `on: push` for every branch and `runs-on: ihc-deploy`, and calls `docker` itself instead of `ihc-app apply`, still runs on the box with the socket. The full separation, where deploy jobs have no socket and the reconciler with the lock runs outside them, building as an unprivileged user and fetching the commit itself, is the next step ([roadmap](roadmap.md)).
 
 ## Why there is no deploy request
 
@@ -151,4 +197,4 @@ The first box started with a deploy-request repository: a pull request with `req
 
 ## Proving it
 
-Smoke test 16 ([`smoke-tests.md`](smoke-tests.md)) does the whole loop with the template app `smoke-app`: creates it (or clones it when it exists), pushes a commit to `main`, waits for the run, checks `/health` through the proxy, the redirect of `/` to Authentik, and the database and role on the shared Postgres, redeploys it, then removes it with `ihc-app remove` (it is the test's own: `kind: system-test`). Times from a clean VM are in [`first-run.md`](first-run.md).
+Smoke test 16 ([`smoke-tests.md`](smoke-tests.md)) does the whole loop with the template app `smoke-app`: creates it (or clones it when it exists), pushes a commit to `main`, waits for the run, checks `/health` through the proxy, the redirect of `/` to Authentik, and the database and role on the shared Postgres, redeploys it, then removes it with `ihc-app remove` (it is the test's own: `kind: system-test`). Before the removal, test 26 checks the journal of the two deploys, rolls back to the first release (health checked, journaled) and checks that a second rollback is refused. Times from a clean VM are in [`first-run.md`](first-run.md).

@@ -1,6 +1,11 @@
 # Push to main is the deploy (docs/gitops-flow.md). The job runs on the box, on the
 # runner labelled ihc-deploy, inside the cloud deployer image: it has the Docker
 # socket, the ihc network and the install directory (IHC_INSTALL_DIR).
+#
+# Two steps: `build` turns the commit into a release (its files and images; no cloud
+# credentials, nothing that runs changes), `apply` puts that release on the air under the
+# app's lock, only when the commit is the head of main, recording what it changes in the
+# deploy journal first. A bad release is undone on the box with `ihc-app rollback <slug>`.
 name: deploy
 
 on:
@@ -22,16 +27,8 @@ jobs:
           IHC_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ihc-app checkout
 
-      - name: Provision database, Redis, env file, route and SSO
-        run: ihc-app provision "$APP_SLUG"
+      - name: Build the release (the commit's files and images)
+        run: ihc-app build "$APP_SLUG"
 
-      - name: Build and start on the ihc network
-        run: |
-          COMPANY_ENV_FILE="$IHC_INSTALL_DIR/apps/$APP_SLUG/.env" \
-          docker compose -p "$APP_SLUG" \
-            -f docker-compose.yml \
-            -f "$IHC_INSTALL_DIR/apps/$APP_SLUG/compose.ihc.yml" \
-            up -d --build --remove-orphans
-
-      - name: Wait for the healthcheck in company-app.yaml
-        run: ihc-app wait "$APP_SLUG" --timeout 240
+      - name: Apply it (lock, merged commits only, journal, provision, start, healthcheck)
+        run: ihc-app apply "$APP_SLUG" --timeout 240

@@ -262,7 +262,11 @@ Lines with `[xx]` are the cloud's own errors and say what to change. Then:
 | `company-app.yaml is not deployable` | `python3 scripts/lib/appmanifest.py vars "$HOME/apps/<slug>/company-app.yaml" <slug>` | the field it names |
 | `the compose file brings services the cloud provides` | the lines above it in the log | remove the `postgres` / `redis` / S3 service; use `DATABASE_URL` / `REDIS_URL` / `S3_*` |
 | `asks for object storage but the storage profile is off` | — | `object_storage.required: false`, or ask the human to turn the profile on |
-| step "Build and start" failed | `cd "$HOME/apps/<slug>" && docker compose build` | the `Dockerfile` must install everything the app imports |
+| step "Build the release" failed | `cd "$HOME/apps/<slug>" && docker compose build` | the `Dockerfile` must install everything the app imports, from committed files only (an untracked file is not in the release) |
+| `the build would read more than the repository` | the lines above it in the log | drop `build.secrets`, `build.ssh` or `build.network`; keep the build context and Dockerfile inside the repository |
+| `only commits merged into main are applied` or `is not on main` | — | the workflow ran for another branch: merge into `main` and push; `main moved on`: nothing to do, the newer run deploys |
+| `another apply or rollback of <slug> is running` | `scripts/ihc-app.sh journal <slug> --install-dir "$DIR"` | wait for it to end, then push again (or re-run the job) |
+| the new release is up but wrong, and the human wants the previous one back | `scripts/ihc-app.sh journal <slug> --install-dir "$DIR"` | ask, then `scripts/ihc-app.sh rollback <slug> --install-dir "$DIR" --reason "<why>"`; then fix or `git revert` on `main`, since the next push deploys again |
 | `did not come up: /health ... answered '502'`, container `running` | `docker logs --tail 50 <slug>-app-1` | the app does not listen on `runtime.port` (8080) or has no `/health`: make them match |
 | `did not come up`, container `exited` or `restarting` | `docker logs --tail 50 <slug>-app-1` | crash on start: often SQL against the empty database, or a missing dependency |
 | `/ is not protected` | — | `auth.required: true` in `company-app.yaml`, push again |

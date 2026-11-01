@@ -6,6 +6,9 @@
                                            --format json); refuse local infrastructure
   appmanifest.py overlay SLUG SERVICE ENV_FILE NETWORK
                                            compose JSON on stdin; print compose.ihc.yml
+  appmanifest.py build-check ROOT          compose JSON on stdin: refuse a build that reads
+                                           anything but the release's files under ROOT
+                                           (secrets, ssh, host network, contexts outside)
   appmanifest.py slug-check SLUG           exit 1 with the reason when SLUG is not usable
   appmanifest.py inspect COMPOSE_FILE|- [SERVICE]
                                            an existing project's compose file (or its compose
@@ -261,6 +264,52 @@ def cmd_compose_check(service):
         sys.exit(1)
 
 
+def cmd_build_check(root):
+    """ihc-app build: the build sees the files of the commit and nothing of the box. Compose
+    reads build secrets, SSH agents and extra contexts on the machine that runs it (the deploy
+    job, which has the install directory), so a build may not ask for them."""
+    data = json.load(sys.stdin)
+    root = os.path.realpath(root)
+    errors = []
+
+    def inside(path):
+        real = os.path.realpath(path)
+        return real == root or real.startswith(root + os.sep)
+    for name, svc in (data.get("services") or {}).items():
+        b = svc.get("build")
+        if not b:
+            continue
+        if not isinstance(b, dict):
+            b = {"context": b}
+        ctx = str(b.get("context") or ".")
+        if "://" in ctx or ctx.startswith("git@"):
+            errors.append("service %r builds from %s: the build context is the repository, a remote one is not used" % (name, ctx))
+        elif not inside(os.path.join(root, ctx)):
+            errors.append("service %r builds from %s, outside the repository: keep build.context inside it" % (name, ctx))
+        df = str(b.get("dockerfile") or "Dockerfile")
+        if not b.get("dockerfile_inline") and not inside(os.path.join(root, ctx, df)):
+            errors.append("service %r: build.dockerfile %s is outside the repository" % (name, df))
+        for key, why in (("secrets", "build secrets, which Compose reads on the machine that runs the build"),
+                         ("ssh", "the SSH agent of the machine that runs the build"),
+                         ("entitlements", "build entitlements"),
+                         ("privileged", "a privileged build")):
+            if b.get(key):
+                errors.append("service %r asks for %s (build.%s): the cloud builds without them; "
+                              "fetch dependencies over the network in the Dockerfile" % (name, why, key))
+        if str(b.get("network") or "") not in ("", "default", "none"):
+            errors.append("service %r builds on the network %r: builds use the default network" % (name, b.get("network")))
+        for cname, cpath in (b.get("additional_contexts") or {}).items():
+            cpath = str(cpath)
+            if cpath.startswith(("docker-image://", "service:")):
+                continue
+            if "://" in cpath or not inside(os.path.join(root, cpath)):
+                errors.append("service %r: build.additional_contexts.%s (%s) is outside the repository" % (name, cname, cpath))
+    if errors:
+        for e in errors:
+            print("compose: " + e, file=sys.stderr)
+        sys.exit(1)
+
+
 def container_port(svc):
     """The port the service listens on, from `ports` ("8000:8000", "127.0.0.1:80:8000",
     long syntax) or `expose`; "" when the file does not say."""
@@ -353,6 +402,8 @@ def main():
         cmd_overlay(*sys.argv[2:7])
     elif cmd == "inspect":
         cmd_inspect(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "")
+    elif cmd == "build-check":
+        cmd_build_check(sys.argv[2])
     elif cmd == "slug-check":
         p = slug_problem(sys.argv[2])
         if p:

@@ -201,6 +201,38 @@ export type AppDeploys = {
   deploys: AppDeploy[];
 };
 
+export type DeployJournalImage = { image?: string; id?: string; tag?: string };
+
+export type DeployJournalTransaction = {
+  tx: string;
+  op?: 'deploy' | 'rollback' | string;
+  actor?: string;
+  reason?: string;
+  reverts?: string;
+  run_url?: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  result: 'ok' | 'unhealthy' | 'failed' | 'interrupted' | string;
+  applied: boolean;
+  before?: { release?: string; commit?: string; images?: Record<string, DeployJournalImage>; env_keys?: string[] };
+  after?: { release?: string; commit?: string; images?: Record<string, DeployJournalImage> };
+  env?: { env_keys_added: string[]; env_keys_removed: string[]; env_keys_changed: string[] };
+  end_error?: string;
+  end_health?: string;
+  end_step?: string;
+};
+
+export type DeployJournal = {
+  app_slug: string;
+  available: boolean;
+  error?: string | null;
+  exists: boolean;
+  total: number;
+  count: number;
+  transactions: DeployJournalTransaction[];
+  undo: { available: boolean; reason?: string; reverts?: string; from_release?: string; to_release?: string; to_commit?: string } | null;
+};
+
 export type PlatformConfig = {
   company_name: string;
   base_domain: string;
@@ -322,6 +354,13 @@ export async function getAppStatusMetrics(slug: string, { hours = 24 } = {}): Pr
 export async function getAppDeploys(slug: string, { limit = 20 } = {}): Promise<AppDeploys> {
   const params = new URLSearchParams({ limit: String(limit) });
   const response = await fetch(`/api/apps/${encodeURIComponent(slug)}/deploys?${params.toString()}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+export async function getAppDeployJournal(slug: string, { limit = 20 } = {}): Promise<DeployJournal> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(`/api/apps/${encodeURIComponent(slug)}/deploy-journal?${params.toString()}`);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }

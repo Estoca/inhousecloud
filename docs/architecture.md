@@ -119,8 +119,8 @@ Coding agents should read the live rules before preparing a repo. They edit app 
 3. `company-app.yaml` declares owner, runtime, health, auth, and the shared services it needs.
 4. Local checks validate the app and its health behavior.
 5. A push to `main` approves the deploy.
-6. The deploy workflow runs on the box: checkout, `ihc-app provision`, `docker compose up`, healthcheck through the proxy.
-7. The run log is the record; the portal reads it with health and inventory.
+6. The deploy workflow runs on the box: checkout, `ihc-app build` (a release: the commit's files and images, nothing running changes), `ihc-app apply` (under the app's lock, head of `main` only, journaled: `provision`, start the release's images, healthcheck through the proxy).
+7. The run log and the deploy journal are the record; the portal reads them with health and inventory. `ihc-app rollback <slug>` on the box goes back to the release the newest deploy replaced.
 8. Every later push to `main` redeploys the same way.
 
 ## Why Single Box First

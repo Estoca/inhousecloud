@@ -1,6 +1,6 @@
 # Smoke Tests
 
-Step 18 of the install sequence, 25 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
+Step 18 of the install sequence, 26 tests, after the runners and the optional profiles start (test 16 needs the runners). Each test is a command and a pass condition. The installer records the result per test in `state.json` (never headers, cookies or tokens) and refuses to mark the installation completed while any of them fails. After the install, `scripts/ihc-doctor.sh` (`<install-dir>/ihc doctor`) re-runs the read-only part of these checks at any time, in seconds, for the core and every app in the inventory, and says what to do about each failure; it never pushes, creates or removes anything (no test 16 or 19).
 
 ```sh
 # 1. The rendered Compose file is valid
@@ -229,6 +229,20 @@ docker compose -f "$IHC_COMPOSE_FILE" exec -T mcp node -e "fetch('http://smoke-a
 #       stale false, age_seconds and a freshness sentence, and smoke-app refuses a call without an actor JWT (401). After the redeploy that grants
 #       smoke-app.read to ihc-admins only: smoke-app__ping is gone from tools/list and
 #       calling it is an error result "access denied" from the gateway
+
+# 26. Deploy journal and rollback (docs/gitops-flow.md#rollback; runs inside test 16,
+#     after its redeploy, before the removal)
+scripts/lib/deployjournal.py show "$IHC_INSTALL_DIR/catalog/deploys/smoke-app.jsonl" --json
+scripts/ihc-app.sh rollback smoke-app --yes --reason "smoke test 26" --install-dir "$IHC_INSTALL_DIR"
+docker ps --filter label=com.docker.compose.project=smoke-app --format '{{.Image}}'
+curl -H "Host: smoke-app.$BASE_DOMAIN" http://127.0.0.1/health
+scripts/ihc-app.sh rollback smoke-app --yes --install-dir "$IHC_INSTALL_DIR"          # again
+# PASS: the journal has both deploys of test 16, ok, the second replacing the first's
+#       release; the rollback exits 0, the app's container runs
+#       ihc-release/smoke-app/app:<first release>, /health answers 200 through the proxy,
+#       and the journal's newest transaction is a rollback, ok, that undoes the second
+#       deploy; the second rollback exits 1 with "nothing to roll back to" (the first deploy
+#       replaced nothing the journal has) and the journal has no new line
 ```
 
 Test 21 checks the tailnet from inside the node. Whether the tailnet's own DNS sends `BASE_DOMAIN` to the node (the split DNS a person sets in the Tailscale admin console) and whether a device that installed the CA opens the portal without a warning are checked by a person, once ([`first-run.md`](first-run.md#private-ingress-run)); the `proxy_ingress` stage reports the first.
@@ -239,7 +253,9 @@ Test 18 signs in for real, with the smoke user's password from `.env`: it proves
 
 Test 14 restores every dump through `restic dump` to compare checksums; on a box with large databases it takes as long as reading them once. It proves the repository holds what the run wrote, not that a restore into a live service works: that is the monthly restore rehearsal, not built yet ([`backup.md`](backup.md)).
 
-Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `ihc-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `ihc-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `ihc-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `ihc-app list` (shown with `--all` and in the operator brief) until `ihc-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `ihc-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
+Test 16 is the whole app loop of [`gitops-flow.md`](gitops-flow.md): template, repository, push, the deploy runner, `ihc-app build` (the release), `ihc-app apply` with `ihc-app provision` (database, role, Redis ACL user, env file, Authentik provider and application, proxy host, inventory), the build on the box and the healthcheck. It deploys `smoke-app` twice (the second push proves a redeploy keeps the database password), then marks it `kind: system-test` in `inventory.json` and runs `ihc-app remove smoke-app`, so the cloud is handed over without an app nobody asked for. The removal takes only what the deploy recorded for that app: its containers, volumes and image, database and role, Redis user and keys, Authentik application and provider, proxy host (only one that forwards to `smoke-app`), the repository `<organization>/smoke-app`, `apps/smoke-app/`, `app-data/smoke-app/` and its inventory record; `ihc-app remove` refuses any app not marked as a system test. If a step fails, the test still passes (the deploy worked), its detail says what was left, and the app stays hidden from `ihc-app list` (shown with `--all` and in the operator brief) until `ihc-app remove smoke-app` is run. Why remove rather than keep it hidden: every resource the test creates is recorded by the deploy itself, so the removal never has to guess, and a delivered cloud whose first `ihc-app list`, Gitea organization and Authentik applications show a test app confuses the first person who opens them ([`cleanup.md`](cleanup.md#remove-one-app)). The first run pulls the Node base image and builds it, so it takes a few minutes; later runs reuse the cache.
+
+Test 26 is the rollback path of [`gitops-flow.md`](gitops-flow.md#rollback) on the box, with the two releases test 16 just made: the images come from the release tags, the config from the first release's manifest, provisioned again, and the result goes through the same healthcheck as a deploy. The refusals that need no running app (no journal, a pruned release, an image gone, the lock held by another apply) and the merged-commit gate of `apply` (a run for another branch, a commit not on `main`, an older commit of `main` skipped as superseded) are covered without the box by `scripts/tests/deploy-journal.sh`, against a fake Gitea.
 
 Test 19 provisions with the same function `ihc-app provision` calls, without a deploy: the deploy path is test 16's. The two test apps keep their env files in `<install-dir>/local/smoke-storage/` (0700), and their buckets and keys stay in Garage, so a re-run reuses them. The S3 requests are signed in Python's standard library (`scripts/lib/s3.py`, AWS Signature V4, path-style); no client image is pulled.
 

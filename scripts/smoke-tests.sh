@@ -3,7 +3,7 @@
 #
 #   scripts/smoke-tests.sh --install-dir DIR [--json]
 #
-# Runs tests 1 to 25. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
+# Runs tests 1 to 26. Test 14 runs `ihc-backup.sh verify --latest` and is skipped
 # only when BACKUP_ENABLED=false. Test 16 deploys the template app smoke-app by a push to
 # main (never skipped: the runners are core), redeploys it, then removes it (ihc-app remove). Tests 17 and 18
 # cover the ops tools and are skipped only when the ops profile is off; test 19 covers object
@@ -12,7 +12,8 @@
 # test 16, while smoke-app is on the air; test 23 covers the portal's status API for agents
 # (docs/portal-api.md); test 24 covers the portal by role (the smoke user through the SSO,
 # the people list, the portal's Authentik token); test 25 covers the MCP gateway and runs
-# inside test 16 (docs/mcp-gateway.md). Results go to state.json under stages.smoke_tests.probe.tests, one entry
+# inside test 16 (docs/mcp-gateway.md); test 26 covers the deploy journal and rollback and runs
+# inside test 16, after its redeploy. Results go to state.json under stages.smoke_tests.probe.tests, one entry
 # per test with status and a short detail: never headers, cookies or tokens. Exit 1
 # when any test fails. Variable names of the document map to .env as follows:
 #   IHC_COMPOSE_FILE -> <install-dir>/compose.yml      PORTAL_HOST, PROXY_HTTP_PORT -> same
@@ -400,8 +401,46 @@ t25_result() {
   [ -z "$T25_BAD" ] && result 25 mcp-gateway pass "${T25_GOOD#; }" || result 25 mcp-gateway fail "${T25_BAD# }"
 }
 
+# 26. deploy journal and rollback (docs/gitops-flow.md#rollback), with APP (smoke-app of test
+#     16 after its two deploys): the journal has both deploys ok in order, the second replacing
+#     the first's release; `ihc-app rollback APP --yes` puts the first release back (the app's
+#     container runs that release's image, /health 200 through the proxy) and journals a
+#     rollback, ok, that undoes the second deploy; a second rollback is refused (the first
+#     deploy replaced nothing the journal has) and writes nothing. Runs inside test 16.
+T26_DONE=false
+t26() { # APP SHA1 SHA2
+  local slug="$1" j="$INSTALL_DIR/catalog/deploys/$1.jsonl" got rel1 tx2 out rc n0 code img t0 dt
+  T26_DONE=true
+  [ -f "$j" ] || { result 26 deploy-rollback fail "no deploy journal at $j after two deploys (an old deploy.yml in the repository?)"; return; }
+  got="$($PY "$IHC_LIB/deployjournal.py" show "$j" --json --limit 50 | $PY -c 'import json,sys
+t=list(reversed(json.load(sys.stdin))); d=[x for x in t if x.get("op")=="deploy" and x["result"]=="ok"]
+m={x["after"]["commit"]:x for x in d}
+a,b=m.get(sys.argv[1]),m.get(sys.argv[2])
+if not a or not b: print("missing ok deploys of both commits: %s"%[(x["after"]["commit"][:8],x["result"]) for x in t]); sys.exit()
+if b["before"].get("release")!=a["after"]["release"]: print("the second deploy replaced %r, not the first release %r"%(b["before"].get("release"),a["after"]["release"])); sys.exit()
+print("ok %s %s"%(a["after"]["release"],b["tx"]))' "$2" "$3")"
+  case "$got" in ok\ *) ;; *) result 26 deploy-rollback fail "journal: $got"; return ;; esac
+  rel1="$(printf '%s' "$got" | cut -d' ' -f2)"; tx2="$(printf '%s' "$got" | cut -d' ' -f3)"
+  t0=$(date +%s); rc=0
+  out="$("$IHC_ROOT/scripts/ihc-app.sh" rollback "$slug" --yes --reason "smoke test 26" --install-dir "$INSTALL_DIR" 2>&1)" || rc=$?
+  dt=$(( $(date +%s) - t0 ))
+  [ "$rc" = 0 ] || { result 26 deploy-rollback fail "rollback exit $rc: $(printf '%s' "$out" | grep '^\[xx\]' | tail -n 1 | cut -c6-)"; return; }
+  img="$(docker ps --filter "label=com.docker.compose.project=$slug" --filter label=com.docker.compose.service=app --format '{{.Image}}' | head -n 1)"
+  [ "$img" = "ihc-release/$slug/app:$rel1" ] || { result 26 deploy-rollback fail "after the rollback the app runs '$img', not ihc-release/$slug/app:$rel1"; return; }
+  code="$(http_code "$(proxy_url "$slug.$BASE_DOMAIN" /health)" $(proxy_args "$slug.$BASE_DOMAIN"))"
+  [ "$code" = 200 ] || { result 26 deploy-rollback fail "after the rollback /health answered $code through the proxy"; return; }
+  got="$($PY "$IHC_LIB/deployjournal.py" show "$j" --json --limit 1 | $PY -c 'import json,sys
+x=json.load(sys.stdin)[0]; print("%s %s %s %s"%(x.get("op"),x["result"],x.get("reverts"),x["after"]["release"]))')"
+  [ "$got" = "rollback ok $tx2 $rel1" ] || { result 26 deploy-rollback fail "journal after the rollback: '$got' (wanted 'rollback ok $tx2 $rel1')"; return; }
+  n0="$(wc -l < "$j")"; rc=0
+  out="$("$IHC_ROOT/scripts/ihc-app.sh" rollback "$slug" --yes --install-dir "$INSTALL_DIR" 2>&1)" || rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'nothing to roll back to' \
+    || { result 26 deploy-rollback fail "a second rollback was not refused cleanly (exit $rc): $(printf '%s' "$out" | tail -n 1)"; return; }
+  [ "$(wc -l < "$j")" = "$n0" ] || { result 26 deploy-rollback fail "the refused rollback wrote to the journal"; return; }
+  result 26 deploy-rollback pass "two deploys journaled; rollback to $rel1 in ${dt}s, /health 200, journaled as undoing the second; a second rollback refused with nothing written"
+}
 t16() {
-  local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 tries1 removed
+  local slug=smoke-app org="$GITEA_ORGANIZATION" work code body loc row fp1 fp2 app_env db run1 tries1 removed sha1
   T16_GT="http://127.0.0.1:${GITEA_LOCAL_PORT}/api/v1"
   have git || { result 16 app-deploy fail "git not found on the box"; return; }
   work="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke16.XXXXXX")"
@@ -419,6 +458,8 @@ t16() {
     GIT_ASKPASS="$T16_AP" GIT_TERMINAL_PROMPT=0 git clone -q "$T16_REPO" "$work/$slug" 2>/dev/null \
       || { result 16 app-deploy fail "clone of $org/$slug failed"; rm -rf "$work"; return; }
   fi
+  # Test 26: a repository left by an older run may carry a deploy.yml from before the journal.
+  mkdir -p "$work/$slug/.gitea/workflows"; sed "s/__APP_SLUG__/$slug/g" "$IHC_ROOT/templates/app/.gitea/workflows/deploy.yml" > "$work/$slug/.gitea/workflows/deploy.yml"
   # Test 25: the app's MCP section grants its scope to the users group for the first deploy
   # (a repository left by an older run may predate the section, or carry the admin grant).
   cp "$IHC_ROOT/templates/app/server.js" "$work/$slug/server.js"
@@ -427,7 +468,7 @@ t16() {
   if ! t16_push "$work/$slug" "smoke test 16"; then
     result 16 app-deploy fail "deploy run for $(printf '%s' "$T16_SHA" | cut -c1-8) ended '${T16_ST:-not started after ${T16_RUN:-?}s}': $GITEA_BASE_URL/$org/$slug/actions"; rm -rf "$work"; return
   fi
-  run1="$T16_RUN"; tries1="$T16_TRIES"; t16_mark || true
+  run1="$T16_RUN"; tries1="$T16_TRIES"; sha1="$T16_SHA"; t16_mark || true
   body="$(curl -sS --max-time 15 $(proxy_args "$slug.$BASE_DOMAIN") -w '\n%{http_code}' "$(proxy_url "$slug.$BASE_DOMAIN" /health)" 2>/dev/null || true)"
   code="${body##*$'\n'}"
   [ "$code" = 200 ] && [ "$(printf '%s' "${body%$'\n'*}" | jsonq get ok)" = true ] || { result 16 app-deploy fail "run green but https://$slug.$BASE_DOMAIN/health answered $code through the proxy"; rm -rf "$work"; return; }
@@ -451,6 +492,7 @@ t16() {
   [ "$T25_DONE" = true ] && t25_revoked "$slug"
   fp2="$(sha_fp "$(envfile get "$app_env" PGPASSWORD)")"
   [ "$fp1" = "$fp2" ] || { result 16 app-deploy fail "the redeploy changed the database password"; return; }
+  t26 "$slug" "$sha1" "$T16_SHA"
   if "$IHC_ROOT/scripts/ihc-app.sh" remove "$slug" --yes --install-dir "$INSTALL_DIR" >"${TMPDIR:-/tmp}/ihc-smoke16-remove.$$.log" 2>&1; then
     removed="removed after the test (repository, route, SSO, database, Redis user, files, inventory)"
   else
@@ -462,6 +504,7 @@ t16() {
 }
 t16
 [ "$T22_DONE" = true ] || t22 ""
+[ "$T26_DONE" = true ] || result 26 deploy-rollback fail "not run: test 16 did not take smoke-app through two deploys"
 t25_result
 
 # 17. the ops tools are behind the SSO: an anonymous request to the root of

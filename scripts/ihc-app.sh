@@ -22,11 +22,32 @@
 #       Authentik provider and application, the proxy host SLUG.<BASE_DOMAIN> with
 #       forward auth, and the app's record in inventory.json.
 #   ihc-app checkout                   inside a deploy job: fetch the pushed commit
+#   ihc-app build SLUG [--manifest FILE]
+#       Inside a deploy job, without the cloud's credentials: the files of the commit (git
+#       archive, nothing else of the workspace) become a release in
+#       <install-dir>/deploys/SLUG/releases/RID, its images are built and tagged
+#       ihc-release/SLUG/<service>:RID, and release.json records commit and image ids.
+#       Refuses a build that would read the box (build secrets, ssh, host network, a context
+#       outside the repository). Prints RID and writes it to .ihc-release.
+#   ihc-app apply SLUG [--release RID] [--lock-timeout S]
+#       The reconciler: takes the app's lock (one apply or rollback per app at a time), applies
+#       only a release whose commit is the head of main in Gitea (an older one of main is
+#       skipped as superseded, any other refused), journals what it will change before
+#       changing it, then provisions, starts the release's images (never builds) and waits
+#       for the healthcheck. Every step and the result go to the deploy journal.
+#   ihc-app rollback SLUG [--yes] [--reason TEXT] [--lock-timeout S]
+#       On the box: undo the newest deploy in the journal not undone yet, going back to the
+#       release (images and config) it replaced; journaled like a deploy and health-checked.
+#       Refuses, changing nothing, when there is nothing to go back to. Never loops: an
+#       unhealthy rollback is reported, not rolled back again.
+#   ihc-app journal SLUG [--json] [--limit N]
+#                                      the deploy journal of SLUG, newest first
 #   ihc-app wait SLUG [--timeout S]    wait for the manifest healthcheck behind the proxy
 #   ihc-app list [--all] [--json]      the apps in inventory.json; --all includes the ones a
 #                                      system test created (kind: system-test), hidden otherwise
 #   ihc-app remove SLUG [--yes]        remove an app a system test created, and only what its
-#                                      deploy recorded (docs/cleanup.md); asks for the slug
+#                                      deploy recorded, its releases and its journal
+#                                      (docs/cleanup.md); asks for the slug
 #
 # Options: --install-dir DIR (default $IHC_INSTALL_DIR, else /opt/inhousecloud).
 # Idempotent: every step probes first; a second run keeps every password. Only `remove`
@@ -49,7 +70,7 @@ usage() { sed -n '2,/^set -eu/p' "$IHC_ROOT/scripts/ihc-app.sh" | sed '$d' | sed
 INSTALL_DIR="${IHC_INSTALL_DIR:-/opt/inhousecloud}"
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 SLUG=""; DIR=""; NAME=""; OWNER=""; PUSH=false; MANIFEST="company-app.yaml"; TIMEOUT=240; ALL=false; YES=false
-PORT_OPT=""; SERVICE_OPT=""; HEALTH_OPT=""
+PORT_OPT=""; SERVICE_OPT=""; HEALTH_OPT=""; RELEASE=""; REASON=""; LOCK_TIMEOUT=""; LIMIT=20
 while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -63,6 +84,10 @@ while [ $# -gt 0 ]; do
     --health) HEALTH_OPT="$2"; shift ;;
     --manifest) MANIFEST="$2"; shift ;;
     --timeout) TIMEOUT="$2"; shift ;;
+    --release) RELEASE="$2"; shift ;;
+    --reason) REASON="$2"; shift ;;
+    --lock-timeout) LOCK_TIMEOUT="$2"; shift ;;
+    --limit) LIMIT="$2"; shift ;;
     --json) JSON_OUTPUT=true ;;
     --all) ALL=true ;;
     --yes|-y) YES=true ;;
@@ -76,7 +101,14 @@ INSTALL_DIR="${INSTALL_DIR%/}"
 ENV_FILE="$INSTALL_DIR/.env"
 legacy_guard "$INSTALL_DIR"
 INVENTORY="$INSTALL_DIR/inventory.json"
+# Releases and the per-app lock (0700: the apps' code), and the journal the portal reads.
+DEPLOYS="$INSTALL_DIR/deploys"
+JOURNAL_DIR="$INSTALL_DIR/catalog/deploys"
+KEEP_RELEASES=5
 RESOURCES=""
+# die remembers its message: an interrupted transaction ends with it in the journal.
+LAST_ERROR=""
+die() { LAST_ERROR="$*"; fail "$*"; exit 1; }
 record() { RESOURCES="$RESOURCES $1"; }
 
 # Endpoints: the loopback control ports on the box itself, the service names on the
@@ -607,11 +639,13 @@ cmd_checkout() {
 }
 
 # ======================================================================= wait
-cmd_wait() {
-  [ -n "$SLUG" ] || die "usage: ihc-app wait SLUG [--timeout SECONDS]"
-  load_env; endpoints
+# app_wait: the manifest's healthcheck through the proxy, then the SSO in front of /.
+# Returns 1 with WAIT_DETAIL (what it got) instead of exiting, so apply and rollback can
+# journal the result.
+app_wait() {
   local host="$SLUG.$BASE_DOMAIN" t0 code state loc vars
-  vars="$($PY "$IHC_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || exit 1
+  WAIT_DETAIL=""
+  vars="$($PY "$IHC_LIB/appmanifest.py" vars "$MANIFEST" "$SLUG")" || { WAIT_DETAIL="cannot read $MANIFEST"; return 1; }
   eval "$vars"
   t0=$(date +%s)
   step "waiting for $M_HEALTH_PATH = $M_HEALTH_STATUS on $host (up to ${TIMEOUT}s)"
@@ -621,11 +655,12 @@ cmd_wait() {
     [ "$code" = "$M_HEALTH_STATUS" ] && break
     case "$state" in exited|dead) code="container $state" ;; esac
     if [ "$state" = exited ] || [ "$state" = dead ] || [ $(( $(date +%s) - t0 )) -ge "$TIMEOUT" ]; then
-      fail "$SLUG did not come up: $M_HEALTH_PATH through the proxy answered '$code' (wanted $M_HEALTH_STATUS), container state '${state:-missing}'"
+      WAIT_DETAIL="$M_HEALTH_PATH through the proxy answered '$code' (wanted $M_HEALTH_STATUS), container state '${state:-missing}'"
+      fail "$SLUG did not come up: $WAIT_DETAIL"
       fail "last lines of the container log:"
       docker logs --tail 40 "$(docker ps -aq --filter "label=com.docker.compose.project=$SLUG" --filter "label=com.docker.compose.service=$M_SERVICE" | head -n 1)" >&2 2>&1 || true
       fail "check that the service listens on port $M_PORT (runtime.port) and answers $M_HEALTH_PATH, then push again"
-      exit 1
+      return 1
     fi
     sleep 3
   done
@@ -638,13 +673,319 @@ cmd_wait() {
       loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$host") "$(proxy_url "$host" /)" 2>/dev/null || echo 000)"
       case "$loc" in 302*outpost.goauthentik.io*|302*"$AUTHENTIK_HOST"*) break ;; esac
       if [ $(( $(date +%s) - t0 )) -ge 60 ]; then
-        fail "/ is not protected: got '${loc%% *}' (wanted 302 to the outpost); re-run ihc-app provision $SLUG"; exit 1
+        WAIT_DETAIL="/ is not protected: got '${loc%% *}' (wanted 302 to the outpost)"
+        fail "$WAIT_DETAIL; re-run ihc-app provision $SLUG"; return 1
       fi
       sleep 3
     done
     ok "anonymous requests to / are sent to the Authentik sign-in"
   fi
+  WAIT_DETAIL="$M_HEALTH_PATH answered $code"
   ok "$SLUG is up at $(app_url "$SLUG")"
+}
+
+cmd_wait() {
+  [ -n "$SLUG" ] || die "usage: ihc-app wait SLUG [--timeout SECONDS]"
+  load_env; endpoints
+  app_wait || exit 1
+  # A workflow from before the journal (provision, compose up --build, wait) deploys without
+  # it: no lock, no record of what changed, nothing for rollback to go back to.
+  if [ -n "${GITHUB_SHA:-}" ] && ! grep -q "\"commit\":\"$GITHUB_SHA\"" "$JOURNAL_DIR/$SLUG.jsonl" 2>/dev/null; then
+    warn "this deploy is not in the deploy journal: the repository's .gitea/workflows/deploy.yml predates it. Copy the cloud's templates/app/.gitea/workflows/deploy.yml (build, then apply) to get the lock, the journal and ihc-app rollback (docs/gitops-flow.md)"
+  fi
+  return 0
+}
+
+# ============================================================ build, apply, rollback
+# A deploy is two steps (docs/gitops-flow.md): `build` turns the commit into a release
+# (its files and images, tagged per release) and changes nothing that runs; `apply` is the
+# reconciler that puts a release on the air under the app's lock, journaled. `rollback`
+# applies the release the newest deploy replaced. The journal, one JSON line per event, is
+# <install-dir>/catalog/deploys/SLUG.jsonl (scripts/lib/deployjournal.py has the format).
+journal() { $PY "$IHC_LIB/deployjournal.py" "$@"; }
+journal_file() { printf '%s/%s.jsonl' "$JOURNAL_DIR" "$SLUG"; }
+releases_dir() { printf '%s/%s/releases' "$DEPLOYS" "$SLUG"; }
+rel_get() { journal release-get "$(releases_dir)/$1/release.json" "$2"; } # RID KEY
+file_sha() { [ -f "$1" ] && $PY -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" || true; }
+actor() {
+  if [ -n "${GITHUB_ACTOR:-}" ]; then printf '%s' "$GITHUB_ACTOR"
+  else printf '%s@%s' "${SUDO_USER:-$(id -un)}" "$(hostname 2>/dev/null || echo box)"; fi
+}
+
+# running_images: {service: {image, id}} of the app's containers now.
+running_images() {
+  local ids
+  ids="$(docker ps -aq --filter "label=com.docker.compose.project=$SLUG")"
+  if [ -z "$ids" ]; then printf '{}'; else
+    # shellcheck disable=SC2086
+    docker inspect $ids | journal images
+  fi
+}
+
+# app_lock TIMEOUT WHAT: the app's lock, held by this shell until it exits (a flock on fd 9,
+# so a crash releases it). Waits up to TIMEOUT seconds, then refuses saying who holds it.
+app_lock() {
+  local dir="$DEPLOYS/$SLUG" holder
+  (umask 077; mkdir -p "$dir"); chmod 700 "$DEPLOYS" 2>/dev/null || true
+  exec 9>>"$dir/lock"
+  if ! $PY -c 'import fcntl,sys,time
+end = time.time() + float(sys.argv[1]); said = False
+while True:
+    try:
+        fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+    except OSError:
+        if time.time() >= end: sys.exit(1)
+        if not said: print("    waiting for the lock of the app (another apply or rollback runs)", file=sys.stderr); said = True
+        time.sleep(1)' "$1"; then
+    holder="$(cat "$dir/lock.holder" 2>/dev/null || echo unknown)"
+    die "another apply or rollback of $SLUG is running ($holder): nothing changed; try again when it ends"
+  fi
+  printf '%s, pid %s, since %s\n' "$2" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/lock.holder"
+}
+
+# Journal writes. JOURNAL_TX is the open transaction: the EXIT trap ends it as failed when the
+# script stops halfway (a die), with the step it was in and the error.
+JOURNAL_TX=""; JOURNAL_STEP=""; JOURNAL_OP=""
+journal_add() { # PHASE [jsonq build args...]
+  local phase="$1"; shift
+  jsonq build tx="$JOURNAL_TX" phase="$phase" slug="$SLUG" "$@" | journal append "$(journal_file)"
+}
+journal_exit() {
+  local rc=$?
+  if [ -n "$JOURNAL_TX" ]; then
+    journal_add end result=failed step="$JOURNAL_STEP" error="$(printf '%s' "${LAST_ERROR:-exit $rc}" | cut -c1-400)" || true
+    rm -f "$INSTALL_DIR/apps/$SLUG/.env.journal"
+    fail "$JOURNAL_OP $JOURNAL_TX of $SLUG failed at $JOURNAL_STEP; recorded in the deploy journal (ihc-app journal $SLUG)"
+  fi
+  [ -z "$API_TMPDIR" ] || rm -rf "$API_TMPDIR"
+}
+
+cmd_build() {
+  [ -n "$SLUG" ] || die "usage: ihc-app build SLUG [--manifest FILE]"
+  # No load_env: the build needs no credential of the cloud, and gets none.
+  [ -f "$MANIFEST" ] || die "manifest not found: $MANIFEST (run from the app repository, or pass --manifest)"
+  local mdir prefix sha rid rel src pdir compose json errf vars mf tags
+  mdir="$(cd "$(dirname "$MANIFEST")" && pwd)"; mf="$(basename "$MANIFEST")"
+  if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${GITHUB_REPOSITORY##*/}" != "$SLUG" ]; then
+    die "this job runs for $GITHUB_REPOSITORY but builds $SLUG: the repository name must be the slug"
+  fi
+  have git || die "git is required"
+  sha="${GITHUB_SHA:-$(git -C "$mdir" rev-parse HEAD 2>/dev/null || true)}"
+  git -C "$mdir" rev-parse -q --verify "$sha^{commit}" >/dev/null 2>&1 || die "commit ${sha:-?} is not in $mdir: build runs in a checkout of the app (ihc-app checkout)"
+  prefix="$(git -C "$mdir" rev-parse --show-prefix)"
+  rid="$(date -u +%Y%m%dT%H%M%SZ)-$(printf '%s' "$sha" | cut -c1-12)"
+  rel="$(releases_dir)/$rid"; src="$rel/src"; pdir="$src/$prefix"; pdir="${pdir%/}"
+
+  step "release $rid of $SLUG (commit $(printf '%s' "$sha" | cut -c1-12))"
+  (umask 077; mkdir -p "$DEPLOYS/$SLUG"); chmod 700 "$DEPLOYS" "$DEPLOYS/$SLUG" 2>/dev/null || true
+  mkdir -p "$src"
+  # The files of the commit and nothing else of the workspace.
+  git -C "$mdir" archive "$sha" | tar -x -C "$src" || die "git archive of $sha failed"
+  vars="$($PY "$IHC_LIB/appmanifest.py" vars "$pdir/$mf" "$SLUG")" || die "company-app.yaml is not deployable: fix the lines above"
+  eval "$vars"
+  compose="$pdir/$M_COMPOSE_FILE"
+  [ -f "$compose" ] || die "compose file not found: $M_COMPOSE_FILE (runtime.compose_file)"
+  errf="$(mktemp "${TMPDIR:-/tmp}/ihc-compose.XXXXXX")"
+  json="$(COMPANY_ENV_FILE=/dev/null docker compose --project-directory "$pdir" -p "$SLUG" -f "$compose" config --format json 2>"$errf")" \
+    || { fail "$(tail -n 3 "$errf")"; rm -f "$errf"; die "docker compose config failed on $M_COMPOSE_FILE"; }
+  rm -f "$errf"
+  printf '%s' "$json" | $PY "$IHC_LIB/appmanifest.py" compose-check "$M_SERVICE" || die "the compose file brings services the cloud provides: fix the lines above"
+  printf '%s' "$json" | $PY "$IHC_LIB/appmanifest.py" build-check "$src" || die "the build would read more than the repository: fix the lines above"
+  ok "files of the commit in $src; manifest and compose file valid"
+
+  step "build"
+  COMPANY_ENV_FILE=/dev/null docker compose --project-directory "$pdir" -p "$SLUG" -f "$compose" build >&2 || die "build of $SLUG failed: the error is above"
+  COMPANY_ENV_FILE=/dev/null docker compose --project-directory "$pdir" -p "$SLUG" -f "$compose" pull --ignore-buildable --quiet >&2 2>&1 \
+    || warn "pulling the images the app does not build failed; using the copies on the box"
+  # Every service, built or pulled, gets a tag of this release: the image a rollback finds is
+  # the one this release ran, whatever happens later to the app's tags or upstream's.
+  tags="$(printf '%s' "$json" | SLUG="$SLUG" RID="$rid" $PY -c 'import json,os,sys
+d=json.load(sys.stdin); slug=os.environ["SLUG"]; rid=os.environ["RID"]
+for n,s in sorted((d.get("services") or {}).items()):
+    img=s.get("image") or "%s-%s"%(slug,n)
+    print("%s\t%s\tihc-release/%s/%s:%s"%(n,img,slug,n.lower(),rid))')"
+  printf '%s\n' "$tags" | while IFS="$(printf '\t')" read -r svc img tag; do
+    [ -n "$svc" ] || continue
+    docker image inspect "$img" >/dev/null 2>&1 || die "image $img of service $svc is not on the box after the build"
+    docker tag "$img" "$tag" || die "docker tag $tag failed"
+  done || exit 1
+  printf '%s\n' "$tags" | SLUG="$SLUG" $PY -c 'import json,os,sys
+print(json.dumps({l.split("\t")[0]: l.split("\t")[2] for l in sys.stdin.read().splitlines() if l.strip()}))' \
+    | journal pin "$SLUG" > "$rel/pin.yml"
+  printf '%s\n' "$tags" | REL="$rel" RID="$rid" SLUG="$SLUG" SHA="$sha" MF="$prefix$mf" COMPOSE_FILE="$prefix$M_COMPOSE_FILE" \
+    PREFIX="$prefix" REPO="${GITHUB_REPOSITORY:-}" REF="${GITHUB_REF:-}" ACTOR="$(actor)" $PY -c 'import datetime,hashlib,json,os,subprocess,sys
+e=os.environ; images={}
+for l in sys.stdin.read().splitlines():
+    if not l.strip(): continue
+    svc,img,tag=l.split("\t")
+    iid=subprocess.run(["docker","image","inspect","-f","{{.Id}}",tag],capture_output=True,text=True).stdout.strip()
+    images[svc]={"tag":tag,"id":iid,"source":img}
+def sha(p):
+    return hashlib.sha256(open(os.path.join(e["REL"],"src",p),"rb").read()).hexdigest()
+rel={"schema_version":1,"slug":e["SLUG"],"release":e["RID"],"commit":e["SHA"],"repository":e["REPO"],"ref":e["REF"],
+     "built_by":e["ACTOR"],"built_at":datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+     "project_dir":e["PREFIX"],"manifest":e["MF"],"compose_file":e["COMPOSE_FILE"],
+     "manifest_sha256":sha(e["MF"]),"compose_sha256":sha(e["COMPOSE_FILE"]),"images":images}
+json.dump(rel,open(os.path.join(e["REL"],"release.json"),"w"),indent=2,sort_keys=True)' || die "could not write release.json"
+  printf '%s\n' "$rid" > "$mdir/.ihc-release" 2>/dev/null || true
+  ok "release $rid: $(printf '%s\n' "$tags" | cut -f3 | tr '\n' ' ')"
+  printf '%s\n' "$rid"
+}
+
+# merged_check RID: 0 when the release's commit is the head of main in Gitea; 2 when it is an
+# older commit of main (a newer push is queued, its run applies it); dies otherwise.
+merged_check() {
+  local commit repo head
+  commit="$(rel_get "$1" commit)"; repo="${GITHUB_REPOSITORY:-$(rel_get "$1" repository)}"
+  [ -n "$repo" ] || repo="$GITEA_ORGANIZATION/$SLUG"
+  if [ -n "${GITHUB_REF:-}" ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+    die "this run is for $GITHUB_REF: only commits merged into main are applied (a push to main is the approval); nothing changed"
+  fi
+  api GET "$GT/repos/$repo/branches/main"
+  api_ok || die "cannot read main of $repo in Gitea (HTTP $API_CODE): nothing applied"
+  head="$(printf '%s' "$API_BODY" | jsonq get commit.id)"
+  if [ "$head" = "$commit" ]; then ok "commit $(printf '%s' "$commit" | cut -c1-12) is the head of main of $repo"; return 0; fi
+  api GET "$GT/repos/$repo/commits?sha=main&limit=50&stat=false&verification=false&files=false"
+  if api_ok && printf '%s' "$API_BODY" | $PY -c 'import json,sys
+sys.exit(0 if any(c.get("sha")==sys.argv[1] for c in json.load(sys.stdin) or []) else 1)' "$commit"; then
+    log "main of $repo moved on to $(printf '%s' "$head" | cut -c1-12): the run for that commit applies it; nothing applied for $(printf '%s' "$commit" | cut -c1-12)"
+    return 2
+  fi
+  die "commit $(printf '%s' "$commit" | cut -c1-12) is not on main of $repo (main is at $(printf '%s' "$head" | cut -c1-12)): only merged commits are applied; nothing changed"
+}
+
+# check_release RID: the release's files and every image it recorded, unchanged.
+check_release() {
+  local rel; rel="$(releases_dir)/$1"
+  [ -f "$rel/release.json" ] && [ -f "$rel/pin.yml" ] || return 1
+  rel_get "$1" images | $PY -c 'import json,subprocess,sys
+for svc,i in json.load(sys.stdin).items():
+    try: got=subprocess.run(["docker","image","inspect","-f","{{.Id}}",i["tag"]],capture_output=True,text=True).stdout.strip()
+    except OSError: got=""
+    if got!=i["id"]:
+        print("image %s of %s is %s"%(i["tag"],svc,"missing" if not got else "another one (%s)"%got[:19]),file=sys.stderr); sys.exit(1)'
+}
+
+# reconcile OP RID [REVERTS]: put release RID on the air as a journaled transaction. Sets
+# RECONCILE_OK (true: healthy). Never call it in a condition (`if reconcile`): bash turns
+# set -e off inside, and provision relies on it.
+RECONCILE_OK=false
+reconcile() {
+  local op="$1" rid="$2" reverts="${3:-}" rel pdir prev prev_commit commit before_images overlay app_env envdiff ec=0
+  rel="$(releases_dir)/$rid"; pdir="$rel/src/$(rel_get "$rid" project_dir)"; pdir="${pdir%/}"
+  commit="$(rel_get "$rid" commit)"
+  check_release "$rid" || die "release $rid of $SLUG is incomplete on the box (files or images gone): nothing changed"
+  prev="$(cat "$DEPLOYS/$SLUG/current" 2>/dev/null || true)"
+  prev_commit=""; [ -n "$prev" ] && [ -f "$(releases_dir)/$prev/release.json" ] && prev_commit="$(rel_get "$prev" commit)"
+  before_images="$(running_images)"
+  APP_DIR="$INSTALL_DIR/apps/$SLUG"; app_env="$APP_DIR/.env"; overlay="$APP_DIR/compose.ihc.yml"
+  if [ -f "$app_env" ]; then (umask 077; cp "$app_env" "$APP_DIR/.env.journal"); else (umask 077; mkdir -p "$APP_DIR"; : > "$APP_DIR/.env.journal"); fi
+
+  # Write-ahead: what this transaction will change, before it changes anything.
+  JOURNAL_OP="$op"; JOURNAL_STEP=begin
+  JOURNAL_TX="$(date -u +%Y%m%dT%H%M%SZ)-$op-$(random_secret 6 | tr 'A-Z' 'a-z')"
+  trap journal_exit EXIT
+  journal_add begin op="$op" actor="$(actor)" reason="$REASON" reverts="$reverts" ref="${GITHUB_REF:-}" \
+    run_url="$([ -n "${GITHUB_RUN_NUMBER:-}" ] && printf '%s/%s/actions/runs/%s' "${GITEA_BASE_URL%/}" "${GITHUB_REPOSITORY:-}" "$GITHUB_RUN_NUMBER")" \
+    before:="$(jsonq build release="$prev" commit="$prev_commit" images:="$before_images" overlay_sha256="$(file_sha "$overlay")" \
+      env_keys:="$(envfile keys "$APP_DIR/.env.journal" | $PY -c 'import json,sys;print(json.dumps(sys.stdin.read().split()))')")" \
+    after:="$(jsonq build release="$rid" commit="$commit" images:="$(rel_get "$rid" images)" \
+      manifest_sha256="$(rel_get "$rid" manifest_sha256)" compose_sha256="$(rel_get "$rid" compose_sha256)")" \
+    || die "could not write the deploy journal $(journal_file): nothing changed"
+  ok "journal: $op $JOURNAL_TX, ${prev:-nothing journaled} -> $rid"
+
+  JOURNAL_STEP=provision
+  MANIFEST="$pdir/$(basename "$(rel_get "$rid" manifest)")"
+  IHC_RELEASE="$rid" IHC_RELEASE_COMMIT="$commit"; export IHC_RELEASE IHC_RELEASE_COMMIT
+  cmd_provision
+  envdiff="$(journal envdiff "$APP_DIR/.env.journal" "$app_env")"; rm -f "$APP_DIR/.env.journal"
+  journal_add step step=provision overlay_sha256="$(file_sha "$overlay")" \
+    env_keys_added:="$(printf '%s' "$envdiff" | jsonq get env_keys_added)" \
+    env_keys_removed:="$(printf '%s' "$envdiff" | jsonq get env_keys_removed)" \
+    env_keys_changed:="$(printf '%s' "$envdiff" | jsonq get env_keys_changed)"
+  cp "$overlay" "$rel/compose.ihc.yml" 2>/dev/null || true
+
+  JOURNAL_STEP=up
+  step "start release $rid (images of the release, never a build)"
+  COMPANY_ENV_FILE="$app_env" docker compose -p "$SLUG" --project-directory "$pdir" -f "$pdir/$M_COMPOSE_FILE" -f "$overlay" -f "$rel/pin.yml" \
+    up -d --no-build --pull never --remove-orphans >&2 || die "docker compose up of release $rid failed: the error is above"
+  printf '%s\n' "$rid" > "$DEPLOYS/$SLUG/current"
+  journal_add step step=applied images:="$(running_images)"
+
+  JOURNAL_STEP=health
+  if app_wait; then
+    journal_add end result=ok health="$WAIT_DETAIL"
+  else
+    journal_add end result=unhealthy health="$WAIT_DETAIL"; ec=1
+  fi
+  JOURNAL_TX=""
+  # Releases kept: the newest KEEP_RELEASES, the one running and the one it replaced.
+  local old
+  for old in $(journal prune "$(releases_dir)" "$KEEP_RELEASES" "$rid" "$prev"); do
+    rel_get "$old" images | $PY -c 'import json,sys
+for i in json.load(sys.stdin).values(): print(i["tag"])' 2>/dev/null | xargs docker image rm >/dev/null 2>&1 || true
+    rm -rf "$(releases_dir)/$old"
+  done
+  if [ "$ec" = 0 ]; then RECONCILE_OK=true; else RECONCILE_OK=false; fi
+}
+
+cmd_apply() {
+  [ -n "$SLUG" ] || die "usage: ihc-app apply SLUG [--release RID] [--lock-timeout SECONDS]"
+  load_env; endpoints
+  local rid rc=0
+  rid="${RELEASE:-$(cat .ihc-release 2>/dev/null || true)}"
+  [ -n "$rid" ] || die "no release to apply: ihc-app build $SLUG first (it writes .ihc-release), or pass --release"
+  [ -f "$(releases_dir)/$rid/release.json" ] || die "release $rid of $SLUG not found in $(releases_dir)"
+  [ "$(rel_get "$rid" slug)" = "$SLUG" ] || die "release $rid is not one of $SLUG"
+  api_init gt "Authorization: token $GITEA_ADMIN_TOKEN"
+  app_lock "${LOCK_TIMEOUT:-900}" "deploy of $(rel_get "$rid" commit | cut -c1-12) by $(actor)"
+  merged_check "$rid" || rc=$?
+  [ "$rc" = 2 ] && return 0
+  reconcile deploy "$rid"
+  if [ "$RECONCILE_OK" = true ]; then
+    ok "deploy of $SLUG: release $rid on the air"
+  else
+    fail "release $rid of $SLUG is running but unhealthy; to go back to the release before it: ihc-app rollback $SLUG (on the box), or fix and push again"
+    exit 1
+  fi
+}
+
+cmd_rollback() {
+  [ -n "$SLUG" ] || die "usage: ihc-app rollback SLUG [--yes] [--reason TEXT]"
+  load_env; endpoints
+  local target errf to from reverts from_commit to_commit current typed
+  [ -f "$(journal_file)" ] || die "$SLUG has no deploy journal ($(journal_file)): nothing to roll back to. Its deploys ran before the journal existed, or its workflow predates it (copy templates/app/.gitea/workflows/deploy.yml)"
+  [ -w "$JOURNAL_DIR" ] && { [ ! -e "$INSTALL_DIR/apps/$SLUG" ] || [ -w "$INSTALL_DIR/apps/$SLUG" ]; } \
+    || die "this user cannot write the journal or $INSTALL_DIR/apps/$SLUG: run as the user that owns $INSTALL_DIR"
+  api_init gt "Authorization: token $GITEA_ADMIN_TOKEN"
+  app_lock "${LOCK_TIMEOUT:-60}" "rollback by $(actor)"
+  errf="$(mktemp "${TMPDIR:-/tmp}/ihc-rollback.XXXXXX")"
+  target="$(journal undo-target "$(journal_file)" 2>"$errf")" || { LAST_ERROR="$(cat "$errf")"; rm -f "$errf"; die "$SLUG: $LAST_ERROR"; }
+  rm -f "$errf"
+  to="$(printf '%s' "$target" | jsonq get to_release)"; from="$(printf '%s' "$target" | jsonq get from_release)"
+  reverts="$(printf '%s' "$target" | jsonq get reverts)"
+  from_commit="$(printf '%s' "$target" | jsonq get from_commit | cut -c1-12)"; to_commit="$(printf '%s' "$target" | jsonq get to_commit | cut -c1-12)"
+  [ -f "$(releases_dir)/$to/release.json" ] || die "release $to (commit $to_commit) is no longer on the box (the newest $KEEP_RELEASES are kept): nothing rolled back"
+  check_release "$to" || die "release $to (commit $to_commit) cannot be started again (above): nothing rolled back"
+  current="$(cat "$DEPLOYS/$SLUG/current" 2>/dev/null || true)"
+  [ "$current" = "$from" ] || warn "the app runs release ${current:-unknown}, not $from, the newest deploy in the journal (a deploy outside the journal?): going back to $to anyway"
+  step "rollback of $SLUG: $from (commit $from_commit) -> $to (commit $to_commit)"
+  if [ "$YES" != true ]; then
+    [ -t 0 ] || die "no terminal: pass --yes to roll back $SLUG without the question"
+    printf 'Roll %s back to release %s (commit %s)? Type the slug: ' "$SLUG" "$to" "$to_commit" >&2
+    read -r typed || typed=""; [ "$typed" = "$SLUG" ] || die "nothing rolled back"
+  fi
+  reconcile rollback "$to" "$reverts"
+  if [ "$RECONCILE_OK" = true ]; then
+    ok "rollback of $SLUG: release $to (commit $to_commit) on the air. The next push to main deploys over it: revert or fix the change in the repository"
+  else
+    die "rollback of $SLUG to $to is unhealthy too: it runs release $to and does not answer ($WAIT_DETAIL). Nothing else was tried; the journal has both (ihc-app journal $SLUG)"
+  fi
+}
+
+cmd_journal() {
+  [ -n "$SLUG" ] || die "usage: ihc-app journal SLUG [--json] [--limit N]"
+  if [ "$JSON_OUTPUT" = true ]; then journal show "$(journal_file)" --json --limit "$LIMIT"; else journal show "$(journal_file)" --limit "$LIMIT"; fi
 }
 
 # ======================================================================= list
@@ -692,8 +1033,8 @@ print("%s\t%s\t%s"%(a.get("kind","app"),a.get("repository","")," ".join(a.get("r
   [ -n "$ids" ] && docker rm -f $ids >/dev/null
   docker volume ls -q --filter "label=com.docker.compose.project=$SLUG" | xargs docker volume rm >/dev/null 2>&1 || true
   docker network ls -q --filter "label=com.docker.compose.project=$SLUG" | xargs docker network rm >/dev/null 2>&1 || true
-  { docker images -q --filter "label=com.docker.compose.project=$SLUG"; docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$SLUG-" || true; } | sort -u | xargs docker image rm -f >/dev/null 2>&1 || true
-  ok "containers, volumes, network and built images of Compose project $SLUG"
+  { docker images -q --filter "label=com.docker.compose.project=$SLUG"; docker images --format '{{.Repository}}:{{.Tag}}' | grep -e "^$SLUG-" -e "^ihc-release/$SLUG/" || true; } | sort -u | xargs docker image rm -f >/dev/null 2>&1 || true
+  ok "containers, volumes, network, built images and release tags of Compose project $SLUG"
   for r in $res; do
     case "$r" in
       postgres:database:*)
@@ -743,7 +1084,9 @@ print("%s\t%s\t%s"%(a.get("kind","app"),a.get("repository","")," ".join(a.get("r
   api_init gt "Authorization: token $GITEA_ADMIN_TOKEN"
   api DELETE "$GT/repos/$org/$SLUG"
   case "$API_CODE" in 204|404) ok "Gitea repository $org/$SLUG deleted" ;; *) left="$left gitea:$org/$SLUG" ;; esac
-  for d in "$INSTALL_DIR/apps/$SLUG" "$INSTALL_DIR/app-data/$SLUG"; do
+  rm -f "$(journal_file)" 2>/dev/null || true
+  [ -e "$(journal_file)" ] && left="$left journal:$(journal_file)"
+  for d in "$INSTALL_DIR/apps/$SLUG" "$INSTALL_DIR/app-data/$SLUG" "$DEPLOYS/$SLUG"; do
     rm -rf "$d" 2>/dev/null || docker run --rm -v "$(dirname "$d"):/parent" --entrypoint rm "$POSTGRES_IMAGE" -rf "/parent/$SLUG" >/dev/null 2>&1 || true
     [ -e "$d" ] && left="$left dir:$d"
   done
@@ -770,6 +1113,10 @@ case "$CMD" in
   init) cmd_init ;;
   provision) cmd_provision ;;
   checkout) cmd_checkout ;;
+  build) cmd_build ;;
+  apply) cmd_apply ;;
+  rollback) cmd_rollback ;;
+  journal) cmd_journal ;;
   wait) cmd_wait ;;
   list) cmd_list ;;
   remove) cmd_remove ;;
