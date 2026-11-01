@@ -132,6 +132,7 @@ rule "internal location" 'internal;'
 rule "the original URI to the portal" 'proxy_pass $forward_scheme://$server:$port$request_uri;'
 rule "forged identity dropped" 'proxy_set_header X-authentik-email "";'
 rule "forward auth kept for the rest" 'auth_request        /outpost.goauthentik.io/auth/nginx;'
+rule "agent discovery public" 'location = /llms.txt {'
 rule "health still public" 'location = /health {'
 n="$(printf '%s\n' "$conf" | grep -c 'rewrite ')"
 [ "$n" = 1 ] && echo "[ok] nginx: one rewrite only" || { echo "[xx] nginx: $n rewrites"; FAILS=1; }

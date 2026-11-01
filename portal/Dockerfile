@@ -15,7 +15,7 @@ COPY frontend ./frontend
 COPY src ./src
 COPY inventory/apps.example.json ./inventory/apps.example.json
 COPY db ./db
-COPY company-app.yaml ./
+COPY company-app.yaml llms.txt mcp-llms.txt ./
 
 RUN npm run build && npm prune --omit=dev \
   && mkdir -p /ihc/mcp-keys && chown node:node /ihc/mcp-keys && chmod 700 /ihc/mcp-keys

@@ -1,6 +1,17 @@
 # Portal API for agents
 
-The portal serves one read-only endpoint that an agent, a script or a monitor may call without a browser: the health of the cloud's own services. It is the same JSON the portal's Platform page shows. Everything else in the portal needs a person signed in through Authentik.
+The portal serves one read-only endpoint that an agent, a script or a monitor may call without a browser: the health of the cloud's own services. It is the same JSON the portal's Platform page shows. Beyond public health and `/llms.txt` discovery, other client routes need a person signed in through Authentik.
+
+## Agent discovery
+
+Before a first call, agents can read the public `GET /llms.txt` on each host:
+[`portal/mcp-llms.txt`](../portal/mcp-llms.txt) at `mcp.<BASE_DOMAIN>/llms.txt`, and
+[`portal/llms.txt`](../portal/llms.txt) at `portal.<BASE_DOMAIN>/llms.txt`. Both are
+`text/plain` without authentication and describe authentication, tools, routes and
+human approval for writes. `portal/test/llms.test.js` compares them with the tool
+and Express route registries during `cd portal && npm test`; update the guides
+when changing those interfaces. Existing installations must re-run `first-run.sh`
+to reconcile the portal proxy's public discovery location.
 
 ## Endpoint
 
@@ -18,8 +29,8 @@ Authorization: Bearer <IHC_PORTAL_API_TOKEN>
 ```
 
 - **The token.** `IHC_PORTAL_API_TOKEN`, 48 random characters, generated once by `scripts/first-run.sh` into `<install-dir>/.env` (0600) and passed to the portal container by Compose. It is never printed; `state.json` keeps only its fingerprint (`stages.first_run.probe.portal_api_token_fingerprint`), and `inventory.json` says where it lives (`portal_api`). The agent profile does not receive it.
-- **Read only, one route.** The token opens `GET /api/platform/status` and the public `/health`. With the token, every other portal route answers `403`, whatever identity headers come with it.
-- **The proxy's rule.** The portal's route has forward auth (Authentik). One exception, in `scripts/lib/portal-api.sh` and installed by `first-run.sh` on the portal's proxy host: a request for exactly `/api/platform/status` **that carries an `Authorization` header** skips the forward auth and goes to the portal, which checks the token. The proxy drops any `X-authentik-*` header such a request brings, so it can never pass as a signed-in person. Without the header, the same path goes through Authentik like every other path, so a browser still signs in. Every other path with a token still meets the forward auth (a `302` to the sign-in, or `401`).
+- **Read only, one route.** The token opens `GET /api/platform/status` and the public `/health`. The public `/llms.txt` ignores credentials. With the token, other portal client routes answer `403`, whatever identity headers come with them.
+- **The proxy's rule.** The portal's route has forward auth (Authentik). One exception, in `scripts/lib/portal-api.sh` and installed by `first-run.sh` on the portal's proxy host: a request for exactly `/api/platform/status` **that carries an `Authorization` header** skips the forward auth and goes to the portal, which checks the token. The proxy drops any `X-authentik-*` header such a request brings, so it can never pass as a signed-in person. Without the header, the same path goes through Authentik like every other path, so a browser still signs in. Apart from public `/health` and `/llms.txt`, other paths with a token still meet the forward auth (a `302` to the sign-in, or `401`).
 - **Rotating it.** Empty `IHC_PORTAL_API_TOKEN` in `.env`, run `scripts/first-run.sh --install-dir <dir>` (it makes a new one), then `docker compose --project-directory <dir> -f <dir>/compose.yml up -d portal`.
 
 ## Response

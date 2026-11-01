@@ -5,7 +5,7 @@
 # auth and goes to the portal, which checks the bearer against IHC_PORTAL_API_TOKEN (401
 # wrong token, 403 any other route). Without the header, the same path goes through
 # Authentik like the rest of the portal, so a browser still signs in. Nothing else skips:
-# every other path with a token still meets the forward auth.
+# /health and /llms.txt are public; other paths still meet the forward auth.
 #
 # How: nginx rewrite rules at server level run before location matching. They send the
 # request (exact path, header present) to an internal location that proxies it with
@@ -39,7 +39,13 @@ location = /.ihc-portal-api-token {
 '
 
 # portal_forward_auth_conf: the portal host's advanced config, the forward auth with
-# /health public (sso.sh forward_auth_conf) plus the status API rule above.
+# /health and /llms.txt public, plus the status API rule above.
 portal_forward_auth_conf() {
-  printf '%s\n%s' "$PORTAL_API_SKIP_CONF" "$(forward_auth_conf /health)"
+  printf '%s\n%s\n%s' "$PORTAL_API_SKIP_CONF" "$(forward_auth_conf /health)" '
+# Agent discovery is public; no other portal path skips forward auth here.
+location = /llms.txt {
+    proxy_pass $forward_scheme://$server:$port$request_uri;
+    proxy_set_header Host $host;
+}
+'
 }
