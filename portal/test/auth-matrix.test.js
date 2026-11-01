@@ -125,6 +125,7 @@ test('domain viewers can read every read-only route but not admin routes', async
       ['GET', '/api/storage-usage'],
       ['GET', '/api/people'],
       ['GET', '/api/groups'],
+      ['GET', '/api/mcp/audit'],
       ['POST', '/api/platform/status/refresh'],
       ['POST', '/api/apps-status/refresh'],
     ]) {
@@ -146,6 +147,38 @@ test('domain viewers can read every read-only route but not admin routes', async
     }
   } finally {
     server.close();
+  }
+});
+
+test('the audit log of MCP writes is for admins, read only, and says when it is not configured', async () => {
+  const seen = [];
+  const app = authentikApp({
+    mcpAuditLog: {
+      configured: true,
+      async list(filters) { seen.push(filters); return { available: true, entries: [{ request_id: 'r1', tool: 'notes__add', status: 'ok' }] }; },
+    },
+  });
+  const { server, baseUrl } = await listen(app);
+  try {
+    const admin = { 'x-authentik-email': 'carla@example.org', 'x-authentik-groups': 'ihc-users|ihc-admins' };
+    const response = await fetch(`${baseUrl}/api/mcp/audit?app=notes&limit=5&actor=Ana@Example.com`, { headers: admin });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { count: 1, entries: [{ request_id: 'r1', tool: 'notes__add', status: 'ok' }] });
+    assert.deepEqual(seen[0], { limit: '5', app: 'notes', tool: null, actor: 'Ana@Example.com', confirmedBy: null, since: null });
+    for (const method of ['POST', 'DELETE', 'PATCH']) {
+      const write = await fetch(`${baseUrl}/api/mcp/audit`, { method, headers: { ...admin, 'content-type': 'application/json' }, body: '{}' });
+      assert.notEqual(write.status, 200, `${method} /api/mcp/audit answered 200`);
+    }
+  } finally {
+    server.close();
+  }
+  const off = authentikApp({ mcpAuditLog: { configured: false, async list() { return { available: false, error: 'not_configured', entries: [] }; } } });
+  const second = await listen(off);
+  try {
+    const response = await fetch(`${second.baseUrl}/api/mcp/audit`, { headers: { 'x-authentik-email': 'carla@example.org', 'x-authentik-groups': 'ihc-admins' } });
+    assert.equal(response.status, 503);
+  } finally {
+    second.server.close();
   }
 });
 

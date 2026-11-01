@@ -334,7 +334,10 @@ services:
     #   - publishes /.well-known/oauth-protected-resource and /.well-known/jwks.json.
     # It reads the inventory read only, the portal's status API with IHC_PORTAL_API_TOKEN,
     # and Authentik with the read-only service account's token. Its signing key lives in
-    # the mcp-keys volume, never in .env or Git.
+    # the mcp-keys volume, never in .env or Git. Writes (tools that do not declare
+    # themselves read only) need confirmed_by and land in the audit log, a table of the
+    # portal's database the gateway reaches with its own role (MCP_AUDIT_DB_ROLE, made by
+    # install.sh: INSERT and SELECT on deploy_platform.mcp_audit_log, nothing else).
     image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:local
     command: ["node", "src/mcp-gateway.js"]
     restart: unless-stopped
@@ -366,6 +369,7 @@ services:
       AUTHENTIK_HOST: ${AUTHENTIK_HOST}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
       AUTHENTIK_PORTAL_TOKEN: ${AUTHENTIK_PORTAL_TOKEN:-}
+      MCP_AUDIT_DATABASE_URL: postgres://${MCP_AUDIT_DB_ROLE:-ihc_mcp_audit}:${MCP_AUDIT_DB_PASSWORD:-}@postgres:5432/${PORTAL_DB_NAME:-ihc_platform}
     volumes:
       - ./catalog:/ihc/catalog:ro
       - mcp-keys:/ihc/mcp-keys

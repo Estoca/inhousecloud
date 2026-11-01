@@ -2,10 +2,10 @@
 
 One MCP server for the whole cloud, at `https://mcp.<BASE_DOMAIN>/mcp`. A person connects Claude Code, claude.ai or any MCP client once, signs in with the company account (Authentik), and gets:
 
-- the platform's own tools, read only: the app catalog for everyone in `ihc-users`; the platform status, people and groups for `ihc-admins`;
+- the platform's own tools, read only: the app catalog for everyone in `ihc-users`; the platform status, people, groups and the audit log of writes for `ihc-admins`;
 - the tools of every app whose `company-app.yaml` has an `mcp` section ([`app-contract.md`](app-contract.md#mcp)), named `<slug>__<tool>`, each app deciding what it returns for that person.
 
-Nothing in this layer writes. The gateway keeps no session, no user data and no copy of anyone's permissions: who may use an app's tools is the app's manifest (scopes granted to groups) plus the app's own checks.
+An app's tool that does not declare itself a read is a write: it needs `confirmed_by` (the person who approved the call, checked in the company directory) and the gateway records it in its audit log before and after calling the app ([Writes](#writes)). The gateway keeps no session and no copy of anyone's permissions: who may use an app's tools is the app's manifest (scopes granted to groups, and per tool to groups or people) plus the app's own checks.
 
 ## Design
 
@@ -70,6 +70,7 @@ The TypeScript SDK (v2, which the MCP Inspector 2.x uses) stamps every token and
 | `ihc_platform_status` | `ihc-admins` | the JSON of the portal's `GET /api/platform/status` ([`portal-api.md`](portal-api.md)), read with `IHC_PORTAL_API_TOKEN` from inside the network, never stale (below), with a `freshness` sentence first |
 | `ihc_list_people` | `ihc-admins` | Authentik's users (username, name, email, active, groups), through the read-only service account `ihc-portal` (`AUTHENTIK_PORTAL_TOKEN`) |
 | `ihc_list_groups` | `ihc-admins` | Authentik's groups and members, the same way |
+| `ihc_audit_log` | `ihc-admins` | the audit log of writes, newest first: when, actor, `confirmed_by`, tool, app, arguments (secrets redacted), status (`ok`, an error code, `refused`, or `unknown` when the outcome was never recorded), previous and new value. Filters `app`, `tool`, `actor`, `confirmed_by`, `since`, `limit` (50, at most 200). The portal serves the same at `GET /api/mcp/audit` for admins |
 
 **Freshness of `ihc_platform_status`.** The portal serves the status from its cache with stale-while-revalidate: a reading older than its TTL (`PLATFORM_STATUS_TTL_SECONDS`, 60 s) comes back at once with `stale: true` while a probe runs behind it. A person reloads the page; an agent would take the old reading as the state of the cloud. So when the first read says `stale: true`, the tool reads again with `?refresh=1` (the same route and token, a fresh probe of every service, a few seconds) and returns that. If the probe fails, it returns the stale reading and says so. Either way the answer starts with `freshness`, one sentence for the agent:
 
@@ -89,7 +90,23 @@ The providers are the apps of `inventory.json` whose record has `mcp` (copied fr
 3. Each tool comes back as `<slug>__<name>` with `[App name]` before its description. The slug never contains `__`, so the prefix always says which app a call goes to.
 4. **Fallback.** When a provider is down, slow or answers 5xx, the gateway serves that provider's last good list for that person, kept in memory for `MCP_CATALOG_FALLBACK_SECONDS` (24 h). Without it a client (claude.ai keeps the list it got) would lose the app's tools until someone refreshes. A `403` never uses the fallback and drops the kept list: a revocation applies at once.
 
-`tools/call` with `<slug>__<tool>`: the provider of the prefix; no granted scope → error result "access denied: <slug> grants its MCP scopes to <groups>, and <email> is in none of them", without calling the app; otherwise `POST http://<slug>:<port><execute_path with {tool}>` with `{"arguments": {...}}` and a fresh actor JWT, `MCP_TOOL_CALL_TIMEOUT_MS` (30 s). The app's `{"result": …}` comes back as the tool's result (text and, for an object, `structuredContent`); its `403`, `404` and `400` come back as error results with the app's message; `401` means the app rejected the gateway's token (wrong issuer, JWKS URL or audience in its env).
+Tools the person has no grant for (`mcp.tools.<tool>.groups` / `.people`) are left out of the list. A write tool comes back with `annotations.readOnlyHint: false`, `confirmed_by` added to its input schema as required, and its description ending with "(Writes: needs confirmed_by, …)".
+
+`tools/call` with `<slug>__<tool>`: the provider of the prefix; no granted scope → error result "access denied: <slug> grants its MCP scopes to <groups>, and <email> is in none of them", without calling the app; a tool granted to other groups or people → "access denied: <tool> is granted to …", without calling the app; a write → [Writes](#writes); otherwise `POST http://<slug>:<port><execute_path with {tool}>` with `{"arguments": {...}}` and a fresh actor JWT, `MCP_TOOL_CALL_TIMEOUT_MS` (30 s). The app's `{"result": …}` comes back as the tool's result (text and, for an object, `structuredContent`); its `403`, `404` and `400` come back as error results with the app's message; `401` means the app rejected the gateway's token (wrong issuer, JWKS URL or audience in its env).
+
+## Writes
+
+Whether a tool reads or writes comes from the app's tool list (`access`) and the manifest (`mcp.tools.<tool>.access`): a read only when one says `read` and neither says `write` ([`app-contract.md`](app-contract.md#reads-and-writes)). The gateway takes the app's answer from the list it read in the last minute for that person, or reads it again; an app that does not answer makes the tool a write. A `write` in the manifest decides without asking the app. For a write, `tools/call`:
+
+1. takes `confirmed_by` out of the arguments; none → error result "this tool writes: pass confirmed_by …", recorded as `refused`;
+2. resolves it in Authentik's directory (the read-only account, list cached one minute, read again on a miss at most every 10 s): an active person in `ihc-users`, by email or username. Nobody, deactivated, outside `ihc-users`, or the directory unavailable → error result, recorded as `refused`;
+3. records `requested` in the audit log; if that fails, error result and **the app is not called**;
+4. calls the app with the remaining arguments and an actor JWT that carries `confirmed_by` (the approver's email from the directory);
+5. records `completed`: `ok`, or the app's error code and message; the app's `audit` block (`previous`, `new`, `target`) when it sends one. The client gets `result` only.
+
+The audit log is `deploy_platform.mcp_audit_log` in the portal's database, append-only, written by the gateway with its own role (`MCP_AUDIT_DATABASE_URL`, role `ihc_mcp_audit`: `SELECT` and `INSERT` on that table only). What it guarantees and what it does not: [`security.md`](security.md#writes-need-a-human). Without the variable, writes are refused and reads work.
+
+The agent's side: the gateway's `instructions` tell the client that a tool with `readOnlyHint: false` writes, that it must show the person what will change and ask before calling, and pass the approver's email as `confirmed_by`.
 
 ## Actor JWT
 
@@ -106,11 +123,13 @@ The gateway signs one per request to an app, RS256 with its own key:
   "groups": ["ihc-users"],
   "scope": "<slug>.read",
   "client_id": "ihc-mcp",
+  "confirmed_by": "bia@example.com",
   "request_id": "…", "jti": "…",
   "iat": 1761140000, "nbf": 1761140000, "exp": 1761140300
 }
 ```
 
+- **`confirmed_by`** only on a write: the approver, as the directory has their email ([Writes](#writes)).
 - **Lifetime** `MCP_ACTOR_TTL_SECONDS`, 300 by default, clamped to 30 to 900.
 - **Key.** RSA 2048 in the `mcp-keys` volume (`/ihc/mcp-keys/actor-key.pem`, 0600, uid 1000), created on the gateway's first start; never in `.env`, Git or the logs. The public half is at `/.well-known/jwks.json` (also `http://mcp:8090/.well-known/jwks.json` inside the network) with its `kid`. To rotate: delete the volume's file and restart `mcp`; apps read the JWKS again when they see a new `kid`. The volume is a Compose volume like the others; losing it only rotates the key.
 - **What the app checks** is in [`app-contract.md`](app-contract.md#mcp): signature against that JWKS, `iss`, `aud`, `exp`, and the scope each tool needs.
@@ -140,13 +159,14 @@ Then `/mcp` in Claude Code, pick `company`, authenticate: the browser opens Auth
 | `MCP_OAUTH_EXTRA_REDIRECT_URIS` | empty | more strict redirect URIs for other clients |
 | `MCP_ACTOR_TTL_SECONDS` | 300 | actor JWT lifetime |
 | `AUTHENTIK_APP_GROUP`, `AUTHENTIK_PORTAL_GROUP` | `ihc-users`, `ihc-admins` | who enters, who is admin |
-| `IHC_PORTAL_API_TOKEN`, `AUTHENTIK_PORTAL_TOKEN` | first-run | the platform status and the people tools |
+| `IHC_PORTAL_API_TOKEN`, `AUTHENTIK_PORTAL_TOKEN` | first-run | the platform status and the people tools; `AUTHENTIK_PORTAL_TOKEN` also checks `confirmed_by` |
+| `MCP_AUDIT_DB_ROLE`, `MCP_AUDIT_DB_PASSWORD` | `ihc_mcp_audit`, generated | the gateway's role on the portal's database for the audit log (`install.sh`, stage `portal`); the service gets them as `MCP_AUDIT_DATABASE_URL`. No password: writes refused |
 
 Inside the service (compose, not `.env`): `MCP_TOOLS_LIST_TIMEOUT_MS` 10000, `MCP_TOOL_CALL_TIMEOUT_MS` 30000, `MCP_CATALOG_FALLBACK_SECONDS` 86400.
 
 ## Operating it
 
 - Health: `GET https://mcp.<BASE_DOMAIN>/health` (`ok`, commit, the actor key's `kid`); the portal's platform status lists "Gateway MCP"; `ihc doctor` checks the container and the route.
-- Logs: `docker compose … logs mcp` has one line per refused sign-in (reason, never the token), per failed provider list (`<slug> provider_timeout`, `serving the last good catalog`) and per tool call (`<tool> by <email>: ok | <code>`).
+- Logs: `docker compose … logs mcp` has one line per refused sign-in (reason, never the token), per failed provider list (`<slug> provider_timeout`, `serving the last good catalog`) and per tool call (`<tool> by <email>: ok | <code>`, `confirmed by <email>` on a write, `refused <code>` for a refused write, and a `mcp audit:` line when an audit insert fails).
 - Smoke test 25 ([`smoke-tests.md`](smoke-tests.md)) proves the whole path on every install.
-- What is not here yet (later layers): write tools, per-tool grants beyond a scope, an audit log in the portal, dynamic client registration.
+- What is not here yet (later layers): dynamic client registration, a page for the audit log in the portal's UI (the API and the MCP tool exist), grants per tool set by an admin outside the app's manifest, and a credential proxy so apps never hold third-party keys.

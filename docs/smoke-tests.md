@@ -59,6 +59,10 @@ docker compose -f "$IHC_COMPOSE_FILE" exec -T postgres \
   psql -U "$POSTGRES_USER" -d postgres -Atc \
   "SELECT rolname, rolsuper FROM pg_roles WHERE rolname IN ('ihc_platform','gitea');"
 # PASS: both roles exist and rolsuper = false
+docker compose -f "$IHC_COMPOSE_FILE" exec -T postgres \
+  psql -U "$POSTGRES_USER" -d "$PORTAL_DB_NAME" -Atc \
+  "SELECT r.rolsuper, has_table_privilege('ihc_mcp_audit','deploy_platform.mcp_audit_log','INSERT'), has_table_privilege('ihc_mcp_audit','deploy_platform.mcp_audit_log','SELECT'), has_table_privilege('ihc_mcp_audit','deploy_platform.mcp_audit_log','UPDATE'), has_table_privilege('ihc_mcp_audit','deploy_platform.mcp_audit_log','DELETE'), has_table_privilege('ihc_mcp_audit','deploy_platform.deploy_events','SELECT') FROM pg_roles r WHERE r.rolname='ihc_mcp_audit';"
+# PASS: f|t|t|f|f|f (the MCP gateway's audit role inserts and reads the audit log, nothing else)
 
 # 14. The newest backup verifies (skipped only when BACKUP_ENABLED=false)
 scripts/ihc-backup.sh --install-dir "$IHC_INSTALL_DIR" verify --latest --json

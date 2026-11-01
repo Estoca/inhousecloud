@@ -1,3 +1,5 @@
+import { normalizeToolPolicies } from './mcp-policy.js';
+
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -11,10 +13,13 @@ function catalogApp(app = {}) {
     domain: app.domain || null,
     category: app.category || 'uncategorized',
     lifecycle: app.lifecycle || 'active',
-    capabilities: app.agent_interface?.mcp?.tools?.map((tool) => ({
-      name: tool.name,
-      access: tool.access || 'read',
-    })) || [],
+    // mcp.tools do manifesto (lista ou mapa; src/mcp-policy.js). `access` so quando o
+    // manifesto declara; sem declaracao, quem decide e a lista do app, e na duvida o
+    // gateway trata como escrita.
+    capabilities: [...normalizeToolPolicies(app.agent_interface?.mcp?.tools).policies].map(([name, policy]) => ({
+      name,
+      access: policy.access ?? 'undeclared',
+    })),
   };
 }
 

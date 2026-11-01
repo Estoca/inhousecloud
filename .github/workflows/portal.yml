@@ -3,7 +3,8 @@
 # status API (scripts/tests/portal-api.sh), the role the portal gives each Authentik group and
 # the MCP gateway (scripts/tests/mcp-gateway.sh) and adopting an existing app from a laptop
 # (scripts/tests/ihc-app-init.sh), and `install.sh handoff` repeating the web terminal's key
-# command (scripts/tests/handoff-wetty-key.sh).
+# command (scripts/tests/handoff-wetty-key.sh), and env_secret working in a stage that runs
+# without stage_secrets (scripts/tests/install-env-secret.sh).
 # CI only: the portal is deployed by the installer (install.sh, stage portal).
 name: portal
 
@@ -54,3 +55,6 @@ jobs:
       - name: install.sh handoff repeats the web terminal's key command while it is needed
         working-directory: .
         run: scripts/tests/handoff-wetty-key.sh
+      - name: env_secret in a stage run without stage_secrets (the upgrade path, --from foundation)
+        working-directory: .
+        run: scripts/tests/install-env-secret.sh

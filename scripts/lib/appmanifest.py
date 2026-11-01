@@ -61,6 +61,8 @@ def slug_problem(slug):
 
 MCP_PATH = re.compile(r"^/[A-Za-z0-9/_.{}-]*$")
 SCOPE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+TOOL = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def mcp_errors(mcp, slug, errors):
@@ -96,6 +98,35 @@ def mcp_errors(mcp, slug, errors):
     for name in names:
         if not isinstance(name, str) or not SCOPE.match(name) or not name.startswith(slug + "."):
             errors.append("mcp.scopes: %r must start with %s. (e.g. %s.read)" % (name, slug, slug))
+    tools = mcp.get("tools")
+    if tools is not None:
+        tool_errors(tools, errors)
+
+
+def tool_errors(tools, errors):
+    """mcp.tools: per tool, read or write and a grant to groups or people (portal/src/mcp-policy.js)."""
+    if isinstance(tools, list):
+        entries = [((t.get("name") if isinstance(t, dict) else None), t) for t in tools]
+    elif isinstance(tools, dict):
+        entries = [(k, v if v is not None else {}) for k, v in tools.items()]
+    else:
+        errors.append("mcp.tools: a list of {name, access, groups, people}")
+        return
+    for name, item in entries:
+        if not isinstance(name, str) or not TOOL.match(name):
+            errors.append("mcp.tools: %r is not a tool name (letters, digits, _ and -, up to 64)" % (name,))
+            continue
+        if not isinstance(item, dict):
+            errors.append("mcp.tools.%s: a mapping (access, groups, people)" % name)
+            continue
+        if item.get("access") not in (None, "read", "write"):
+            errors.append("mcp.tools.%s.access: read or write" % name)
+        groups = item.get("groups")
+        if groups is not None and not (isinstance(groups, list) and all(isinstance(g, str) and g.strip() for g in groups)):
+            errors.append("mcp.tools.%s.groups: a list of groups" % name)
+        people = item.get("people")
+        if people is not None and not (isinstance(people, list) and all(isinstance(p, str) and EMAIL.match(p.strip()) for p in people)):
+            errors.append("mcp.tools.%s.people: a list of emails" % name)
 
 
 def get(d, path, default=None):

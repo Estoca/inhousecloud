@@ -8,7 +8,10 @@ const slug = process.env.APP_SLUG || "app";
 // cloud's MCP gateway calls these two routes on the app's container, with a short
 // actor JWT it signs: who asks (email, groups), for this app (aud) and with which
 // scopes (scope). The app checks the token against the gateway's public key and
-// decides what each tool returns. Add tools to TOOLS; keep them read only.
+// decides what each tool returns. Add tools to TOOLS. A tool that changes data says
+// access: "write" (here and in mcp.tools of company-app.yaml): the gateway then asks the
+// person who approved it (confirmed_by, in the claims) and keeps the audit; the tool
+// returns { result, audit: { previous, new, target } } (docs/app-contract.md, MCP).
 const MCP = {
   issuer: process.env.IHC_MCP_ISSUER || "",
   jwksUrl: process.env.IHC_MCP_JWKS_URL || "",
@@ -54,7 +57,7 @@ async function verifyActor(req) {
     const now = Math.floor(Date.now() / 1000);
     const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (claims.iss !== MCP.issuer || !aud.includes(MCP.audience) || !(claims.exp + 30 > now)) return null;
-    return { email: claims.email || claims.sub, groups: claims.groups || [], scopes: String(claims.scope || "").split(" ").filter(Boolean) };
+    return { email: claims.email || claims.sub, groups: claims.groups || [], scopes: String(claims.scope || "").split(" ").filter(Boolean), confirmedBy: claims.confirmed_by || null };
   } catch {
     return null;
   }
@@ -80,7 +83,7 @@ async function mcp(req, res, path) {
   const allowed = Object.entries(TOOLS).filter(([, tool]) => actor.scopes.includes(tool.scope));
   if (req.method === "GET" && path === "/mcp/tools") {
     if (allowed.length === 0) return json(res, 403, { error: { code: "tool_access_denied", message: `no scope of ${slug} for ${actor.email}` } });
-    return json(res, 200, { tools: allowed.map(([name, tool]) => ({ name, description: tool.description, input_schema: tool.input_schema, access: "read" })) });
+    return json(res, 200, { tools: allowed.map(([name, tool]) => ({ name, description: tool.description, input_schema: tool.input_schema, access: tool.access || "read" })) });
   }
   const call = path.match(/^\/mcp\/tools\/([A-Za-z0-9_-]+)\/execute$/);
   if (req.method === "POST" && call) {
@@ -88,6 +91,11 @@ async function mcp(req, res, path) {
     if (!tool) return json(res, 404, { error: { code: "tool_not_found", message: `${slug} has no tool ${call[1]}` } });
     if (!actor.scopes.includes(tool.scope)) return json(res, 403, { error: { code: "tool_access_denied", message: `${call[1]} needs the scope ${tool.scope}` } });
     const body = await readBody(req);
+    if (tool.access === "write") {
+      if (!actor.confirmedBy) return json(res, 403, { error: { code: "confirmation_required", message: `${call[1]} writes: the gateway sends confirmed_by` } });
+      const { result, audit } = await tool.run(actor, body.arguments || {});
+      return json(res, 200, { result, audit });
+    }
     return json(res, 200, { result: await tool.run(actor, body.arguments || {}) });
   }
   return json(res, 404, { error: { code: "not_found" } });

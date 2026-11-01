@@ -22,7 +22,9 @@ No tools wanted? Delete the `mcp` section and push: the app stays out of the gat
 
 ## 2. Add a tool
 
-Next to `ping` in `TOOLS`, a read-only tool that filters by the person calling (`actor.email`), the same rule the app applies to a browser user. The contract has a worked example, `list_my_expenses` ([`app-contract.md`](app-contract.md#mcp)). Keep the token check as it is; keep the tools read only in this layer.
+Next to `ping` in `TOOLS`, a read-only tool that filters by the person calling (`actor.email`), the same rule the app applies to a browser user. The contract has a worked example, `list_my_expenses` ([`app-contract.md`](app-contract.md#mcp)). Keep the token check as it is.
+
+A tool that changes data says `access: "write"`, in `TOOLS` and in `mcp.tools` of `company-app.yaml`. A tool that says nothing is treated as a write too. For a write the gateway asks the agent for `confirmed_by` (the person who approved the call), checks that person in the company directory, records the call in its audit log before calling the app and the outcome after, and passes the approver to the app in the claims (`actor.confirmedBy`). The tool returns `{ result, audit: { previous, new, target } }` so the audit shows what changed. Details: [reads and writes](app-contract.md#reads-and-writes).
 
 ## 3. Say who may call it
 
@@ -38,6 +40,17 @@ mcp:
 ```
 
 Someone whose groups hold none of the app's scopes never sees its tools, and the app is never called for them.
+
+One tool for fewer people than its scope reaches: `mcp.tools.<tool>.groups` (Authentik groups) or `.people` (emails). The others do not see that tool, and the gateway refuses their call without reaching the app:
+
+```yaml
+mcp:
+  tools:
+    approve_expense:
+      access: write
+      groups:
+        - finance
+```
 
 ## 4. Push
 

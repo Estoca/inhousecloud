@@ -805,7 +805,11 @@ env_default() {
   [ -n "$cur" ] || env_set "$1" "$2"
 }
 # env_secret KEY ENVNAME LENGTH: take the value from $ENVNAME when set, else generate.
+# SECRET_FPS is started by stage_secrets; a later stage that adds a key to an .env from before
+# it (stage_portal and the audit role) runs without that stage on `--apply --from foundation`,
+# so the list may not exist yet (set -u).
 env_secret() {
+  SECRET_FPS="${SECRET_FPS:-}"
   local cur v; cur="$(env_get "$1")"
   if [ -z "$cur" ]; then
     eval "v=\${${2:-_}:-}"
@@ -871,6 +875,10 @@ stage_secrets() {
   env_default PORTAL_DB_NAME "${CFG_postgres__portal__database:-ihc_platform}"
   env_default PORTAL_DB_ROLE "${CFG_postgres__portal__role:-ihc_platform}"
   env_secret PORTAL_DB_PASSWORD "${CFG_postgres__portal__password_env:-IHC_PLATFORM_DATABASE_PASSWORD}" 32
+  # The MCP gateway's own role on the portal's database: INSERT and SELECT on the audit
+  # log of writes, nothing else (stage portal, ensure_mcp_audit_role; docs/security.md).
+  env_default MCP_AUDIT_DB_ROLE ihc_mcp_audit
+  env_secret MCP_AUDIT_DB_PASSWORD IHC_MCP_AUDIT_DATABASE_PASSWORD 32
   env_default PORTAL_BUILD_CONTEXT ./portal   # portal/ of this checkout, copied by the foundation stage
   env_default PORTAL_SUPER_ADMIN_EMAILS "${CFG_portal__super_admin_emails:-$ADMIN_EMAIL}"
   # Garage: the RPC secret must be 32 bytes in hex. Generated even with storage off, so
@@ -1155,18 +1163,50 @@ stage_gitea() {
 # The portal applies its own migrations at boot (portal/src/migrate.js) and reports them
 # on /health; its Docker reads go through docker-ro. The MCP gateway (service mcp) is the
 # same image with another entrypoint; first-run gives it its Authentik provider.
+# The MCP gateway writes its audit log (deploy_platform.mcp_audit_log, migration 010 of the
+# portal) with a role of its own: LOGIN, no superuser, NOINHERIT, CONNECT on the portal's
+# database, USAGE on its schema, SELECT and INSERT on that one table. Never UPDATE, DELETE
+# or any other table, so a compromised gateway cannot rewrite history or read the portal's
+# data. Runs after the portal has migrated (the table must exist); every run puts the
+# grants back to exactly these.
+ensure_mcp_audit_role() {
+  local role db pw
+  role="$(env_get MCP_AUDIT_DB_ROLE)"; db="$(env_get PORTAL_DB_NAME)"; pw="$(env_get MCP_AUDIT_DB_PASSWORD)"
+  [ -n "$role" ] && [ -n "$pw" ] || { fail "MCP_AUDIT_DB_ROLE or MCP_AUDIT_DB_PASSWORD is missing from .env"; return 1; }
+  dc exec -T postgres psql -v ON_ERROR_STOP=1 -U "$(env_get POSTGRES_USER)" -d "$db" -q <<SQL || return 1
+DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$role') THEN
+    CREATE ROLE "$role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '$pw';
+  ELSE
+    ALTER ROLE "$role" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '$pw';
+  END IF;
+END \$\$;
+GRANT CONNECT ON DATABASE "$db" TO "$role";
+REVOKE ALL ON ALL TABLES IN SCHEMA deploy_platform FROM "$role";
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA deploy_platform FROM "$role";
+REVOKE CREATE ON SCHEMA deploy_platform FROM "$role";
+GRANT USAGE ON SCHEMA deploy_platform TO "$role";
+GRANT SELECT, INSERT ON deploy_platform.mcp_audit_log TO "$role";
+SQL
+  ok "MCP audit role $role: INSERT and SELECT on deploy_platform.mcp_audit_log only"
+}
+
 stage_portal() {
   local h
+  # An .env from before the audit role gets its variables here, so --from portal is enough.
+  env_default MCP_AUDIT_DB_ROLE ihc_mcp_audit
+  env_secret MCP_AUDIT_DB_PASSWORD IHC_MCP_AUDIT_DATABASE_PASSWORD 32
   dc up -d docker-ro portal mcp || return 1
   wait_healthy 240 docker-ro portal mcp || { dc logs --tail 30 portal mcp >&2; return 1; }
   h="$(dc exec -T portal wget -qO- http://127.0.0.1:8080/health 2>/dev/null)"
   [ "$(printf '%s' "$h" | jsonq get migrations.ok)" = true ] || { fail "portal migrations did not apply: $(printf '%s' "$h" | jsonq get migrations.error)"; dc logs --tail 30 portal >&2; return 1; }
   ok "portal healthy; migrations applied ($(printf '%s' "$h" | jsonq get migrations.applied) now, $(printf '%s' "$h" | jsonq get migrations.total) in all)"
   state stage portal set probe "$(jsonq build health=ok migrations_total="$(printf '%s' "$h" | jsonq get migrations.total)" migrations_applied_now="$(printf '%s' "$h" | jsonq get migrations.applied)" docker_api=docker-ro)"
+  ensure_mcp_audit_role || return 1
   h="$(dc exec -T mcp wget -qO- http://127.0.0.1:8090/health 2>/dev/null)"
   [ "$(printf '%s' "$h" | jsonq get ok)" = true ] || { fail "the MCP gateway does not answer its /health"; dc logs --tail 30 mcp >&2; return 1; }
   ok "MCP gateway healthy (actor key $(printf '%s' "$h" | jsonq get actor_kid))"
-  state stage portal set resources '["container:portal","container:docker-ro","container:mcp","image:portal","volume:mcp-keys"]'
+  state stage portal set resources "[\"container:portal\",\"container:docker-ro\",\"container:mcp\",\"image:portal\",\"volume:mcp-keys\",\"postgres:role:$(env_get MCP_AUDIT_DB_ROLE)\"]"
 }
 
 stage_first_run() {

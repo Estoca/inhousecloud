@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { readInventory } from './inventory.js';
 import { createActorSigner, loadOrCreateSigningKey } from './jwt.js';
 import { createAccessTokenVerifier } from './mcp-auth.js';
+import { createAuditLog } from './mcp-audit.js';
+import { createAuthentikDirectory } from './authentik-directory.js';
+import { ConfirmationError, createConfirmerResolver, splitConfirmedBy } from './mcp-policy.js';
 import { ProviderError, createProviderGateway, providersFromApps } from './mcp-providers.js';
 import { PlatformToolError, createPlatformTools, isPlatformTool, platformToolsFor } from './mcp-platform-tools.js';
 
@@ -20,12 +23,20 @@ import { PlatformToolError, createPlatformTools, isPlatformTool, platformToolsFo
 //
 // Toda chamada a /mcp leva `Authorization: Bearer <access token do Authentik>`; sem ele,
 // 401 com WWW-Authenticate apontando o metadata, que e como o cliente descobre onde
-// entrar. Quem nao esta em USER_GROUP leva 403. Nenhuma tool escreve.
+// entrar. Quem nao esta em USER_GROUP leva 403.
+//
+// Escritas (docs/security.md, "Writes need a human"): uma tool de app que nao se declara
+// leitura e escrita (src/mcp-policy.js). Para ela o gateway exige confirmed_by, confere a
+// pessoa no diretorio do Authentik, grava `requested` no audit log do banco do portal
+// (src/mcp-audit.js) antes de chamar o app (sem audit, sem chamada) e `completed` depois,
+// com o valor anterior e o novo quando o app devolve. O app nunca escreve no audit.
 
 export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']);
 const SERVER_INFO = { name: 'inhousecloud-mcp-gateway', title: 'InHouseCloud', version: '0.1.0' };
-const INSTRUCTIONS = 'Tools of the company cloud. ihc_* tools read the platform (apps, health, and for admins the platform status, people and groups). '
-  + 'Tools named <app>__<tool> belong to the apps of the cloud; each app decides what its tools return for the signed-in person. All tools are read only.';
+const INSTRUCTIONS = 'Tools of the company cloud. ihc_* tools read the platform (apps, health, and for admins the platform status, people, groups and the audit log of writes). '
+  + 'Tools named <app>__<tool> belong to the apps of the cloud; each app decides what its tools return for the signed-in person. '
+  + 'A tool whose readOnlyHint is false writes: before calling it, show the person exactly what will change and ask them to approve; then pass confirmed_by with the email of the person who approved. '
+  + 'The gateway checks that person in the company directory and records every write, with who asked and who approved, in its audit log.';
 
 const trimSlash = (value) => String(value ?? '').replace(/\/+$/, '');
 
@@ -49,7 +60,20 @@ export function gatewayConfigFromEnv(env = process.env) {
     listTimeoutMs: Number(env.MCP_TOOLS_LIST_TIMEOUT_MS) || 10_000,
     callTimeoutMs: Number(env.MCP_TOOL_CALL_TIMEOUT_MS) || 30_000,
     fallbackSeconds: env.MCP_CATALOG_FALLBACK_SECONDS === undefined ? 86_400 : Number(env.MCP_CATALOG_FALLBACK_SECONDS) || 0,
+    auditDatabaseUrl: auditUrlFrom(env.MCP_AUDIT_DATABASE_URL),
   };
+}
+
+// Sem senha (o .env de antes do papel do audit) e o mesmo que sem URL: escritas
+// desligadas, com a mensagem certa, em vez de uma conexao que falha a cada chamada.
+function auditUrlFrom(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  try {
+    return new URL(text).password ? text : '';
+  } catch {
+    return '';
+  }
 }
 
 // RFC 9728. `resource` e a URL que o cliente usa (…/mcp).
@@ -99,6 +123,9 @@ export function createGatewayApp({
   verifier = null,
   providerGateway = null,
   platformTools = null,
+  directory = null,
+  audit = null,
+  confirmers = null,
   listAppsFn = () => {
     const inventory = readInventory();
     return inventory.example ? [] : inventory.apps;
@@ -121,7 +148,10 @@ export function createGatewayApp({
     fallbackMs: config.fallbackSeconds * 1000,
     log,
   });
-  const platform = platformTools ?? createPlatformTools();
+  const people = directory ?? createAuthentikDirectory();
+  const auditLog = audit ?? createAuditLog({ databaseUrl: config.auditDatabaseUrl, log });
+  const confirmer = confirmers ?? createConfirmerResolver({ directory: people, userGroup: config.userGroup });
+  const platform = platformTools ?? createPlatformTools({ directory: people, audit: auditLog });
   const resourceMetadataUrl = `${config.publicUrl}/.well-known/oauth-protected-resource/mcp`;
   const currentProviders = () => providersFromApps(listAppsFn(), { userGroup: config.userGroup });
 
@@ -192,7 +222,9 @@ export function createGatewayApp({
       }
     }
     try {
-      const { result } = await providers.callTool(user, currentProviders(), name, args, { requestId });
+      const plan = await providers.prepareCall(user, currentProviders(), name, { requestId });
+      if (plan.access === 'write') return await callWriteTool(user, plan, args, requestId);
+      const { result } = await providers.execute(user, plan, args, { requestId });
       log(`mcp tools/call ${name} by ${user.email}: ok`);
       return toolResult(result);
     } catch (error) {
@@ -201,6 +233,60 @@ export function createGatewayApp({
       if (error.code === 'tool_not_found' && !name.includes('__')) throw Object.assign(new Error(`Unknown tool: ${name}`), { rpcCode: -32602 });
       return toolResult(error.message, { isError: true });
     }
+  }
+
+  // Uma escrita: confirmed_by conferido, `requested` gravado, o app chamado, `completed`
+  // gravado. confirmed_by nao vai nos argumentos do app: vai no actor JWT (claim
+  // confirmed_by) ja como o e-mail do diretorio.
+  async function callWriteTool(user, plan, rawArgs, requestId) {
+    const { confirmedBy: input, args } = splitConfirmedBy(rawArgs);
+    const base = { requestId, actor: user, tool: plan.name, provider: plan.provider.slug, access: 'write', arguments: args, confirmedByInput: input };
+    const refuse = async (code, message, extra = {}) => {
+      log(`mcp tools/call ${plan.name} by ${user.email}: refused ${code}`);
+      if (auditLog.configured) await auditLog.record({ ...base, ...extra, phase: 'refused', status: code, error: message });
+      return toolResult(message, { isError: true });
+    };
+    if (!auditLog.configured) {
+      return refuse('audit_unavailable', `${plan.name} writes, and writes are disabled on this cloud: the gateway's audit log is not configured (MCP_AUDIT_DATABASE_URL)`);
+    }
+    let approver;
+    try {
+      approver = await confirmer.resolve(input);
+    } catch (error) {
+      if (error instanceof ConfirmationError) return refuse(error.code, error.message);
+      throw error;
+    }
+    const confirmedBy = approver.email;
+    const requested = await auditLog.record({ ...base, confirmedBy, phase: 'requested', details: { confirmed_by_is_actor: confirmedBy === user.email } });
+    if (!requested.ok) {
+      log(`mcp tools/call ${plan.name} by ${user.email}: refused audit_unavailable (${requested.error})`);
+      return toolResult(`${plan.name} was not called: the gateway could not write its audit log, and no write happens without it. Try again later or tell an admin.`, { isError: true });
+    }
+    let outcome;
+    try {
+      outcome = await providers.execute(user, plan, args, { requestId, confirmedBy });
+    } catch (error) {
+      if (!(error instanceof ProviderError)) {
+        await auditLog.record({ ...base, confirmedBy, phase: 'completed', status: 'gateway_error', error: 'the gateway failed while calling the app' });
+        throw error;
+      }
+      const completed = await auditLog.record({ ...base, confirmedBy, phase: 'completed', status: error.code, error: error.message });
+      if (!completed.ok) log(`mcp audit: ${requestId} (${plan.name}) has no completed row: ${completed.error}`);
+      throw error;
+    }
+    const audit = outcome.audit ?? {};
+    const completed = await auditLog.record({
+      ...base,
+      confirmedBy,
+      phase: 'completed',
+      status: 'ok',
+      previousValue: 'previous' in audit ? audit.previous : undefined,
+      newValue: 'new' in audit ? audit.new : undefined,
+      target: typeof audit.target === 'string' ? audit.target : null,
+    });
+    if (!completed.ok) log(`mcp audit: ${requestId} (${plan.name}) has no completed row: ${completed.error}`);
+    log(`mcp tools/call ${plan.name} by ${user.email} confirmed by ${confirmedBy}: ok`);
+    return toolResult(outcome.result);
   }
 
   async function handle(message, user) {
