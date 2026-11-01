@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express from 'express';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readInventory } from './inventory.js';
 import { createActorSigner, loadOrCreateSigningKey } from './jwt.js';
 import { createAccessTokenVerifier } from './mcp-auth.js';
@@ -159,6 +159,10 @@ export function createGatewayApp({
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
 
+  // Descoberta publica para o cliente ler antes da primeira chamada MCP.
+  app.get('/llms.txt', (_req, res) => {
+    res.type('text/plain').sendFile(fileURLToPath(new URL('../mcp-llms.txt', import.meta.url)));
+  });
   app.get('/health', (_req, res) => {
     res.json({
       ok: true,

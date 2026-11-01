@@ -1,0 +1,96 @@
+# InHouseCloud portal
+
+Read this before calling the portal. This service shows the company app catalog and platform health.
+GET /llms.txt is public, text/plain, and contains no installation secrets.
+Browser access uses Authentik sign-in through the proxy's forward auth. The portal has no OAuth token endpoint or local login session.
+Never supply X-authentik-* identity headers yourself; only the trusted proxy may set them.
+For MCP, connect to https://mcp.<BASE_DOMAIN>/mcp and read that host's /llms.txt (repo: portal/mcp-llms.txt).
+MCP uses OAuth authorization code + PKCE S256 via Authentik, client ihc-mcp by default, scopes openid email profile offline_access.
+The company groups default to ihc-users and ihc-admins; installation configuration can rename them.
+
+Status API for agents:
+Send Authorization: Bearer <IHC_PORTAL_API_TOKEN> to GET /api/platform/status (HEAD also accepted).
+This dedicated service token is not an MCP access token. Obtain it through the operator's secure configuration, never through a chat or tool argument.
+The token permits only this status route and health endpoints; all other authenticated routes remain forbidden to it.
+Without the header, status needs an admin signed in through Authentik.
+?refresh=1 (also true) probes now and waits. Otherwise the response may be cached or stale.
+Read overall, summary, services, checked_at, stale, generated_at, age_seconds and cache_ttl_seconds; ignore unknown fields.
+401 means missing/invalid authentication, 403 insufficient permission, 503 unavailable/unconfigured.
+Through the proxy, a browser without credentials is redirected to Authentik.
+
+Portal routes (GET also accepts HEAD; :slug, :name, :email and :tool are path parameters):
+Public discovery and health:
+- GET /llms.txt — this agent guide, no authentication.
+- GET /health — public health and migration state, no secrets.
+- GET /api/health — health alias; public directly, proxy may require sign-in.
+Sign-in and UI:
+- GET /login — sign-in screen; the proxy handles Authentik sign-in.
+- GET / — portal UI; remaining UI paths fall back to the client, require sign-in; static assets are also served.
+- POST /logout — redirect to Authentik sign-out.
+- GET /api/me — current signed-in person.
+Signed-in catalog and app status (reads):
+- GET /api/platform/config — public installation settings, no secrets; still requires sign-in.
+- GET /api/apps — catalog.
+- GET /api/apps/:slug — one app; 404 if absent.
+- GET /api/apps/:slug/deploys — deployments; limit 1..100, default 20.
+- GET /api/apps/:slug/latest-deploy — latest deployment.
+- GET /api/apps/:slug/status-metrics — metrics; hours, limit query parameters.
+- GET /api/apps-status — health; category, owner filters for admins; refresh=1 forces probes.
+- GET /api/apps-runtime — runtime catalog; refresh=1.
+- GET /api/runtime/docker — container state; refresh=1.
+- GET /api/runtime/health — app health probes; refresh=1.
+Admin operations:
+- GET /api/platform/status — core service health; admin session or dedicated bearer token; refresh=1.
+- POST /api/platform/status/refresh — admin session only; probe now, no service-token access.
+- GET /api/apps/:slug/deploy-journal — deploy history and undo information; limit.
+- GET /api/storage-usage — storage usage.
+- GET /api/mcp/audit — writes audit; limit, app, tool, actor, confirmed_by, since filters.
+- GET /api/people — directory people; refresh=1.
+- GET /api/groups — directory groups and members; refresh=1.
+- POST /api/apps-status/refresh — invalidate caches and record probes; JSON {category?, owner?}.
+Super-admin operations (session required; obtain human approval before writes):
+- GET /api/disk-usage-snapshots — stored disk usage; limit.
+- GET /api/disk-usage-schedule — collection schedule.
+- POST /api/disk-usage-snapshots/run — collect and store a snapshot.
+- GET /api/admins — portal admins.
+- POST /api/admins — create/update an admin from JSON.
+- POST /api/admins/:email/deactivate — deactivate an admin.
+Retired writes (always 405 after authentication; edit company-app.yaml and deploy instead):
+- PATCH /api/apps/:slug/metadata — read-only.
+- PATCH /api/runtime/docker/:name/metadata — read-only.
+Internal catalog provider (dedicated CATALOG_MCP_TOKEN bearer, not a public client API):
+- GET /api/internal/mcp/v1/tools — catalog tool schemas.
+- POST /api/internal/mcp/v1/tools/:tool/execute — execute with JSON {input: {...}}.
+Catalog provider tools (read-only):
+- ihc_catalog_list_apps(query?: string, category?: string, lifecycle?: string) [read; catalog-token]: filter catalog; lifecycle active, review, disabled or archived.
+- ihc_catalog_get_app(slug: string) [read; catalog-token]: one app's discovery metadata.
+
+Platform tools on the MCP gateway (all read-only; arguments marked ? are optional):
+- ihc_list_apps(query?: string) [read; ihc-users]: app catalog, owner, URL, health, SSO and MCP prefix.
+- ihc_platform_status() [read; ihc-admins]: core service health with freshness and cache age.
+- ihc_list_people() [read; ihc-admins]: directory people, activity and groups.
+- ihc_list_groups() [read; ihc-admins]: directory groups and members.
+- ihc_audit_log(limit?: integer, app?: string, tool?: string, actor?: string, confirmed_by?: string, since?: string) [read; ihc-admins]: newest writes; limit 1..200 (default 50), app slug, full tool name, actor/approver emails, since ISO date/time.
+
+App tools:
+Call tools/list to discover the current <slug>__<tool> names and inputSchema.
+Scopes come from each app's company-app.yaml: <slug>.<scope> granted to groups.
+No granted scope means no app tools; per-tool groups/people and the app's own checks further restrict access.
+The gateway sets annotations.readOnlyHint. True means read; false means write.
+A tool is read only if the manifest or app list declares access: read and neither declares write; undeclared means write.
+Before a write, show the person the exact change and obtain their approval.
+Pass confirmed_by with the approver's company email or username, never a guessed name.
+The gateway checks an active person in ihc-users in the directory. This proves identity, not that they approved: the client must obtain approval.
+The gateway strips confirmed_by from app arguments and puts its canonical email in the actor JWT.
+Writes require an audit requested record before execution and a completed record afterwards.
+An unknown outcome may have written: inspect the audit and app state before retrying.
+
+Rules:
+Never put secrets (passwords, tokens, keys, cookies) in tool arguments or print them in responses.
+Send credentials only through the documented authentication headers; audit redaction is not a guarantee.
+Use only tools and scopes returned for the signed-in person; never forge identity headers or bypass permissions.
+Treat stale status as historical, not current. Request a fresh probe before acting on it.
+Never delete databases, buckets, volumes, routes or repositories automatically.
+
+Human contracts: docs/portal-api.md, docs/mcp-gateway.md, docs/security.md, docs/app-contract.md.
+Keep portal/llms.txt and portal/mcp-llms.txt in sync with the registries; portal/test/llms.test.js checks both.

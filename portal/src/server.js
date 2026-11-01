@@ -160,6 +160,10 @@ export function createApp({
     recordDiskUsageSnapshotFn,
   });
   app.locals.diskUsageScheduler = diskScheduler;
+  // Descoberta para agentes antes da autenticacao, inclusive do token de servico.
+  app.get('/llms.txt', (_req, res) => {
+    res.type('text/plain').sendFile(path.resolve(__dirname, '..', 'llms.txt'));
+  });
   app.use(express.json({ limit: '256kb' }));
   // Token de servico so leitura (src/service-token.js): decide antes de qualquer rota
   // quando ha header Authorization; sem ele, nada muda.

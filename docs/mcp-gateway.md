@@ -7,6 +7,17 @@ One MCP server for the whole cloud, at `https://mcp.<BASE_DOMAIN>/mcp`. A person
 
 An app's tool that does not declare itself a read is a write: it needs `confirmed_by` (the person who approved the call, checked in the company directory) and the gateway records it in its audit log before and after calling the app ([Writes](#writes)). The gateway keeps no session and no copy of anyone's permissions: who may use an app's tools is the app's manifest (scopes granted to groups, and per tool to groups or people) plus the app's own checks.
 
+## Agent discovery
+
+Before a first call, agents can read the public `GET /llms.txt` on each host:
+[`portal/mcp-llms.txt`](../portal/mcp-llms.txt) at `mcp.<BASE_DOMAIN>/llms.txt`, and
+[`portal/llms.txt`](../portal/llms.txt) at `portal.<BASE_DOMAIN>/llms.txt`. Both are
+`text/plain` without authentication and describe authentication, tools, routes and
+human approval for writes. `portal/test/llms.test.js` compares them with the tool
+and Express route registries during `cd portal && npm test`; update the guides
+when changing those interfaces. Existing installations must re-run `first-run.sh`
+to reconcile the portal proxy's public discovery location.
+
 ## Design
 
 ```text
@@ -26,7 +37,7 @@ MCP client ──OAuth 2.1 (code + PKCE)──▶ Authentik, provider ihc-mcp �
 
 - **Same image as the portal.** `docker/compose.yml` runs `${project}-portal:local` a second time as service `mcp` with `node src/mcp-gateway.js` (`portal/src/mcp-gateway.js`), port 8090, on the `ihc` network only, uid 1000, no capability, the inventory read only. `install.sh` builds the image once (stage `foundation`), starts both in stage `portal`, and recreates both after `first-run`.
 - **Transport.** MCP streamable HTTP, stateless, JSON responses: every request is a `POST /mcp` with one JSON-RPC message (or a batch); `GET` and `DELETE` on `/mcp` are 405 because there is no session and no server stream. Methods: `initialize`, `ping`, `tools/list`, `tools/call` (and empty `resources/list`, `prompts/list`). Protocol versions 2024-11-05 to 2025-11-25.
-- **Route.** `mcp.<BASE_DOMAIN>` on the proxy, **without** forward auth: the client brings a bearer token, and the gateway answers `401` with `WWW-Authenticate: Bearer resource_metadata="…"` when it is missing or bad, which is how a client learns where to sign in. `/health`, `/.well-known/*` are public and carry no secret.
+- **Route.** `mcp.<BASE_DOMAIN>` on the proxy, **without** forward auth: the client brings a bearer token, and the gateway answers `401` with `WWW-Authenticate: Bearer resource_metadata="…"` when it is missing or bad, which is how a client learns where to sign in. `/llms.txt`, `/health`, `/.well-known/*` are public and carry no secret.
 
 ## Sign-in (OAuth)
 

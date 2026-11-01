@@ -1,0 +1,66 @@
+# InHouseCloud MCP gateway
+
+Read this before the first call. One stateless MCP server for the platform and its apps at https://mcp.<BASE_DOMAIN>/mcp.
+GET /llms.txt is public, text/plain, and contains no installation secrets (repo: portal/mcp-llms.txt).
+The portal has its own guide at https://portal.<BASE_DOMAIN>/llms.txt (repo: portal/llms.txt).
+
+Authentication:
+POST /mcp requires Authorization: Bearer <Authentik access token>.
+Without a valid token, 401 WWW-Authenticate points to protected-resource metadata.
+Read authorization_servers there and discover Authentik's issuer (default https://auth.<BASE_DOMAIN>/application/o/ihc-mcp/, trailing slash included).
+Use OAuth authorization_code with PKCE S256, client_id ihc-mcp by default (public client, no secret), and an allowed callback URL.
+Request scopes openid email profile offline_access; the person signs in and consents in Authentik. Use refresh_token at the same issuer's token endpoint.
+Keep tokens bound to that issuer. The gateway verifies signature, issuer, audience and expiry.
+Membership in ihc-users is required; ihc-admins additionally unlocks admin tools. Group names and client id are configurable.
+403 means insufficient access; 503 means the authorization server is unavailable: do not discard a good token.
+Portal API tokens and app actor JWTs are not MCP client credentials.
+
+Gateway routes (GET also accepts HEAD; all routes except POST /mcp are public):
+- GET /llms.txt — this agent guide.
+- GET / — connection hint.
+- GET /health — gateway health and public signing-key id.
+- GET /.well-known/oauth-protected-resource — resource and authorization server discovery.
+- GET /.well-known/oauth-protected-resource/mcp — same metadata for /mcp (RFC 9728).
+- GET /.well-known/oauth-authorization-server — Authentik OAuth endpoints, issuer and supported scopes.
+- GET /.well-known/jwks.json — public actor JWT signing keys for apps; never private keys.
+- POST /mcp — authenticated JSON-RPC, streamable HTTP with JSON responses; one message or batch.
+- ALL /mcp — remaining methods return 405; no persistent session, GET stream or DELETE session.
+MCP methods: initialize, ping, tools/list, tools/call; resources/list and prompts/list return empty lists.
+Notifications receive 202. Call tools/call with params {name, arguments}; follow the tool's inputSchema.
+Tool errors may be returned with isError: true inside a successful HTTP response; inspect the result.
+
+Platform tools on the MCP gateway (all read-only; arguments marked ? are optional):
+- ihc_list_apps(query?: string) [read; ihc-users]: app catalog, owner, URL, health, SSO and MCP prefix.
+- ihc_platform_status() [read; ihc-admins]: core service health with freshness and cache age.
+- ihc_list_people() [read; ihc-admins]: directory people, activity and groups.
+- ihc_list_groups() [read; ihc-admins]: directory groups and members.
+- ihc_audit_log(limit?: integer, app?: string, tool?: string, actor?: string, confirmed_by?: string, since?: string) [read; ihc-admins]: newest writes; limit 1..200 (default 50), app slug, full tool name, actor/approver emails, since ISO date/time.
+
+App tools:
+Call tools/list to discover the current <slug>__<tool> names and inputSchema.
+Scopes come from each app's company-app.yaml: <slug>.<scope> granted to groups.
+No granted scope means no app tools; per-tool groups/people and the app's own checks further restrict access.
+The gateway sets annotations.readOnlyHint. True means read; false means write.
+A tool is read only if the manifest or app list declares access: read and neither declares write; undeclared means write.
+Before a write, show the person the exact change and obtain their approval.
+Pass confirmed_by with the approver's company email or username, never a guessed name.
+The gateway checks an active person in ihc-users in the directory. This proves identity, not that they approved: the client must obtain approval.
+The gateway strips confirmed_by from app arguments and puts its canonical email in the actor JWT.
+Writes require an audit requested record before execution and a completed record afterwards.
+An unknown outcome may have written: inspect the audit and app state before retrying.
+
+Rules:
+Never put secrets (passwords, tokens, keys, cookies) in tool arguments or print them in responses.
+Send credentials only through the documented authentication headers; audit redaction is not a guarantee.
+Use only tools and scopes returned for the signed-in person; never forge identity headers or bypass permissions.
+Treat stale status as historical, not current. Request a fresh probe before acting on it.
+Never delete databases, buckets, volumes, routes or repositories automatically.
+
+Portal status API (on the portal host, not gateway routes):
+GET /api/platform/status with Authorization: Bearer <IHC_PORTAL_API_TOKEN>, or an admin browser session.
+HEAD is also accepted. ?refresh=1 probes now; otherwise inspect stale, age_seconds and checked_at.
+POST /api/platform/status/refresh requires an admin session; the service token cannot use it.
+GET /health is public. The portal's /llms.txt lists the remaining routes.
+
+Human contracts: docs/mcp-gateway.md, docs/portal-api.md, docs/security.md, docs/app-contract.md.
+Keep portal/mcp-llms.txt and portal/llms.txt in sync with the registries; portal/test/llms.test.js checks both.
