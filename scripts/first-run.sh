@@ -48,6 +48,7 @@ HAVE_STATE=false; [ -f "$STATE_FILE" ] && HAVE_STATE=true
 record() { [ "$HAVE_STATE" = true ] && state stage first_run set resources "[\"$1\"]" || true; }
 # shellcheck source=lib/sso.sh
 . "$IHC_ROOT/scripts/lib/sso.sh"
+. "$IHC_ROOT/scripts/lib/iht.sh"
 # shellcheck source=lib/portal-api.sh
 . "$IHC_ROOT/scripts/lib/portal-api.sh"
 
@@ -71,6 +72,7 @@ ok "API reachable as $(printf '%s' "$API_BODY" | jsonq get user.username)"
 
 PORTAL_GROUP_PK="$(ensure_group "$AUTHENTIK_PORTAL_GROUP")"
 APP_GROUP_PK="$(ensure_group "$AUTHENTIK_APP_GROUP")"
+ensure_iht_login
 
 AUTHZ_FLOW="$(flow_pk default-provider-authorization-implicit-consent)"
 INVAL_FLOW="$(flow_pk default-provider-invalidation-flow)"
