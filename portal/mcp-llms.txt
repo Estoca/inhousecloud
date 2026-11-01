@@ -64,3 +64,5 @@ GET /health is public. The portal's /llms.txt lists the remaining routes.
 
 Human contracts: docs/mcp-gateway.md, docs/portal-api.md, docs/security.md, docs/app-contract.md.
 Keep portal/mcp-llms.txt and portal/llms.txt in sync with the registries; portal/test/llms.test.js checks both.
+
+Via inhouse.technology: the iht door exposes list and call wrappers (list first; see docs/mcp-gateway.md). It forwards with short iht instance tokens, audience = the MCP gateway base URL without /mcp or trailing slash. The gateway must configure IHT_ISSUER and company email allowlists; writes still require human approval and confirmed_by.

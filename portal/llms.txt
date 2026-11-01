@@ -94,3 +94,5 @@ Never delete databases, buckets, volumes, routes or repositories automatically.
 
 Human contracts: docs/portal-api.md, docs/mcp-gateway.md, docs/security.md, docs/app-contract.md.
 Keep portal/llms.txt and portal/mcp-llms.txt in sync with the registries; portal/test/llms.test.js checks both.
+
+Via inhouse.technology: the iht door exposes list and call wrappers (list first; see docs/mcp-gateway.md). It forwards with short iht instance tokens, audience = the MCP gateway base URL without /mcp or trailing slash. The gateway must configure IHT_ISSUER and company email allowlists; writes still require human approval and confirmed_by.

@@ -36,6 +36,8 @@ s = p.read_text()
 # These anchors occur only in the two Authentik services.
 s = s.replace("      IHT_CLIENT_ID:", "      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt\n      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt\n      IHT_CLIENT_ID:")
 s = s.replace("      - ./authentik/blueprints:/blueprints/custom:ro", "      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro\n      - ./authentik/blueprints:/blueprints/custom:ro")
+s = s.replace('      MCP_ACTOR_KEY_PATH:', '      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt\n      MCP_ACTOR_KEY_PATH:')
+s = s.replace('      - mcp-keys:/ihc/mcp-keys', '      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro\n      - mcp-keys:/ihc/mcp-keys')
 p.write_text(s)
 PY
 # Restart only fixture PIDs recorded by this harness, including on --reuse.
@@ -61,7 +63,7 @@ from iht.app import create_app
 from iht.config import Settings
 app = create_app(Settings())
 PY
-nohup venv/bin/uvicorn serve_iht:app --host 0.0.0.0 --port 9443 --ssl-keyfile tls.key --ssl-certfile tls.crt >logs/iht.log 2>&1 &
+nohup venv/bin/uvicorn serve_iht:app --host 0.0.0.0 --port 18340 --ssl-keyfile tls.key --ssl-certfile tls.crt >logs/iht.log 2>&1 &
 echo $! > iht.pid
 for url in "$MOCK_ISSUER/.well-known/openid-configuration" "$IHT_PUBLIC_URL/.well-known/openid-configuration"; do
   ready=false
@@ -79,5 +81,7 @@ if ! ./install.sh --non-interactive --config ../config.yaml >../logs/install.log
   exit 1
 fi
 cd ..
+echo 'Running real MCP journeys...'
+venv/bin/python ihc/scripts/tests/fixtures/mcp-iht.py
 echo 'Running real browser journeys...'
 venv/bin/python ihc/scripts/tests/fixtures/sso-browser.py

@@ -181,3 +181,36 @@ Inside the service (compose, not `.env`): `MCP_TOOLS_LIST_TIMEOUT_MS` 10000, `MC
 - Logs: `docker compose … logs mcp` has one line per refused sign-in (reason, never the token), per failed provider list (`<slug> provider_timeout`, `serving the last good catalog`) and per tool call (`<tool> by <email>: ok | <code>`, `confirmed by <email>` on a write, `refused <code>` for a refused write, and a `mcp audit:` line when an audit insert fails).
 - Smoke test 25 ([`smoke-tests.md`](smoke-tests.md)) proves the whole path on every install.
 - What is not here yet (later layers): dynamic client registration, a page for the audit log in the portal's UI (the API and the MCP tool exist), grants per tool set by an admin outside the app's manifest, and a credential proxy so apps never hold third-party keys.
+
+
+## Via inhouse.technology
+
+When `authentik.iht` is enabled, the installer persists `IHT_ISSUER` and Compose passes it to
+`mcp`. Alongside Authentik access tokens, the gateway accepts iht's RS256 instance tokens.
+Their audience is exactly the gateway base URL: `https://mcp.<BASE_DOMAIN>`, with **no trailing
+slash and no `/mcp`** (local ingress: `http://mcp.cloud.localhost`). `MCP_PUBLIC_URL`, when set,
+is the canonical base URL. Authentik's audience remains `ihc-mcp`; its discovery is unchanged.
+
+The gateway reads `<IHT_ISSUER>/.well-known/jwks.json`, caches it for five minutes and refetches
+on unknown `kid`, including during rotation. It verifies exact issuer and audience, signature,
+expiry without grace, integer `iat` not in the future and a positive lifetime at most 300 seconds,
+`iht_kind: instance_access`, `email_verified: true`, and `role: admin|member`.
+An unreachable JWKS endpoint returns 503; invalid tokens return 401.
+
+The email must match `IHT_ALLOWED_DOMAINS` (comma-separated exact email domains) or
+`IHT_ALLOWED_PEOPLE` (comma-separated emails), otherwise 403. By default the allowed people
+are `PORTAL_SUPER_ADMIN_EMAILS` and allowed domains are their email domains. Set an explicit
+list in the installation `.env` to narrow or extend this boundary. Empty lists fail closed.
+The signed role maps `admin` to `ADMIN_GROUP` + `USER_GROUP`, `member` to `USER_GROUP`;
+external group claims never grant extra access. Actor JWTs, app grants, audit and the directory
+check of `confirmed_by` use the same person and code path as Authentik.
+
+In iht's company instance form set **InHouseCloud MCP** to the gateway base URL. The iht-owned
+`ihc_list_tools` returns the current gateway list as data; use `ihc_call` with a returned tool
+name and arguments. Writes still need human approval and `confirmed_by`. Hosted provisioning
+records this gateway URL separately from the portal display link.
+
+The opt-in `scripts/tests/sso-iht-e2e.sh --iht-source <checkout>` harness proves direct
+admin/member iht JWT access, wrong audience rejection, and list/read through the real iht MCP
+door before its browser SSO journeys. It takes `/tmp/inhouse-lima-ihc.lock` before creating
+`ihc-sso-e2e`, and deletes the VM and releases the mutex on exit (unless explicitly kept).

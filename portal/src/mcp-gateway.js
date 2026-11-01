@@ -46,7 +46,12 @@ export function gatewayConfigFromEnv(env = process.env) {
   const authentikUrl = trimSlash(env.AUTHENTIK_URL) || `${scheme}://auth.${baseDomain}`;
   const authentikInternal = trimSlash(env.AUTHENTIK_INTERNAL_URL) || authentikUrl;
   const clientId = env.MCP_OIDC_CLIENT_ID || 'ihc-mcp';
+  const people = String(env.IHT_ALLOWED_PEOPLE || env.SUPER_ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const domains = env.IHT_ALLOWED_DOMAINS || env.ORG_EMAIL_DOMAINS || String(env.SUPER_ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase().split('@')[1]).filter(Boolean).join(',');
   return {
+    ihtIssuer: trimSlash(env.IHT_ISSUER),
+    allowedPeople: people,
+    allowedDomains: domains.split(',').map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
     publicUrl: trimSlash(env.MCP_PUBLIC_URL) || `${scheme}://mcp.${baseDomain}`,
     authentikUrl,
     clientId,
@@ -134,6 +139,10 @@ export function createGatewayApp({
 } = {}) {
   const actor = signer ?? createActorSigner({ ...loadOrCreateSigningKey(config.keyPath), issuer: config.publicUrl, ttlSeconds: config.actorTtlSeconds });
   const tokens = verifier ?? createAccessTokenVerifier({
+    ihtIssuer: config.ihtIssuer,
+    publicUrl: config.publicUrl,
+    allowedDomains: config.allowedDomains,
+    allowedPeople: config.allowedPeople,
     issuer: config.issuer,
     audience: config.clientId,
     jwksUrl: config.jwksUrl,

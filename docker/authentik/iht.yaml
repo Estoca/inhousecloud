@@ -63,6 +63,36 @@ entries:
       target: !KeyOf enrollment
       stage: !KeyOf login
       order: 20
+  # Keep repeat source logins in this blueprint too: a !Find of Authentik's
+  # asynchronously installed default flow can resolve to null on first boot.
+  - model: authentik_flows.flow
+    id: authentication
+    identifiers:
+      slug: ihc-iht-authentication
+    attrs:
+      name: inhouse.technology authentication
+      title: Sign in with inhouse.technology
+      designation: authentication
+      authentication: require_unauthenticated
+  - model: authentik_policies_expression.expressionpolicy
+    id: source-only
+    identifiers:
+      name: ihc-iht-authentication-source-only
+    attrs:
+      expression: |
+        return ak_is_sso_flow
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf authentication
+      policy: !KeyOf source-only
+      order: 0
+    attrs:
+      enabled: true
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication
+      stage: !KeyOf login
+      order: 10
   - model: authentik_sources_oauth.oauthsource
     id: iht
     identifiers:
@@ -82,7 +112,7 @@ entries:
       # never create look-alike groups owned by the source
       group_matching_mode: name_link
       user_path_template: goauthentik.io/sources/inhouse-technology
-      authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+      authentication_flow: !KeyOf authentication
       enrollment_flow: !KeyOf enrollment
       user_property_mappings:
         - !KeyOf claims

@@ -72,6 +72,15 @@ Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository c
 
 ### Sign in with inhouse.technology
 
+This also enables iht instance tokens at the MCP gateway (`IHT_ISSUER` in the `mcp`
+service). In iht's company form, set InHouseCloud MCP to `https://mcp.<BASE_DOMAIN>`
+(no trailing slash or `/mcp`; local ingress uses `http://mcp.cloud.localhost`).
+Email access defaults to the portal super-admin emails and their domains; explicit
+`IHT_ALLOWED_DOMAINS` / `IHT_ALLOWED_PEOPLE` in the installation `.env` restrict or
+extend it. See [MCP gateway](mcp-gateway.md#via-inhousetechnology).
+
+The iht blueprint owns both enrollment and repeat-login authentication flows. This avoids a first-boot race with Authentik’s asynchronously installed default source flow. The authentication flow permits only source SSO; local recovery remains separate.
+
 This optional connection applies to a company that uses inhouse.technology (iht) as
 its identity provider. A self-installed cloud with no `authentik.iht.client_id`
 keeps its existing login. An issuer alone, or a secret alone, does not enable it.
