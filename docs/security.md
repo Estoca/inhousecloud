@@ -2,6 +2,42 @@
 
 The cloud is designed around a conservative trust boundary.
 
+## App trust boundary lint
+
+Run `scripts/ihc-app.sh lint [<dir>]` before deploying (the directory defaults to the
+current directory). It exits non-zero with one line per finding. The template's deploy
+workflow runs `ihc-app lint` after checkout and before build. The linter needs PyYAML,
+included in the deployer image; in a development checkout it can use the portal's
+installed Node `yaml` package instead. It never executes app code or loads app `.env`.
+
+It reuses the executor's manifest, Compose and build validators, including their
+diagnostics for local infrastructure, privileged containers, host networking, Docker
+socket mounts and builds that read outside the repository. Additional checks refuse
+added capabilities, devices, host namespaces, lifecycle hooks, unresolved isolation or
+build variables, Compose includes/extends and host-backed or external named volumes.
+Bind mounts, even read-only ones, must stay inside this app's
+`<install-dir>/app-data/<slug>/`; traversal and symlinks cannot escape it. Ordinary
+app-owned named volumes are allowed.
+
+Repository files cannot supply host cron entries, systemd units/timers, deploy hooks,
+setuid/setgid executables or files laid out for privileged host binary directories.
+Workflow and shell-script checks flag host paths and privileged host commands;
+workflows also flag privileged containers, added capabilities, host namespaces and
+Docker sockets. Put host installation code in the protected platform checkout.
+
+`install.sh doctor` runs the same lint over each installed app's active release (or
+its Compose source directory for older deploys). Findings are warnings with evidence
+and a repair action. It also inspects running bind mounts for overlap with platform
+paths. `--install-dir` / `IHC_INSTALL_DIR` select the installation, defaulting to
+`/opt/inhousecloud`: the entire installation is platform-owned except the app's own
+data subtree. This protects `compose.yml`, `.env`, `runner/`, `portal/`, `catalog/`,
+`local/`, backups and other apps from a second manager. Missing source or an unavailable
+YAML reader is a warning, never a successful lint.
+
+This static check supports review; it cannot prove what arbitrary shell code does.
+The repository owns its workflow and can remove the lint step. The deploy runner's
+Docker socket remains root-equivalent, as described below.
+
 ## Trust Boundary
 
 - Coding agents may edit files and open pull requests.

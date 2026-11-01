@@ -27,6 +27,9 @@ jobs:
           IHC_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ihc-app checkout
 
+      - name: Lint the app trust boundary
+        run: ihc-app lint
+
       - name: Build the release (the commit's files and images)
         run: ihc-app build "$APP_SLUG"
 

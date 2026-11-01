@@ -2,6 +2,32 @@
 
 `company-app.yaml` is the operational contract for a deployable internal app. `ihc-app provision` ([`gitops-flow.md`](gitops-flow.md)) reads it on every push to `main` and refuses to deploy when it breaks a rule below; [`templates/app`](../templates/app) starts every new app with a valid one. Schema: [`schemas/company-app.schema.json`](../schemas/company-app.schema.json).
 
+## Lint before build
+
+Run `ihc-app lint [<dir>]` (or `scripts/ihc-app.sh lint [<dir>]` from the cloud checkout).
+The default directory is the current directory; each finding is one line and any finding
+means exit 1. The template deploy workflow runs it before build. It uses the executor's
+manifest, Compose and build validation rules and requires PyYAML (already in the
+deployer image), or the portal's installed `yaml` package for local development.
+
+Apps must not request privileged mode, added capabilities/devices, host networking or
+host PID/IPC/user namespaces, Docker sockets, lifecycle deploy hooks or builds that
+read outside their repository. Lint also refuses Compose includes/extends, unresolved
+build/isolation variables and host-backed or external volumes that could hide host
+access. Bind mounts are allowed only inside `<install-dir>/app-data/<slug>/`, including
+for read-only mounts; use `DATA_DIR` (`/data`, mounted by provision) or an app-owned
+named volume. Other apps' data and every other installation path belong to the platform.
+`--install-dir` or `IHC_INSTALL_DIR` select the install directory, `/opt/inhousecloud`
+by default. Paths cannot escape through `..` or symlinks.
+
+Do not commit host cron entries, systemd units/timers, host deploy hooks or privileged
+host executables. Workflow and shell checks flag host paths/commands and workflows
+requesting privileged containers. Host artifacts must come from protected platform
+code, and workflows should call `ihc-app build` and `ihc-app apply`. Ordinary Dockerfile
+instructions operate inside the app image. `install.sh doctor` repeats the lint for each
+installed app and checks running mounts for platform path overlap, reporting warnings
+with the findings. See [the security boundary and static lint limitations](security.md#app-trust-boundary-lint).
+
 ## Minimal Deployable App
 
 ```yaml

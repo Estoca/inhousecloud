@@ -145,10 +145,10 @@ def truthy(v):
     return v is True or str(v).lower() == "true"
 
 
-def cmd_vars(path, expected):
+def cmd_vars(path, expected, manifest=None):
     errors = []
     try:
-        m = config.load(path)
+        m = config.load(path) if manifest is None else manifest
     except Exception as e:  # noqa: BLE001
         sys.exit("%s: cannot read: %s" % (path, e))
     if not isinstance(m, dict):
@@ -238,8 +238,8 @@ def image_name(image):
     return base.split(":", 1)[0].lower()
 
 
-def cmd_compose_check(service):
-    data = json.load(sys.stdin)
+def cmd_compose_check(service, data=None):
+    data = json.load(sys.stdin) if data is None else data
     services = data.get("services") or {}
     errors = []
     if service not in services:
@@ -264,11 +264,11 @@ def cmd_compose_check(service):
         sys.exit(1)
 
 
-def cmd_build_check(root):
+def cmd_build_check(root, data=None):
     """ihc-app build: the build sees the files of the commit and nothing of the box. Compose
     reads build secrets, SSH agents and extra contexts on the machine that runs it (the deploy
     job, which has the install directory), so a build may not ask for them."""
-    data = json.load(sys.stdin)
+    data = json.load(sys.stdin) if data is None else data
     root = os.path.realpath(root)
     errors = []
 
