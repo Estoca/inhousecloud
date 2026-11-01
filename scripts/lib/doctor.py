@@ -30,6 +30,7 @@ import urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import legacy  # noqa: E402  (an installation under a previous name: one message, no checks)
 import portalapi  # noqa: E402  (the portal's read-only status API, docs/portal-api.md)
+import applint  # noqa: E402  (static trust boundary and install path ownership)
 
 DOCTOR_VERSION = 1
 RUNBOOK = "docs/runbooks/%s.md"
@@ -195,7 +196,8 @@ class Box:
             row = {"name": c.get("Name", "").lstrip("/"), "id": c.get("Id", "")[:12], "status": st.get("Status", "?"),
                    "health": (st.get("Health") or {}).get("Status", "none"), "restarts": c.get("RestartCount", 0),
                    "started": parse_iso(st.get("StartedAt")), "exit_code": st.get("ExitCode"),
-                   "oom": st.get("OOMKilled", False)}
+                   "oom": st.get("OOMKilled", False), "mounts": c.get("Mounts") or [],
+                   "working_dir": labels.get("com.docker.compose.project.working_dir", "")}
             # A one-off container of the same service (compose run) is not the service.
             if labels.get("com.docker.compose.oneoff") == "True":
                 continue
@@ -816,6 +818,58 @@ def c_app(box, slug, a, hosts):
     return c.ok("%s up: %s = %s through the proxy%s" % (slug, path, code, ", / sends to the sign-in" if rt.get("auth_required", True) else " (public by its manifest)"))
 
 
+def c_app_lint(box, slug):
+    c = Check("app-lint:" + slug)
+    action = "fix the app repository, run ihc-app lint --install-dir %s, then redeploy" % box.I
+    findings = []
+    # Inspect only the active release, not superseded releases or platform-generated
+    # overlays/env files. Older deploys remember their source directory in Compose labels.
+    source, manifest = "", "company-app.yaml"
+    deploy = os.path.join(box.I, "deploys", slug)
+    try:
+        rid = open(os.path.join(deploy, "current")).read().strip()
+        if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}", rid):
+            raise ValueError("invalid release id")
+        release = os.path.join(deploy, "releases", rid)
+        meta = load_json(os.path.join(release, "release.json"), {})
+        if not isinstance(meta, dict):
+            raise ValueError("invalid release metadata")
+        src = os.path.join(release, "src")
+        source = os.path.join(src, meta.get("project_dir", ""))
+        mp = os.path.join(src, meta.get("manifest", "company-app.yaml"))
+        if not applint.within(source, src) or not applint.within(mp, source):
+            raise ValueError("release source leaves repository")
+        manifest = os.path.relpath(mp, source)
+    except (OSError, ValueError, TypeError):
+        for (project, _), row in box.containers.items():
+            if project == slug and os.path.isfile(os.path.join(row.get("working_dir", ""), "company-app.yaml")):
+                source = row["working_dir"]
+                break
+        else:
+            source = os.path.join(box.I, "apps", slug)
+    if os.path.isfile(os.path.join(source, manifest)):
+        rc, out, _ = run([sys.executable, "-I", os.path.join(box.H, "scripts/lib/applint.py"),
+                          source, box.I, manifest], timeout=20)
+        findings += out.splitlines()
+        if rc and not out.strip():
+            findings.append("lint could not complete; check the source and PyYAML dependency")
+    else:
+        findings.append("app source unavailable on the box; cannot lint its repository")
+    for (project, service), row in box.containers.items():
+        if project != slug:
+            continue
+        for mount in row.get("mounts", []):
+            if mount.get("Type") == "bind":
+                why = applint.bind_finding(mount.get("Source", ""), slug, box.I)
+                if why:
+                    findings.append("running service %s: %s" % (service, why))
+    for finding in findings:
+        c.see(finding)
+    if findings:
+        return c.warn("%d trust boundary finding(s): %s" % (len(findings), "; ".join(findings)), action)
+    return c.ok("app lint passed; mounts stay in app-data/%s, separate from install.sh paths" % slug)
+
+
 def c_agent(box):
     c = Check("agent")
     bad = []
@@ -903,9 +957,12 @@ def doctor(install_dir, root):
     checks.append(c_install(box))
     d = c_docker(box)
     checks.append(d)
+    if d.status != "fail":
+        box.look()
+    for slug, _ in box.apps():
+        checks.append(c_app_lint(box, slug))
     if d.status == "fail":
         return box, checks, na, t0
-    box.look()
     jobs = [("containers", c_containers), ("disk", c_disk), ("memory", c_memory), ("dns", c_dns)]
     if box.tls == "off":
         na.append({"name": "tls", "reason": "TLS is off (%s ingress, plain HTTP on the box)" % box.ingress})

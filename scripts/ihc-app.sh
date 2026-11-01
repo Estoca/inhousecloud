@@ -22,6 +22,7 @@
 #       Authentik provider and application, the proxy host SLUG.<BASE_DOMAIN> with
 #       forward auth, and the app's record in inventory.json.
 #   ihc-app checkout                   inside a deploy job: fetch the pushed commit
+#   ihc-app lint [DIR]                 statically check the app trust boundary (default .)
 #   ihc-app build SLUG [--manifest FILE]
 #       Inside a deploy job, without the cloud's credentials: the files of the commit (git
 #       archive, nothing else of the workspace) become a release in
@@ -1109,6 +1110,7 @@ PY
 # shellcheck source=lib/garage.sh
 . "$IHC_LIB/garage.sh"
 case "$CMD" in
+  lint) exec $PY "$IHC_LIB/applint.py" "${DIR:-${SLUG:-.}}" "$INSTALL_DIR" "$MANIFEST" ;;
   new) cmd_new ;;
   init) cmd_init ;;
   provision) cmd_provision ;;
