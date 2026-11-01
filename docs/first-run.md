@@ -905,3 +905,48 @@ No value of the audit role's password is in the install, upgrade or remove logs,
 **Found and fixed.** `stage_portal` adds `MCP_AUDIT_DB_PASSWORD` to an `.env` from before the audit role with `env_secret`, which appends a fingerprint to `SECRET_FPS`. That variable is started by `stage_secrets`, which does not run on `install.sh --apply --from foundation`, and `install.sh` runs under `set -u`: the portal stage stopped with `SECRET_FPS: unbound variable`, so the upgrade path of every existing install failed, while a fresh install passed (the first run above). `env_secret` now starts the list when it is unset. `scripts/tests/install-env-secret.sh` (CI, `portal.yml`) takes `env_default` and `env_secret` out of `install.sh` and runs them under `set -eu` with the variable unset: it fails without the change (first run exit 1, `unbound variable`) and passes with it. The two re-runs and the upgrade from `main` above are with the fix (`1f41ee7`).
 
 **Not exercised.** A real client signing in through a browser (the token came from `sso-login-check.sh`, the same requests), a second person as `confirmed_by` (the approver was the smoke user, who is also the caller; the directory check is the same, and `nobody@example.com` was the negative case), a deactivated approver and one outside `ihc-users` (unit-tested in `portal/test/mcp-writes.test.js`), `GET /api/mcp/audit` over HTTP, a restore of the audit table from a backup, ingress other than `local`, `ops`, `storage` and `agent` profiles, macOS with Docker Desktop. The template has no write tool of its own (`prices` added one for the test); `ihc-app wait SLUG` reads `company-app.yaml` of the current folder and says "cannot read" when run from elsewhere (not changed here). The VM was deleted.
+
+## Deploy journal run (LAB-65, 2026-11-01)
+
+Deploys as transactions: `ihc-app build` (a release from the commit's files, images tagged per release), `ihc-app apply` (the app's lock, the head of `main` only, the journal written before anything changes, provision, the release's images, the healthcheck), `ihc-app rollback` and `ihc-app journal`, and smoke test 26. On the branch `lab-65-deploy-journal` (PR 42).
+
+**Setup.** A new Lima VM (Lima `template:docker`: Ubuntu 26.04.1 LTS, Docker 29.9.2 rootless, Compose 5.6.1, `git` 2.53, `python3` 3.14; 2 CPU, 4 GiB, 30 GiB, no mounts, no port forwards; `/opt` holding only `containerd`). The repository cloned from GitHub inside the VM and the branch checked out; `/opt/inhousecloud` made with the README's `sudo install -d`; `install.sh --non-interactive --config bootstrap/config.example.yaml` (core and backup, `local` ingress, TLS off).
+
+| Step | Result |
+|---|---|
+| VM created and started | 48 s |
+| `install.sh --non-interactive` | 322 s, exit 0, smoke tests **22 passed, 0 failed, 4 skipped** (storage, ops and agent profiles off) |
+| Smoke test 16 | push to green run 21 s, redeploy 26 s (now `build` then `apply`), password kept, `smoke-app` removed after the test with its releases and journal |
+| Smoke test 26 | "two deploys journaled; rollback to `<first release>` in 15s, /health 200, journaled as undoing the second; a second rollback refused with nothing written" |
+| `install.sh --apply --from foundation` on that box | 101 s, exit 0, smoke **22/0/4**; the 14 containers kept their ids, the app `pedidos` (below) 200 |
+
+**By hand: deploy, change, rollback.** The app `pedidos` from `ihc-app new pedidos --push`, then pushes to `main` with the admin token:
+
+| Step | Result |
+|---|---|
+| First deploy | up 19 s after the command; journal: `deploy ok`, replaced `(none)`, env keys `+APP_BASE_URL … +REDIS_URL` (names only) |
+| A change: `/health` returns `version: 2` and `FEATURE_FLAG` from the env, `FEATURE_FLAG=on` added to `.env.example` | run green in 18 s; `/health` `{"version":2,"flag":"on"}`; journal: `deploy ok`, replaced the first release, env keys `+FEATURE_FLAG` |
+| `ihc-app rollback pedidos` with no terminal and no `--yes` | exit 1, "no terminal: pass --yes", nothing changed |
+| `ihc-app rollback pedidos --yes --reason …` | 15 s, exit 0; the container runs `ihc-release/pedidos/app:<first release>`; `/health` `{"ok":true,"service":"pedidos"}` (no version); journal: `rollback ok`, "undoes `<tx of the change>`"; `inventory.json` `release` and `last_commit` the first ones |
+| The journal against the app's env file | 12 lines; none of the 7 values of 16 characters or more in `apps/pedidos/.env` appears in it; `catalog/deploys/pedidos.jsonl` 0644, `deploys/` and `deploys/pedidos/` 0700 |
+| Rollback again | exit 1, "the deploy being undone … replaced a version the journal does not have (the app's first deploy …): nothing to roll back to"; the journal still 12 lines |
+| A branch `feature` whose `deploy.yml` also runs on its own push | the run fails at the apply step in 6 s: "this run is for refs/heads/feature: only commits merged into main are applied (a push to main is the approval); nothing changed"; `/health` unchanged, no journal line. The build step did run (with the socket): see "Not closed" |
+| A broken release on `main` (`/health` answers 503) | run failed after 261 s (the 240 s healthcheck): "did not come up: /health … answered '503'", "release … is running but unhealthy; to go back … ihc-app rollback pedidos"; journal `deploy unhealthy` |
+| The fix pushed while a process on the box held `deploys/pedidos/lock` for 40 s | the job's apply printed "waiting for the lock of the app", applied 35 s later, run green in 58 s; `/health` `version: 4` |
+| `ihc-app rollback pedidos --timeout 30` (the newest deploy replaced the broken release) | 45 s, exit 1: "rollback of pedidos to `<broken release>` is unhealthy too … Nothing else was tried"; journal `rollback unhealthy`; no second attempt |
+| Rollback again | 15 s, exit 0, past the broken release to the first one (reverse order); `/health` 200 |
+| Portal, `GET /api/apps/pedidos/deploy-journal?limit=3` from the proxy with admin headers | 200: total 7, the newest three (`rollback ok`, `rollback unhealthy`, `deploy ok`) and `undo` "replaced_version_not_journaled"; with `ihc-users` only 403; anonymous through the proxy 302 to the sign-in |
+
+**The upgrade path.** `install.sh remove --dir --confirm ihc` (31 s, 0 containers, 0 volumes), `main` (`dd2f7b9`) installed (970 s, exit 0, smoke **21/0/4**; `first_run` 471 s and smoke 365 s on this run, against 322 s for the whole branch install above), an app `legacy` by `ihc-app new --push` with `main`'s workflow (provision, `compose up --build`, wait), up in 12 s. Then the branch checked out and `install.sh --apply --from foundation`:
+
+| Step | Result |
+|---|---|
+| `--apply --from foundation` | 140 s, exit 0, smoke **22/0/4** (test 26 passed); `.env` byte for byte the same; `ihc-portal-1` and `ihc-mcp-1` recreated (new portal image), the 12 others and `legacy-app-1` kept their ids; `legacy` 200. No `set -u` error on this path (the `SECRET_FPS` fix of LAB-64 holds) |
+| A push to `legacy` with its old workflow | green in 21 s, `version: 2` served; the job's log warns "this deploy is not in the deploy journal: the repository's .gitea/workflows/deploy.yml predates it. Copy …" |
+| The template's `deploy.yml` copied into `legacy` and pushed | green in 21 s, `version: 3`; journal: `deploy ok`, replaced `(none)`, `before.images` the running `legacy-app` image |
+| `ihc-app rollback legacy` | exit 1, "… replaced a version the journal does not have … nothing to roll back to" |
+| `install.sh doctor` | 16 checks ok in 4 s; `inventory.json` has `release` for `legacy` |
+
+Nothing left in `/tmp` of the VM by the scripts. The VM was deleted.
+
+**Not closed.** The build and the apply are two steps of one job on the deploy runner, which has the Docker socket: a repository's own workflow that runs on a branch push still runs there (the `feature` run built its images before the apply refused). Deploy jobs without the socket, with the reconciler outside them and an unprivileged build, are the next step ([roadmap](roadmap.md)). Not exercised: two apps applying at once (the runner's capacity is 1; the lock is per app), a release pruned before a rollback (unit-tested in `scripts/tests/deploy-journal.sh`, as are an image gone and the lock held by another process), an app with several services or a pulled image, a rootful Docker host (a rollback there needs the user that owns `<install-dir>/apps`), TLS `internal`, the `storage`, `ops` and `agent` profiles, macOS with Docker Desktop.

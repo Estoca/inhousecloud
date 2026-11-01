@@ -9,7 +9,7 @@ import { getInventoryPath } from './inventory.js';
 // uma linha JSON por evento, append-only. Cada apply ou rollback e uma transacao `tx`:
 // `begin` (antes de mudar qualquer coisa: release e commit de antes e de depois, imagens,
 // sha256 do overlay, nomes das chaves do env file), `step` (provision com as chaves
-// adicionadas, removidas e alteradas; `applied` quando os containers ja rodam a release nova)
+// adicionadas, removidas e alteradas; `applied` quando os containers ja rodam a release que entrou)
 // e `end` com o resultado. Valores do env file nunca entram no journal, so nomes de chave.
 // O portal monta catalog/ so leitura, entao le o journal ao lado do inventario.
 
@@ -22,7 +22,7 @@ export function deployJournalDir(env = process.env) {
   return inventory ? path.join(path.dirname(inventory), 'deploys') : null;
 }
 
-// Agrupa as linhas por transacao, da mais antiga para a mais nova (mesma regra do
+// Agrupa as linhas por transacao, da mais antiga para a mais recente (mesma regra do
 // deployjournal.py: sem `end`, a transacao foi interrompida).
 export function parseDeployJournal(text) {
   const byTx = new Map();

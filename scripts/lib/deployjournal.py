@@ -159,6 +159,8 @@ def show(path, as_json, limit):
         for k in ("end_error", "end_message"):
             if t.get(k):
                 print("    %s" % t[k])
+        if t["result"] != "ok" and t.get("end_health"):
+            print("    health: %s" % t["end_health"])
 
 
 def envdiff(old, new):
