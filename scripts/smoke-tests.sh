@@ -325,6 +325,10 @@ t25_outsider() { # a user in no group: Authentik refuses the MCP client's sign-i
   if [ -s "$T25_WORK/outsider" ]; then T25_BAD="$T25_BAD outsider-got-a-token"; fi
 }
 t25_granted() { # APP
+  if [ "${IHT_ENABLED:-false}" = true ]; then
+    T25_DONE=true
+    return 0
+  fi
   local app="$1" out code body iss
   T25_DONE=true
   T25_WORK="$(mktemp -d "${TMPDIR:-/tmp}/ihc-smoke25.XXXXXX")"; chmod 700 "$T25_WORK"
@@ -384,6 +388,7 @@ console.log(s.stale === false && typeof s.freshness === "string" && Number.isFin
   [ "$code" = 401 ] && T25_GOOD="$T25_GOOD; $app refuses a call without an actor JWT (401)" || T25_BAD="$T25_BAD app-without-jwt:$code"
 }
 t25_revoked() { # APP: its manifest now grants the scope to the admin group only
+  [ "${IHT_ENABLED:-false}" != true ] || return 0
   local app="$1" out body
   T25_REVOKED=true
   [ -n "${T25_CFG:-}" ] && [ -s "$T25_CFG" ] || { T25_BAD="$T25_BAD revoked:no-token"; return; }
@@ -395,6 +400,10 @@ t25_revoked() { # APP: its manifest now grants the scope to the admin group only
   else T25_BAD="$T25_BAD revoked-call:'$(printf '%.160s' "$body")'"; fi
 }
 t25_result() {
+  if [ "${IHT_ENABLED:-false}" = true ]; then
+    result 25 mcp-gateway skip "iht requires browser OIDC/PKCE verification with a real member; see docs/install.md"
+    return 0
+  fi
   rm -rf "${T25_WORK:-/nonexistent}"
   [ "$T25_DONE" = true ] || T25_BAD="$T25_BAD no-app-on-the-air(test-16-failed-before-it)"
   [ "$T25_DONE" != true ] || [ "$T25_REVOKED" = true ] || T25_BAD="$T25_BAD revocation-not-checked(test-16-redeploy-failed)"
@@ -537,6 +546,7 @@ else
   svcs="portainer glances filebrowser"; wetty_running && svcs="$svcs wetty"
   for s in $svcs; do h="$(container_health "$s")"; [ "$h" = healthy ] || bad="$bad $s=$h"; done
   for sub in $OPS_HOSTS; do
+    [ "${IHT_ENABLED:-false}" != true ] || continue
     case "$sub" in terminal|files) ;; *) continue ;; esac
     out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD --target "$SCHEME_URL://$sub.$BASE_DOMAIN" --expect denied 2>/dev/null | tail -n 1 || true)"
     case "$out" in *PASS*) ;; *) bad="$bad $sub:smoke-user-not-denied(${out:-no output})" ;; esac
@@ -548,7 +558,8 @@ else
   dc config --format json 2>/dev/null | $PY "$IHC_LIB/opspaths.py" compose "$INSTALL_DIR" "$BACKUP_DESTINATION" "${WETTY_KEY_DIR:-$INSTALL_DIR/local/wetty}" 2>"${TMPDIR:-/tmp}/ihc-opspaths.$$" \
     || bad="$bad mounts:$(head -n 2 "${TMPDIR:-/tmp}/ihc-opspaths.$$" | tr '\n' ' ')"
   rm -f "${TMPDIR:-/tmp}/ihc-opspaths.$$"
-  [ -z "$bad" ] && result 18 ops-admins-only pass "$(echo $svcs | wc -w | tr -d ' ') containers healthy; $AUTHENTIK_SMOKE_USER denied$(wetty_running && echo ' terminal and') files; unreachable from apps; mounts: app data + reports (ro)" \
+  [ "${IHT_ENABLED:-false}" != true ] || warn "ops member login denial requires a real iht login; only container/network/mount checks ran"
+  [ -z "$bad" ] && result 18 ops-admins-only pass "$(echo $svcs | wc -w | tr -d ' ') containers healthy; member denial $([ "${IHT_ENABLED:-false}" = true ] && echo 'requires real iht (not checked)' || echo 'verified'); unreachable from apps; mounts: app data + reports (ro)" \
     || result 18 ops-admins-only fail "${bad# }"
 fi
 
@@ -810,9 +821,14 @@ t23
 #     groups on the Authentik API and is refused creating a group (403).
 t24() {
   local bad="" good="" out code body tok
-  out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD \
-    --target "$PORTAL_BASE_URL" --expect allowed --probe /api/apps-status=200 --probe /api/people=403 --probe /api/platform/status=403 2>/dev/null | tail -n 1 || true)"
-  case "$out" in *PASS*) good="$AUTHENTIK_SMOKE_USER signs in: catalog 200, people 403, platform status 403" ;; *) bad="$bad smoke-user(${out:-no output})" ;; esac
+  if [ "${IHT_ENABLED:-false}" != true ]; then
+    out="$("$IHC_ROOT/scripts/sso-login-check.sh" --install-dir "$INSTALL_DIR" --user "$AUTHENTIK_SMOKE_USER" --password-env AUTHENTIK_SMOKE_USER_PASSWORD \
+      --target "$PORTAL_BASE_URL" --expect allowed --probe /api/apps-status=200 --probe /api/people=403 --probe /api/platform/status=403 2>/dev/null | tail -n 1 || true)"
+    case "$out" in *PASS*) good="$AUTHENTIK_SMOKE_USER signs in: catalog 200, people 403, platform status 403" ;; *) bad="$bad smoke-user(${out:-no output})" ;; esac
+  else
+    warn "portal member authorization requires a real iht login; directory/API permission checks still run"
+    good="member login not checked (iht)"
+  fi
   for what in people groups; do
     out="$(portal_as proxy "/api/$what?refresh=1")"; code="${out##*$'\n'}"; body="${out%$'\n'*}"
     out="$(printf '%s' "$body" | $PY -c 'import json,sys

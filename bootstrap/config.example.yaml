@@ -1,7 +1,8 @@
 # InHouseCloud: installer input for `install.sh --non-interactive --config <file>`.
 # Every value here is a default or a placeholder. Secrets are never written in this file:
 # the *_env keys name the environment variable the installer reads them from, and the
-# installer generates any that are missing into .env (mode 0600).
+# installer generates missing platform credentials into .env (mode 0600). External
+# iht client credentials must be supplied by the owner, never generated.
 schema_version: 1
 
 install:
@@ -45,6 +46,10 @@ authentik:
   bootstrap_token_env: IHC_AUTHENTIK_BOOTSTRAP_TOKEN
   portal_group: ihc-admins
   app_group: ihc-users
+  iht:                           # optional: docs/install.md, "Sign in with inhouse.technology"
+    issuer: https://inhouse.technology
+    client_id: ""                # empty: keep the existing local login
+    client_secret_env: IHC_IHT_CLIENT_SECRET # supplied by the owner; never generated
 
 gitea:
   base_url: http://git.cloud.localhost

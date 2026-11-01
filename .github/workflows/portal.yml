@@ -65,3 +65,6 @@ jobs:
       - name: app trust boundary lint and doctor warnings
         working-directory: .
         run: scripts/tests/ihc-app-lint.sh
+      - name: optional iht source (offline config, blueprint and stubbed Authentik)
+        working-directory: .
+        run: scripts/tests/iht-sso.sh

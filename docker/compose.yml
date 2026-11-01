@@ -92,6 +92,11 @@ services:
       authentik-postgres:
         condition: service_healthy
     environment:
+      IHT_CLIENT_ID: ${IHT_CLIENT_ID:-}
+      IHT_CLIENT_SECRET: ${IHT_CLIENT_SECRET:-}
+      IHT_DISCOVERY_URL: ${IHT_DISCOVERY_URL:-}
+      IHT_ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
+      IHT_USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
       AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
@@ -109,6 +114,7 @@ services:
     volumes:
       - authentik-media:/media
       - authentik-templates:/templates
+      - ./authentik/blueprints:/blueprints/custom:ro
     networks: [ihc]
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
@@ -126,6 +132,11 @@ services:
       authentik-postgres:
         condition: service_healthy
     environment:
+      IHT_CLIENT_ID: ${IHT_CLIENT_ID:-}
+      IHT_CLIENT_SECRET: ${IHT_CLIENT_SECRET:-}
+      IHT_DISCOVERY_URL: ${IHT_DISCOVERY_URL:-}
+      IHT_ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
+      IHT_USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
       AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
@@ -140,6 +151,7 @@ services:
     volumes:
       - authentik-media:/media
       - authentik-templates:/templates
+      - ./authentik/blueprints:/blueprints/custom:ro
       - authentik-certs:/certs
     networks: [ihc]
     healthcheck:
@@ -395,6 +407,8 @@ services:
     command: ["python3", "-I", "/app/docker-ro-proxy.py"]
     restart: unless-stopped
     logging: *default-logging
+    # Required on rootful hosts with cap_drop ALL and a group-owned Docker socket.
+    group_add: ["${DOCKER_SOCKET_GID:-0}"]
     environment:
       IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
       AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}

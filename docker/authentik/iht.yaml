@@ -1,0 +1,138 @@
+version: 1
+metadata:
+  name: InHouseCloud - inhouse.technology
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+entries:
+  - model: authentik_sources_oauth.oauthsourcepropertymapping
+    id: claims
+    identifiers:
+      name: ihc-iht-claims
+    attrs:
+      expression: |
+        # OAuthSource validates the OIDC response; never use email as an identifier.
+        import os
+        sub = info.get("sub")
+        if not isinstance(sub, str) or not sub:
+            raise ValueError("iht requires a nonempty sub")
+        roles = info.get("groups", [])
+        if not isinstance(roles, list):
+            raise ValueError("iht groups must be a list")
+        groups = []
+        if "admin" in roles:
+            groups.append(os.environ["IHT_ADMIN_GROUP"])
+        # Admins also need ordinary app access (Gitea and the MCP gateway).
+        if "member" in roles or "admin" in roles:
+            groups.append(os.environ["IHT_USER_GROUP"])
+        # Source mappings merge lists into the OIDC type's base properties.
+        # Remove its raw role names before merging our explicit ihc groups.
+        properties["groups"] = []
+        return {
+            "username": "iht-" + sub,
+            "email": info.get("email", ""),
+            "name": info.get("name", ""),
+            "groups": groups,
+        }
+  - model: authentik_flows.flow
+    id: enrollment
+    identifiers:
+      slug: ihc-iht-enrollment
+    attrs:
+      name: inhouse.technology enrollment
+      title: Sign in with inhouse.technology
+      designation: enrollment
+      authentication: require_unauthenticated
+  - model: authentik_stages_user_write.userwritestage
+    id: write
+    identifiers:
+      name: ihc-iht-user-write
+    attrs:
+      user_creation_mode: always_create
+      create_users_as_inactive: false
+  - model: authentik_stages_user_login.userloginstage
+    id: login
+    identifiers:
+      name: ihc-iht-user-login
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrollment
+      stage: !KeyOf write
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrollment
+      stage: !KeyOf login
+      order: 20
+  - model: authentik_sources_oauth.oauthsource
+    id: iht
+    identifiers:
+      slug: inhouse-technology
+    attrs:
+      name: inhouse.technology
+      enabled: true
+      provider_type: openidconnect
+      oidc_well_known_url: !Env IHT_DISCOVERY_URL
+      consumer_key: !Env IHT_CLIENT_ID
+      consumer_secret: !Env IHT_CLIENT_SECRET
+      additional_scopes: openid email profile
+      user_matching_mode: identifier
+      # the iht requires PKCE (S256) on every authorization
+      pkce: S256
+      # the groups claim names the ihc's existing groups (ihc-admins, ihc-users): link to them by name,
+      # never create look-alike groups owned by the source
+      group_matching_mode: name_link
+      user_path_template: goauthentik.io/sources/inhouse-technology
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+      enrollment_flow: !KeyOf enrollment
+      user_property_mappings:
+        - !KeyOf claims
+
+  # Separate password flow: the usual identification stage is reconciled to the
+  # source only by first-run. No local user other than akadmin can finish recovery.
+  - model: authentik_flows.flow
+    id: recovery
+    identifiers:
+      slug: ihc-local-recovery
+    attrs:
+      name: InHouseCloud bootstrap recovery
+      title: Bootstrap administrator recovery
+      designation: authentication
+      authentication: require_unauthenticated
+  - model: authentik_stages_identification.identificationstage
+    id: recovery-identification
+    identifiers:
+      name: ihc-local-recovery-identification
+    attrs:
+      user_fields: [username]
+      sources: []
+      password_stage: !Find [authentik_stages_password.passwordstage, [name, default-authentication-password]]
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf recovery-identification
+      order: 10
+  - model: authentik_policies_expression.expressionpolicy
+    id: recovery-policy
+    identifiers:
+      name: ihc-local-recovery-akadmin-only
+    attrs:
+      expression: |
+        user = request.context.get("pending_user")
+        return user is not None and user.username == "akadmin" and user.is_active
+  - model: authentik_flows.flowstagebinding
+    id: recovery-login
+    identifiers:
+      target: !KeyOf recovery
+      stage: !KeyOf login
+      order: 20
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf recovery-login
+      policy: !KeyOf recovery-policy
+      order: 0
+    attrs:
+      enabled: true
+      failure_result: false

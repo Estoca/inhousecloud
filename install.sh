@@ -29,6 +29,7 @@ IHC_ROOT="$(cd "$(dirname "$0")" && pwd)"
 . "$IHC_ROOT/scripts/lib/garage.sh"
 # shellcheck source=scripts/lib/tls.sh
 . "$IHC_ROOT/scripts/lib/tls.sh"
+. "$IHC_ROOT/scripts/lib/iht.sh"
 
 DEFAULT_INSTALL_DIR="/opt/inhousecloud"
 MODE=""              # plan | apply
@@ -776,6 +777,9 @@ stage_plan() {
   log "portal            : $PORTAL_BASE_URL (forward auth; built from $IHC_ROOT/portal, migrations at boot; reads catalog/inventory.json, the backup reports and Docker through docker-ro, all read only)"
   log "mcp gateway       : $MCP_BASE_URL/mcp (same image as the portal; MCP clients sign in through Authentik, provider ihc-mcp, group ${CFG_authentik__app_group:-ihc-users})"
   log "authentik         : $AUTHENTIK_BASE_URL"
+  if [ -n "${CFG_authentik__iht__client_id:-}" ]; then
+    log "iht login         : requested (requires supplied/saved client secret); akadmin recovery at /if/flow/ihc-local-recovery/"
+  fi
   log "gitea             : $GITEA_BASE_URL (ssh $GITEA_HOST:2222)"
   log "files             : $ENV_FILE (0600), $INSTALL_DIR/compose.yml, ${REAL_STATE_FILE:-$STATE_FILE}, $CONFIG_FILE"
   log "volumes           : named volumes of project $( [ -f "$ENV_FILE" ] && env_get COMPOSE_PROJECT_NAME || echo ihc), network ihc"
@@ -854,6 +858,7 @@ stage_secrets() {
   env_secret AUTHENTIK_BOOTSTRAP_TOKEN "${CFG_authentik__bootstrap_token_env:-IHC_AUTHENTIK_BOOTSTRAP_TOKEN}" 60
   env_default AUTHENTIK_PORTAL_GROUP "${CFG_authentik__portal_group:-ihc-admins}"
   env_default AUTHENTIK_APP_GROUP "${CFG_authentik__app_group:-ihc-users}"
+  iht_configure
   env_default AUTHENTIK_OUTPOST_ID ""; env_default AUTHENTIK_PORTAL_TOKEN ""
   env_default GITEA_ADMIN_USERNAME "${CFG_gitea__initial_admin_username:-admin}"
   env_secret GITEA_ADMIN_PASSWORD "${CFG_gitea__initial_admin_password_env:-IHC_GITEA_ADMIN_PASSWORD}" 24
@@ -948,6 +953,19 @@ detect_docker_socket() {
   [ "$(uname -s)" = Darwin ] && { printf '/var/run/docker.sock'; return; }
   [ -z "$h" ] && h="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
   case "$h" in unix://*) printf '%s' "${h#unix://}" ;; *) printf '/var/run/docker.sock' ;; esac
+}
+
+# docker-ro drops all capabilities, including DAC_OVERRIDE. On rootful Linux it
+# therefore needs the socket's group even though it runs as container root.
+# Docker Desktop's daemon-side socket belongs to root, not the Mac socket group.
+detect_docker_socket_gid() {
+  [ "$(uname -s)" = Darwin ] && { printf '0'; return; }
+  # Rootless container root already owns its daemon's socket. Host group IDs
+  # need not exist in that container's subordinate GID mapping.
+  if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    printf '0'; return
+  fi
+  $PY -c 'import os,sys; print(os.stat(sys.argv[1]).st_gid)' "$(env_get DOCKER_SOCKET)"
 }
 
 # render_runner_configs: <install-dir>/runner/ci.yaml and deploy.yaml for the two
@@ -1059,6 +1077,11 @@ copy_portal() {
 }
 
 stage_foundation() {
+  local socket_gid
+  iht_configure
+  render_iht_blueprint
+  socket_gid="$(detect_docker_socket_gid)" || { fail "cannot read the Docker socket group"; return 1; }
+  env_set DOCKER_SOCKET_GID "$socket_gid"
   cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   copy_portal || { fail "could not copy $IHC_ROOT/portal into $INSTALL_DIR/portal"; return 1; }
   # Set here, not with the other values: updating the cloud is `--apply --from foundation`,

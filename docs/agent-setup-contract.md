@@ -35,6 +35,16 @@ Ask once, all together, offering the defaults from [`bootstrap/config.example.ya
 6. optional profiles: object storage (`storage`), admin tools: Portainer, Glances, a web terminal and a file browser (`ops`; ask whether the web terminal may sign in as the installing user, `ops.wetty.install_key`);
 7. for `private` or `public`: the name of the environment variable that holds the tunnel token (they export it; you never see it).
 
+For a company already using inhouse.technology, also accept the optional
+`authentik.iht.issuer`, `authentik.iht.client_id` and
+`authentik.iht.client_secret_env` (default `IHC_IHT_CLIENT_SECRET`). The owner creates
+the client and opens its single-use secret link themselves, then exports the value
+on the box or uses the installer's hidden terminal prompt. Never ask them to paste
+it in chat. Unlike generated platform passwords, this external secret must be
+supplied. Without a client id, login stays unchanged. See
+[Sign in with inhouse.technology](install.md#sign-in-with-inhousetechnology), including
+identifier-only linking, the `akadmin` recovery URL and required real-provider tests.
+
 Then show `./install.sh --plan` and ask: "apply this plan?". That yes covers starting the services.
 
 ## Install: what never to ask
