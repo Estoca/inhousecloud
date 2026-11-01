@@ -805,7 +805,11 @@ env_default() {
   [ -n "$cur" ] || env_set "$1" "$2"
 }
 # env_secret KEY ENVNAME LENGTH: take the value from $ENVNAME when set, else generate.
+# SECRET_FPS is started by stage_secrets; a later stage that adds a key to an .env from before
+# it (stage_portal and the audit role) runs without that stage on `--apply --from foundation`,
+# so the list may not exist yet (set -u).
 env_secret() {
+  SECRET_FPS="${SECRET_FPS:-}"
   local cur v; cur="$(env_get "$1")"
   if [ -z "$cur" ]; then
     eval "v=\${${2:-_}:-}"
