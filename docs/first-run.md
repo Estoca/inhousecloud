@@ -850,3 +850,58 @@ The same day, the same cloud and person, a second Codex session on a laptop wher
 What the doc should tell a person without Docker, now in [`gitops-flow.md`](gitops-flow.md#no-docker-on-the-laptop), section 5.1 of `llm-bootstrap.md` and `AGENTS.md`: Docker is not needed on the laptop; run the app as it was written and let the box build; keep the `Dockerfile` plain because the first deploy is its first build; a failed build fails the run, not the app already on the air (the job's `docker compose up -d --build` builds before it replaces the container: read from the workflow, not tried here, since this session's permission mode refused the test push of a broken `Dockerfile`); and read the failed job's log with the person's token (`GET …/actions/runs/<run>/jobs`, then `…/actions/jobs/<job>/logs`: checked, 200 with the token of `first-user.md`).
 
 Not covered: a Codex session with approvals (`on-request`), which could have run `init` outside the sandbox on the person's yes; a broken `Dockerfile` pushed without Docker; Windows and Linux laptops; ingress other than `local`. The VM, the exports, the app folders and the temporary `CODEX_HOME` were deleted.
+
+## Gateway writes run (LAB-64, 2026-11-01)
+
+The MCP gateway's writes: `confirmed_by`, the append-only audit log `deploy_platform.mcp_audit_log` written with the gateway's own Postgres role `ihc_mcp_audit` (made by `install.sh`, stage `portal`), and smoke test 13 checking that role's grants. On the branch `lab-64-gateway-audit` (PR 41), from `b23e633`.
+
+**Setup.** A new Lima VM (Lima `template:docker`: Ubuntu 26.04.1 LTS, Docker 29.9.2 rootless, `git` 2.53, `python3` 3.14; 2 CPU, 4 GiB, 30 GiB, no mounts, no port forwards; `/opt` holding only `containerd`). The repository cloned from GitHub inside the VM and the branch checked out; `/opt/inhousecloud` made with the README's `sudo install -d`; `install.sh --non-interactive --config bootstrap/config.example.yaml` (core and backup, `local` ingress, TLS off).
+
+| Step | Result |
+|---|---|
+| VM created and started | 49 s |
+| `install.sh --non-interactive`, `state.json` created to completed | 303 s, exit 0, smoke tests **21 passed, 0 failed, 4 skipped** (storage, ops and agent profiles off) |
+| Stage `portal` | "MCP audit role ihc_mcp_audit: INSERT and SELECT on deploy_platform.mcp_audit_log only" |
+| Smoke test 13 | "ihc_platform and gitea exist, rolsuper=false; ihc_mcp_audit only inserts and reads the MCP audit log"; by hand the same query answers `f\|t\|t\|f\|f\|f` |
+| Smoke test 25 | as in "MCP gateway run" and its follow-up (the gateway lists, calls and refuses as before; reads unchanged) |
+| An app with a write tool: `ihc-app new prices`, the template's `server.js` plus `get_price` (`access: read`) and `set_price` (`access: write`, returns `{result, audit}`) and `mcp.tools` in the manifest, pushed | green 15 s after the push |
+| First `install.sh --apply --from foundation` (the upgrade path) on the installed box | **stopped at stage `portal` after 6 s: `install.sh: line 816: SECRET_FPS: unbound variable`**; fixed (below) |
+| After the fix, `--apply --from foundation` | 77 s, exit 0, smoke **21/0/4**; run again 80 s, exit 0, 21/0/4 |
+| What the two re-runs changed | nothing: `.env` 137 keys, every value's fingerprint the same; all containers kept their ids; `prices` 200; the audit log still had its rows; one role `ihc_mcp_audit`, grants INSERT and SELECT on the one table |
+| The real upgrade, before: `install.sh remove --dir --confirm ihc` (0 containers, 0 volumes left) | 32 s |
+| `main` (`2ce634e`) installed; app `legacy` by `ihc-app new --push`; no `MCP_AUDIT_*` in `.env`, no role, no table | 228 s, smoke **21/0/4** |
+| The branch, `install.sh --apply --from foundation` on that install | 104 s, exit 0, smoke **21/0/4**. `.env`: 135 keys to 137, the two added are `MCP_AUDIT_DB_ROLE` and `MCP_AUDIT_DB_PASSWORD`, every other value the same. Containers: `ihc-portal-1` and `ihc-mcp-1` recreated; the 11 others and `legacy-app-1` kept their ids; `legacy` 200 after. The role exists with the two grants, the table is there (0 rows), the role connects with the password from `.env`, `ihc doctor` 16 checks ok in 3 s, the gateway's `/health` ok |
+
+**By hand: writes through the gateway.** With the OAuth sign-in of `scripts/sso-login-check.sh --oauth-token` for the smoke user (in `ihc-users`) and for `akadmin`, and plain JSON-RPC to `http://mcp.cloud.localhost/mcp` (`tools/list` and `tools/call`), on the first install:
+
+| Call | Result |
+|---|---|
+| `tools/list` as the smoke user | `prices__set_price` with `readOnlyHint: false` and `confirmed_by` required in its schema; `prices__get_price`, `prices__ping` and `ihc_list_apps` read only |
+| `prices__get_price` | `price: null`, not an error |
+| `prices__set_price` without `confirmed_by` | error result "this tool writes: pass confirmed_by with the email of the person who approved this call (ask them first)"; the app was not called |
+| `prices__set_price` with `confirmed_by` `nobody@example.com` | error result "… is nobody in the company directory: use the approver's company email" |
+| `prices__get_price` again | still `null`: neither refused write reached the app |
+| `prices__set_price` 12, then 15, `confirmed_by` by email and by username | both `ok`; the app got the approver in the actor JWT (`approved_by` came back); `get_price` 15 |
+| `ihc_audit_log` as the smoke user | "access denied: ihc_audit_log is for the admin group only" |
+| `ihc_audit_log` as `akadmin` | 4 rows, newest first: two `ok`, two `refused` |
+| The table (as superuser) | 2 `refused` rows (`confirmation_required`, `confirmed_by_unknown`, the second with `confirmed_by_input` `nobody@example.com` and no `confirmed_by`); per accepted write a `requested` and a `completed` row; the second `completed` with `previous_value {"price": 12}`, `new_value {"price": 15}`, `target sku A1` |
+| `REVOKE INSERT` from `ihc_mcp_audit`, then a write | error result "prices__set_price was not called: the gateway could not write its audit log, and no write happens without it"; gateway log `mcp audit: insert failed: permission denied` and `refused audit_unavailable`; the price stayed 15; a read in the same minute worked. The first `--apply --from foundation` after the fix put `INSERT` back |
+
+**By hand: the role.** Connected as `ihc_mcp_audit` over TCP with the password from `.env` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`, can log in):
+
+| Statement | Result |
+|---|---|
+| `SELECT` on the audit log | 6 rows |
+| `INSERT` one row | `INSERT 0 1` (the row `manual-test`, `manual__probe`, stays: the table is append-only) |
+| `UPDATE`, `DELETE`, `TRUNCATE` | `permission denied for table mcp_audit_log` |
+| `DROP TRIGGER mcp_audit_log_no_change` | `must be owner of relation mcp_audit_log` |
+| `SELECT` on `deploy_platform.deploy_events` | `permission denied` |
+| `CREATE TABLE deploy_platform.x` | `permission denied for schema deploy_platform` |
+| `information_schema.role_table_grants` for the role | `INSERT` and `SELECT` on `mcp_audit_log`, no other table |
+| As the Postgres superuser: `UPDATE`, `DELETE`, `TRUNCATE` | `deploy_platform.mcp_audit_log is append-only: UPDATE is refused` (and the same for `DELETE` and `TRUNCATE`): the triggers hold for every role, the superuser included, until one is dropped |
+
+No value of the audit role's password is in the install, upgrade or remove logs, `state.json` or `inventory.json`; `.env` is 0600.
+
+**Found and fixed.** `stage_portal` adds `MCP_AUDIT_DB_PASSWORD` to an `.env` from before the audit role with `env_secret`, which appends a fingerprint to `SECRET_FPS`. That variable is started by `stage_secrets`, which does not run on `install.sh --apply --from foundation`, and `install.sh` runs under `set -u`: the portal stage stopped with `SECRET_FPS: unbound variable`, so the upgrade path of every existing install failed, while a fresh install passed (the first run above). `env_secret` now starts the list when it is unset. `scripts/tests/install-env-secret.sh` (CI, `portal.yml`) takes `env_default` and `env_secret` out of `install.sh` and runs them under `set -eu` with the variable unset: it fails without the change (first run exit 1, `unbound variable`) and passes with it. The two re-runs and the upgrade from `main` above are with the fix (`1f41ee7`).
+
+**Not exercised.** A real client signing in through a browser (the token came from `sso-login-check.sh`, the same requests), a second person as `confirmed_by` (the approver was the smoke user, who is also the caller; the directory check is the same, and `nobody@example.com` was the negative case), a deactivated approver and one outside `ihc-users` (unit-tested in `portal/test/mcp-writes.test.js`), `GET /api/mcp/audit` over HTTP, a restore of the audit table from a backup, ingress other than `local`, `ops`, `storage` and `agent` profiles, macOS with Docker Desktop. The template has no write tool of its own (`prices` added one for the test); `ihc-app wait SLUG` reads `company-app.yaml` of the current folder and says "cannot read" when run from elsewhere (not changed here). The VM was deleted.
