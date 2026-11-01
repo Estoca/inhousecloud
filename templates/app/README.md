@@ -18,11 +18,10 @@ Never add `postgres`, `redis` or object storage services, the Docker socket or h
 Commit and push to `main`. That is the whole deploy. The workflow in `.gitea/workflows/deploy.yml` runs on the box:
 
 1. checks out the commit;
-2. `ihc-app provision __APP_SLUG__` validates `company-app.yaml` and the compose file, then makes sure of the app's database and role on the shared Postgres, its Redis user and `__APP_SLUG__:` key prefix, its env file, the route `__APP_DOMAIN__` and the SSO application;
-3. builds and starts the app on the ihc network;
-4. waits for `/health` through the proxy.
+2. `ihc-app build __APP_SLUG__` builds a release from the committed files (an untracked file is not in it) and tags its images; nothing running changes;
+3. `ihc-app apply __APP_SLUG__`, only for the head of `main`, one at a time: records in the deploy journal what it will change, validates `company-app.yaml` and the compose file, makes sure of the app's database and role on the shared Postgres, its Redis user and `__APP_SLUG__:` key prefix, its env file, the route `__APP_DOMAIN__` and the SSO application, starts the release on the ihc network and waits for `/health` through the proxy.
 
-Check it: the run is green in the repository's Actions tab, `curl http://__APP_DOMAIN__/health` answers 200, and `/` sends an anonymous visitor to the sign-in. When a run fails, its log says what to change; the cloud's `docs/llm-bootstrap.md`, section 4, lists the usual causes.
+Check it: the run is green in the repository's Actions tab, `curl http://__APP_DOMAIN__/health` answers 200, and `/` sends an anonymous visitor to the sign-in. When a run fails, its log says what to change; the cloud's `docs/llm-bootstrap.md`, section 4, lists the usual causes. A release that went out broken is undone on the box with `ihc-app rollback __APP_SLUG__` (back to the previous release); then fix or revert the commit on `main`, since the next push deploys again.
 
 ## Tools for AI agents (MCP)
 

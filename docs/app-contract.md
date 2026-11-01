@@ -196,7 +196,7 @@ The template's routes already do the rest: the tool list sends each tool's `acce
 
 ## Required Rules
 
-Checked by `ihc-app provision`, each failure with the fix in the message:
+Checked by `ihc-app provision` (and `ihc-app build` where said), each failure with the fix in the message:
 
 - `schema_version` is `1`.
 - `app.slug` has 3 to 32 lowercase letters, digits and hyphens, is not a name the platform uses, and equals the repository name.
@@ -208,6 +208,8 @@ Checked by `ihc-app provision`, each failure with the fix in the message:
 - `mcp`, when present, follows [MCP](#mcp): audience and scopes start with the slug, the paths are paths with `{tool}` in `execute_path`, every scope is granted to a group.
 - **No local infrastructure**: no compose service runs Postgres, Redis or an S3 server (by image or by name), and the manifest declares no local one. Use `database`, `dependencies.redis` and `object_storage` instead.
 - No host networking, no privileged mode, no mounted Docker socket.
+- **The build reads only the repository** (checked by `ihc-app build`, which builds from the files of the commit, never the rest of the workspace): no `build.secrets`, `build.ssh`, `build.entitlements` or privileged build, no `build.network` other than the default, and `build.context`, `build.dockerfile` and `build.additional_contexts` inside the repository. A dependency the build needs is fetched over the network in the Dockerfile; a secret the app needs at run time goes in the app's env file, never in the image.
+- Every file the compose file refers to is committed: the deploy runs from the commit's files (`git archive`), so an untracked file next to the compose file on someone's laptop is not there.
 
 By convention, not checked: `.env.example` exists and holds no real secret.
 

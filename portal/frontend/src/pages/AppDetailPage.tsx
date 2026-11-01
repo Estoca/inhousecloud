@@ -4,7 +4,9 @@ import {
   AppDeploys,
   AppStatus,
   AppStatusMetrics,
+  DeployJournal,
   DockerContainer,
+  getAppDeployJournal,
   getAppDeploys,
   getAppStatusMetrics,
   getDockerContainers,
@@ -52,6 +54,8 @@ export function AppDetailPage({
   const [deploys, setDeploys] = useState<AppDeploys | null>(null);
   const [deploysLoading, setDeploysLoading] = useState(false);
   const [deploysError, setDeploysError] = useState<string | null>(null);
+  const [journal, setJournal] = useState<DeployJournal | null>(null);
+  const [journalError, setJournalError] = useState<string | null>(null);
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const metadata = useAppMetadata({
     onSaved: async () => {
@@ -86,6 +90,17 @@ export function AppDetailPage({
     }
   }
 
+  // Journal de deploys (admin): o que cada apply e rollback mudou, escrito pelo ihc-app.
+  async function loadJournal() {
+    setJournalError(null);
+    try {
+      setJournal(await getAppDeployJournal(app.slug));
+    } catch (loadError) {
+      setJournal(null);
+      setJournalError(errorMessage(loadError));
+    }
+  }
+
   // Lista de containers so para sugerir alvo e stack na edicao da metadata.
   async function loadContainers() {
     try {
@@ -100,6 +115,7 @@ export function AppDetailPage({
     void loadMetrics();
     void loadDeploys();
     if (canManage) void loadContainers();
+    if (canManage) void loadJournal();
   }, [app.slug]);
 
   function changeMetricsWindow(hours: 24 | 168) {
@@ -134,6 +150,7 @@ export function AppDetailPage({
             onClick={() => {
               void loadMetrics();
               void loadDeploys();
+              void loadJournal();
             }}
             loading={metricsLoading || deploysLoading}
           />
@@ -419,6 +436,68 @@ export function AppDetailPage({
           )}
         </CardContent>
       </Card>
+
+      {canManage ? (
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Journal de deploys</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              O que cada apply e rollback mudou (release, commit, chaves do env), gravado antes de mudar.
+              {journal?.undo?.available
+                ? ` Rollback agora voltaria para ${journal.undo.to_release} (commit ${(journal.undo.to_commit || '').slice(0, 12)}): ihc-app rollback ${app.slug} no box.`
+                : journal?.exists ? ' Sem versao anterior no journal para um rollback.' : ''}
+            </p>
+          </CardHeader>
+          <CardContent className="p-0">
+            {journalError ? (
+              <div className="p-8 text-center text-sm text-destructive">Erro ao carregar o journal: {journalError}</div>
+            ) : !journal ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">Carregando...</div>
+            ) : !journal.transactions.length ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">
+                Nenhum deploy no journal. Apps com o workflow antigo (provision, compose up, wait) nao gravam: copie o deploy.yml do template.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-muted/40 text-left text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Quando</th>
+                      <th className="px-4 py-3 font-medium">Operacao</th>
+                      <th className="px-4 py-3 font-medium">Resultado</th>
+                      <th className="px-4 py-3 font-medium">Release</th>
+                      <th className="px-4 py-3 font-medium">Antes</th>
+                      <th className="px-4 py-3 font-medium">Env</th>
+                      <th className="px-4 py-3 font-medium">Quem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {journal.transactions.map((tx) => (
+                      <tr key={tx.tx} className="border-b last:border-0 hover:bg-muted/30">
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(tx.started_at)}</td>
+                        <td className="px-4 py-3 text-xs">{tx.op === 'rollback' ? `rollback de ${tx.reverts || '-'}` : tx.op || '-'}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={tx.result === 'ok' ? 'success' : tx.result === 'interrupted' ? 'warning' : 'destructive'}>{tx.result}</Badge>
+                          {tx.end_error || tx.end_health ? <div className="mt-1 max-w-[260px] truncate text-xs text-muted-foreground">{tx.end_error || tx.end_health}</div> : null}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-mono text-xs">{(tx.after?.commit || '').slice(0, 12) || '-'}</div>
+                          <div className="text-xs text-muted-foreground">{tx.after?.release || '-'}</div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{tx.before?.release || '(nenhuma)'}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                          {[...(tx.env?.env_keys_added ?? []).map((k) => `+${k}`), ...(tx.env?.env_keys_removed ?? []).map((k) => `-${k}`), ...(tx.env?.env_keys_changed ?? []).map((k) => `~${k}`)].join(' ') || '-'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{tx.actor || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader className="border-b">

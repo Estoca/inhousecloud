@@ -11,16 +11,19 @@ flowchart LR
   Rules[Live cloud rules] --> Agent
 
   AppRepo -->|push to main = approval| Actions[Gitea Actions<br/>deploy runner on the box]
-  Actions --> Provision[ihc-app provision]
+  Actions --> Build[ihc-app build<br/>release: commit files + images]
+  Build --> Apply[ihc-app apply<br/>lock, head of main, journal]
+  Apply --> Provision[ihc-app provision]
   Provision --> Services[Shared Postgres, Redis, Garage S3<br/>own database, role, prefix, bucket]
   Provision --> Proxy[Proxy host + forward auth]
   Provision --> Auth[Authentik provider + application]
   Provision --> Inventory[inventory.json]
-  Actions --> Docker[docker compose up<br/>on the ihc network]
+  Apply --> Docker[start the release's images<br/>on the ihc network]
   Docker --> Health[healthcheck through the proxy]
-  Health --> Actions
+  Health --> Journal[deploy journal]
+  Journal --> Actions
 
-  Actions --> Portal[Portal, read-only:<br/>runs, health, inventory]
+  Actions --> Portal[Portal, read-only:<br/>runs, journal, health, inventory]
   Portal --> Human
   Portal --> Agent
 ```
@@ -71,8 +74,8 @@ One path, from the first deploy to the hundredth:
 1. `scripts/ihc-app.sh new <slug>` creates the app from `templates/app` and its private repository in the Gitea organization.
 2. A developer or a coding agent builds the app inside that contract ([`app-contract.md`](app-contract.md)).
 3. A push to `main` is the approval. Who may push to `main` is set in Gitea: organization membership, team permissions, branch protection.
-4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, runs `ihc-app provision <slug>` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), builds and starts the app on the ihc network, and waits for its healthcheck through the proxy.
-5. The run log in Gitea is the record; the portal reads it.
+4. The deploy workflow runs on the box, on the deploy runner: it checks out the commit, builds a release with `ihc-app build <slug>` (the commit's files and images, without the cloud's credentials), and `ihc-app apply <slug>` puts it on the air under the app's lock, only when the commit is the head of `main`: it journals what it will change, runs `provision` (database and role on the shared Postgres, Redis ACL user and prefix, optional bucket, the app's env file, the proxy route with forward auth, the Authentik application, the inventory record), starts the release's images on the ihc network, and waits for its healthcheck through the proxy.
+5. The run log in Gitea and the deploy journal on the box are the record; the portal reads both. A bad release is undone with `ihc-app rollback <slug>` on the box.
 
 Nobody else acts between the push and the app on the air: the run log is the record and the push is the approval ([`gitops-flow.md`](gitops-flow.md)).
 

@@ -38,6 +38,7 @@ import { createAuthentikDirectory } from './authentik-directory.js';
 import { attachPeopleRoutes } from './people-routes.js';
 import { createAuditLog } from './mcp-audit.js';
 import { getPool } from './db.js';
+import { readDeployJournal } from './deploy-journal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, '..', 'dist');
@@ -103,6 +104,7 @@ export function createApp({
   auth = createAuth(),
   authentikDirectory = createAuthentikDirectory(),
   mcpAuditLog = null,
+  readDeployJournalFn = readDeployJournal,
 } = {}) {
   const app = express();
 
@@ -293,6 +295,26 @@ export function createApp({
       available: result.available,
       error: result.error,
       latest_deploy: result.latest,
+    });
+  });
+
+  // Journal de deploys do app (src/deploy-journal.js): o que cada apply e rollback mudou,
+  // escrito pelo ihc-app no catalog/ que o portal monta so leitura. Admin.
+  app.get('/api/apps/:slug/deploy-journal', auth.requireAdmin, (req, res) => {
+    const result = readDeployJournalFn(req.params.slug, { limit: req.query.limit });
+    if (result.error === 'invalid_slug') {
+      res.status(400).json({ error: 'invalid_slug' });
+      return;
+    }
+    res.status(result.available ? 200 : 503).json({
+      app_slug: req.params.slug,
+      available: result.available,
+      error: result.error,
+      exists: result.exists,
+      total: result.total ?? 0,
+      count: result.transactions.length,
+      transactions: result.transactions,
+      undo: result.undo,
     });
   });
 
