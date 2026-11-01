@@ -955,6 +955,19 @@ detect_docker_socket() {
   case "$h" in unix://*) printf '%s' "${h#unix://}" ;; *) printf '/var/run/docker.sock' ;; esac
 }
 
+# docker-ro drops all capabilities, including DAC_OVERRIDE. On rootful Linux it
+# therefore needs the socket's group even though it runs as container root.
+# Docker Desktop's daemon-side socket belongs to root, not the Mac socket group.
+detect_docker_socket_gid() {
+  [ "$(uname -s)" = Darwin ] && { printf '0'; return; }
+  # Rootless container root already owns its daemon's socket. Host group IDs
+  # need not exist in that container's subordinate GID mapping.
+  if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    printf '0'; return
+  fi
+  $PY -c 'import os,sys; print(os.stat(sys.argv[1]).st_gid)' "$(env_get DOCKER_SOCKET)"
+}
+
 # render_runner_configs: <install-dir>/runner/ci.yaml and deploy.yaml for the two
 # act_runner daemons of the ci profile (docs/gitops-flow.md, "The runners").
 render_runner_configs() {
@@ -1064,8 +1077,11 @@ copy_portal() {
 }
 
 stage_foundation() {
+  local socket_gid
   iht_configure
   render_iht_blueprint
+  socket_gid="$(detect_docker_socket_gid)" || { fail "cannot read the Docker socket group"; return 1; }
+  env_set DOCKER_SOCKET_GID "$socket_gid"
   cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   copy_portal || { fail "could not copy $IHC_ROOT/portal into $INSTALL_DIR/portal"; return 1; }
   # Set here, not with the other values: updating the cloud is `--apply --from foundation`,

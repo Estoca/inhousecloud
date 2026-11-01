@@ -327,7 +327,6 @@ t25_outsider() { # a user in no group: Authentik refuses the MCP client's sign-i
 t25_granted() { # APP
   if [ "${IHT_ENABLED:-false}" = true ]; then
     T25_DONE=true
-    result 25 mcp-gateway skip "iht requires browser OIDC/PKCE verification with a real member; see docs/install.md"
     return 0
   fi
   local app="$1" out code body iss
@@ -389,6 +388,7 @@ console.log(s.stale === false && typeof s.freshness === "string" && Number.isFin
   [ "$code" = 401 ] && T25_GOOD="$T25_GOOD; $app refuses a call without an actor JWT (401)" || T25_BAD="$T25_BAD app-without-jwt:$code"
 }
 t25_revoked() { # APP: its manifest now grants the scope to the admin group only
+  [ "${IHT_ENABLED:-false}" != true ] || return 0
   local app="$1" out body
   T25_REVOKED=true
   [ -n "${T25_CFG:-}" ] && [ -s "$T25_CFG" ] || { T25_BAD="$T25_BAD revoked:no-token"; return; }
@@ -400,6 +400,10 @@ t25_revoked() { # APP: its manifest now grants the scope to the admin group only
   else T25_BAD="$T25_BAD revoked-call:'$(printf '%.160s' "$body")'"; fi
 }
 t25_result() {
+  if [ "${IHT_ENABLED:-false}" = true ]; then
+    result 25 mcp-gateway skip "iht requires browser OIDC/PKCE verification with a real member; see docs/install.md"
+    return 0
+  fi
   rm -rf "${T25_WORK:-/nonexistent}"
   [ "$T25_DONE" = true ] || T25_BAD="$T25_BAD no-app-on-the-air(test-16-failed-before-it)"
   [ "$T25_DONE" != true ] || [ "$T25_REVOKED" = true ] || T25_BAD="$T25_BAD revocation-not-checked(test-16-redeploy-failed)"

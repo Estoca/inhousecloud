@@ -8,7 +8,7 @@ trap 'rm -rf "$WORK"' EXIT
 . "$ROOT/scripts/lib/common.sh"
 . "$ROOT/scripts/lib/sso.sh"
 . "$ROOT/scripts/lib/iht.sh"
-awk '/^env_default\(\) \{/,/^}/; /^env_secret\(\) \{/,/^}/' "$ROOT/install.sh" > "$WORK/env-fns.sh"
+awk '/^env_default\(\) \{/,/^}/; /^env_secret\(\) \{/,/^}/; /^detect_docker_socket_gid\(\)/,/^}/' "$ROOT/install.sh" > "$WORK/env-fns.sh"
 . "$WORK/env-fns.sh"
 INSTALL_DIR="$WORK/install"; mkdir -p "$INSTALL_DIR"
 ENV_FILE="$INSTALL_DIR/.env"; NON_INTERACTIVE=true
@@ -86,9 +86,15 @@ assert set(re.findall(r'!KeyOf ([\w-]+)', s)) <= ids
 expressions = re.findall(r'      expression: \|\n((?:        .*\n|\n)+)', s)
 assert len(expressions) == 2
 def expression(text, **env):
+    properties = env.setdefault('properties', {'groups': ['admin', 'member', 'unknown']})
     code = 'def evaluate():\n' + '\n'.join('    '+l[8:] for l in text.splitlines())
     exec(code, env)
-    return env['evaluate']()
+    value = env['evaluate']()
+    if isinstance(value, dict):
+        # Authentik merges list values with the base properties, rather than
+        # replacing them. Raw upstream roles must have been cleared first.
+        assert properties['groups'] == []
+    return value
 os.environ.update(IHT_ADMIN_GROUP='custom-admins', IHT_USER_GROUP='custom-users')
 info = dict(sub='person-123', email='same@example.com', name='Person', groups=['member'])
 mapped = expression(expressions[0], info=info)
@@ -157,4 +163,29 @@ if (
 ) >"$WORK/out" 2>&1; then echo '[xx] absent blueprint accepted'; exit 1; fi
 check test "$(wc -l < "$WORK/patches")" = "$before"
 if (IHT_CLIENT_SECRET=; ensure_iht_login) >"$WORK/out" 2>&1; then exit 1; fi
+
+# An iht skip covers the entire MCP smoke journey, including revocation and
+# aggregation. It must produce one skip, never a later revoked:no-token failure.
+awk '/^t25_granted\(\)/,/^}/; /^t25_revoked\(\)/,/^}/; /^t25_result\(\)/,/^}/' \
+  "$ROOT/scripts/smoke-tests.sh" > "$WORK/mcp-fns.sh"
+. "$WORK/mcp-fns.sh"
+T25_BAD=; T25_DONE=false
+result() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$WORK/results"; }
+t25_granted unused
+t25_revoked unused
+t25_result
+check test -z "$T25_BAD"
+check test "$(cat "$WORK/results")" = '25 mcp-gateway skip'
+
+# Rootful docker-ro needs the host socket group with capabilities dropped.
+# Exercise the real common.sh Python command (which includes -I) on any OS.
+touch "$WORK/docker.sock"
+env_set DOCKER_SOCKET "$WORK/docker.sock"
+gid="$(uname() { printf Linux; }; docker() { printf '[]'; }; detect_docker_socket_gid)"
+check test "$gid" = "$($PY -c 'import os,sys;print(os.stat(sys.argv[1]).st_gid)' "$WORK/docker.sock")"
+check test "$(uname() { printf Darwin; }; detect_docker_socket_gid)" = 0
+check test "$(uname() { printf Linux; }; docker() { printf '[name=rootless]'; }; detect_docker_socket_gid)" = 0
+if (uname() { printf Linux; }; docker() { printf '[]'; }; env_set DOCKER_SOCKET "$WORK/missing.sock"; detect_docker_socket_gid) >"$WORK/out" 2>&1; then
+  echo '[xx] missing Docker socket accepted'; exit 1
+fi
 echo 'iht-sso: all checks passed'

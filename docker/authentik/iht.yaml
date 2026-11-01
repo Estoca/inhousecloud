@@ -24,6 +24,9 @@ entries:
         # Admins also need ordinary app access (Gitea and the MCP gateway).
         if "member" in roles or "admin" in roles:
             groups.append(os.environ["IHT_USER_GROUP"])
+        # Source mappings merge lists into the OIDC type's base properties.
+        # Remove its raw role names before merging our explicit ihc groups.
+        properties["groups"] = []
         return {
             "username": "iht-" + sub,
             "email": info.get("email", ""),

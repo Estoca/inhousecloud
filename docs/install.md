@@ -151,6 +151,11 @@ so admins can also use ordinary apps, Git and the MCP gateway. Unknown role name
 grant no group. These are application admin rights; the mapping never sets
 Authentik's superuser flag. `company` is not used to choose a tenant or grant
 access: the iht client must already be scoped to the company by its owner.
+The mapping clears the OpenID source's base group list before returning ihc
+groups: Authentik merges lists, so otherwise raw `admin`/`member` groups would
+also be created. On each source login, the pinned Authentik version reconciles
+membership in groups connected to this source; promotion adds `ihc-admins` and
+demotion removes it while retaining `ihc-users`.
 
 **Recovery:** bookmark `https://<authentik host>/if/flow/ihc-local-recovery/`.
 It authenticates a local password but only `akadmin` can finish and receive a
@@ -161,7 +166,44 @@ iht. Do not use email matching to repair access. On an existing installation,
 after an approved plan, enable with `--apply --from foundation` so the new env,
 mount, blueprint and first-run reconciliation all run.
 
-#### Clean Lima VM verification (requires a real iht)
+#### Automated Lima SSO verification
+
+On a Mac with Lima and network access, run the opt-in integration test (it is not
+part of CI). It copies this checkout and a local iht source tree into a dedicated
+`ihc-sso-e2e` VM using `docker-rootful`, 4 CPUs, 6 GiB RAM and a 40 GiB disk:
+
+```bash
+scripts/tests/sso-iht-e2e.sh --iht-source /path/to/inhouse-technology
+```
+
+The source defaults to a sibling `inhouse-technology` directory. The harness uses
+throwaway credentials, seeds Acme and Other through iht's store, and starts a
+Google-shaped mock OIDC provider. It never calls a real identity provider or the
+production iht. It installs ihc with local ingress and drives Chromium inside the
+VM through the portal, Authentik, iht and mock provider. iht uses HTTPS on the VM's
+Docker bridge address with a temporary certificate trusted inside the VM and
+Authentik containers; Authentik's callback uses `auth.cloud.localhost`, which iht
+allows over HTTP for development. Production issuer validation remains HTTPS-only.
+Installation and operator smoke checks run as root inside this disposable VM,
+matching the rootful deploy runner's ownership of app artifacts. No host Docker
+context is selected or used.
+
+The final table checks owner/member groups, company isolation, distinct subjects
+sharing an email, role changes on later logins, administrator-only local recovery,
+and login after restarting Authentik and reapplying the mounted blueprint. Any
+failed check exits nonzero. The VM is deleted on success or failure. For diagnosis,
+`--keep-vm` keeps it and its `~/sso-e2e/logs`; `--reuse --keep-vm` reruns in a VM
+previously created by this harness. Delete it afterwards with
+`limactl delete --force ihc-sso-e2e`. Never use these options with valuable data.
+The account-recycling check first verifies iht refuses the lost membership, then
+explicitly admits the new identity as a fresh domain member through the store API
+and verifies Authentik creates a separate user for its distinct subject. A denied
+source login can auto-retry in Authentik's source-only flow; the test observes the
+real `access_denied` callback response and closes that page before asserting no
+session. A local non-admin's recovery policy skips the login stage and returns
+to normal login without a session. With `--keep-vm`, logs may require `sudo` to read.
+
+#### Additional release verification (requires a real iht)
 
 The offline test `scripts/tests/iht-sso.sh` checks config, secret handling,
 expressions, mounts and stubbed reconciliation. It does not import a blueprint

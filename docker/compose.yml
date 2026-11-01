@@ -407,6 +407,8 @@ services:
     command: ["python3", "-I", "/app/docker-ro-proxy.py"]
     restart: unless-stopped
     logging: *default-logging
+    # Required on rootful hosts with cap_drop ALL and a group-owned Docker socket.
+    group_add: ["${DOCKER_SOCKET_GID:-0}"]
     environment:
       IHC_PROJECT: ${COMPOSE_PROJECT_NAME:-ihc}
       AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
