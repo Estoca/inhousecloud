@@ -22,7 +22,10 @@ Derived from the internal portal of the reference installation.
   other agents, signed in through Authentik, with the platform's read-only tools and each
   app's tools routed with a short actor JWT. Modules: `src/mcp-gateway.js` (HTTP and
   JSON-RPC), `src/mcp-auth.js` (Authentik's access token), `src/mcp-providers.js` (apps'
-  providers, routing, fallback catalog), `src/mcp-platform-tools.js`, `src/jwt.js` (RS256).
+  providers, routing, fallback catalog), `src/mcp-platform-tools.js`, `src/jwt.js` (RS256),
+  `src/mcp-policy.js` (read or write, grants per tool, `confirmed_by` checked in the
+  directory) and `src/mcp-audit.js` (the append-only audit log of writes,
+  `deploy_platform.mcp_audit_log`, written by the gateway with its own role).
 
 ## Documents
 

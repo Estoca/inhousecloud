@@ -139,7 +139,12 @@ for pair in "$PORTAL_DB_ROLE" "$GITEA_DB_USER"; do
   row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d postgres -Atc "SELECT rolname, rolsuper FROM pg_roles WHERE rolname='$pair';" 2>/dev/null | tr -d '[:space:]')"
   [ "$row" = "$pair|f" ] || bad="$bad $pair='$row'"
 done
-[ -z "$bad" ] && result 13 db-roles-isolated pass "$PORTAL_DB_ROLE and $GITEA_DB_USER exist, rolsuper=false" || result 13 db-roles-isolated fail "unexpected:$bad"
+# The MCP gateway's audit role (install.sh ensure_mcp_audit_role): INSERT and SELECT on the
+# audit log, never UPDATE or DELETE there, nothing on the portal's other tables.
+audit_role="${MCP_AUDIT_DB_ROLE:-ihc_mcp_audit}"
+row="$(dc exec -T postgres psql -U "$POSTGRES_USER" -d "$PORTAL_DB_NAME" -Atc "SELECT r.rolsuper, has_table_privilege('$audit_role','deploy_platform.mcp_audit_log','INSERT'), has_table_privilege('$audit_role','deploy_platform.mcp_audit_log','SELECT'), has_table_privilege('$audit_role','deploy_platform.mcp_audit_log','UPDATE'), has_table_privilege('$audit_role','deploy_platform.mcp_audit_log','DELETE'), has_table_privilege('$audit_role','deploy_platform.deploy_events','SELECT') FROM pg_roles r WHERE r.rolname='$audit_role';" 2>/dev/null | tr -d '[:space:]')"
+[ "$row" = "f|t|t|f|f|f" ] || bad="$bad $audit_role='$row'(want f|t|t|f|f|f)"
+[ -z "$bad" ] && result 13 db-roles-isolated pass "$PORTAL_DB_ROLE and $GITEA_DB_USER exist, rolsuper=false; $audit_role only inserts and reads the MCP audit log" || result 13 db-roles-isolated fail "unexpected:$bad"
 
 # 14. backup verification: newest run succeeded, manifest checksum, every snapshot in
 #     the repository and every dump restoring to its recorded sha256, restic check

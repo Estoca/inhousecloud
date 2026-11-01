@@ -237,7 +237,7 @@ describe('listing and routing', () => {
   }
 
   test('lists in parallel, prefixes the tools, signs one actor JWT per provider with its aud and granted scope', async () => {
-    const { gateway, calls } = gatewayWith(async () => jsonResponse(200, { tools: [{ name: 'ping', description: 'Ping', input_schema: { type: 'object', properties: {} } }] }));
+    const { gateway, calls } = gatewayWith(async () => jsonResponse(200, { tools: [{ name: 'ping', description: 'Ping', input_schema: { type: 'object', properties: {} }, access: 'read' }] }));
     const listed = await gateway.listTools(admin, [notes, locked]);
     assert.deepEqual(listed.tools.map((tool) => tool.name), ['notes__ping', 'locked__ping']);
     assert.equal(listed.tools[0].description, '[Notes] Ping');
@@ -257,12 +257,15 @@ describe('listing and routing', () => {
   });
 
   test('a call goes to the provider of the prefix, with { arguments }, and returns its result', async () => {
-    const { gateway, calls } = gatewayWith(async () => jsonResponse(200, { result: { pong: true } }));
+    const { gateway, calls } = gatewayWith(async (_url, init) => (init.method === 'GET'
+      ? jsonResponse(200, { tools: [{ name: 'ping', access: 'read' }] })
+      : jsonResponse(200, { result: { pong: true } })));
     const out = await gateway.callTool(viewer, [notes, locked], 'notes__ping', { a: 1 });
     assert.deepEqual(out, { provider: 'notes', result: { pong: true } });
-    assert.equal(calls[0].url, 'http://notes:8080/mcp/tools/ping/execute');
-    assert.equal(calls[0].method, 'POST');
-    assert.deepEqual(calls[0].body, { arguments: { a: 1 } });
+    const post = calls.find((call) => call.method === 'POST');
+    assert.equal(post.url, 'http://notes:8080/mcp/tools/ping/execute');
+    assert.deepEqual(post.body, { arguments: { a: 1 } });
+    assert.equal(post.claims.confirmed_by, undefined, 'a read carries no confirmed_by');
     await assert.rejects(gateway.callTool(viewer, [notes], 'ghost__ping', {}), { code: 'tool_not_found' });
   });
 
@@ -300,7 +303,9 @@ describe('listing and routing', () => {
   });
 
   test('a 403 on a call is an access error, not a fallback', async () => {
-    const { gateway } = gatewayWith(async () => jsonResponse(403, { error: { code: 'tool_access_denied', message: 'ping needs notes.read' } }));
+    const { gateway } = gatewayWith(async (_url, init) => (init.method === 'GET'
+      ? jsonResponse(200, { tools: [{ name: 'ping', access: 'read' }] })
+      : jsonResponse(403, { error: { code: 'tool_access_denied', message: 'ping needs notes.read' } })));
     await assert.rejects(gateway.callTool(viewer, [notes], 'notes__ping', {}), { code: 'tool_access_denied', message: 'ping needs notes.read' });
   });
 });
@@ -308,7 +313,8 @@ describe('listing and routing', () => {
 describe('platform tools', () => {
   test('viewers see the catalog only; admins also the status, people and groups', () => {
     assert.deepEqual(platformToolsFor(viewer).map((tool) => tool.name), ['ihc_list_apps']);
-    assert.deepEqual(platformToolsFor(admin).map((tool) => tool.name), ['ihc_list_apps', 'ihc_platform_status', 'ihc_list_people', 'ihc_list_groups']);
+    assert.deepEqual(platformToolsFor(admin).map((tool) => tool.name), ['ihc_list_apps', 'ihc_platform_status', 'ihc_list_people', 'ihc_list_groups', 'ihc_audit_log']);
+    assert.ok(platformToolsFor(admin).every((tool) => tool.annotations.readOnlyHint === true), 'the platform tools only read');
   });
 
   test('ihc_list_apps returns description, health, SSO and the MCP prefix; system tests only for admins', async () => {
@@ -412,11 +418,12 @@ describe('the gateway over HTTP', () => {
       verifier: createAccessTokenVerifier({ issuer: ISSUER, audience: 'ihc-mcp', jwksUrl: 'x', fetchFn: async () => jsonResponse(200, jwksOf(ak)) }),
       providerGateway: {
         async listTools() { providerCalls += 1; return { tools: [{ name: 'notes__ping', description: '[Notes] Ping', inputSchema: { type: 'object' } }], providers: [] }; },
-        async callTool(_user, _providers, name) {
-          if (name === 'notes__ping') return { provider: 'notes', result: { pong: true } };
+        async prepareCall(_user, _providers, name) {
+          if (name === 'notes__ping') return { provider: { slug: 'notes' }, tool: 'ping', name, scopes: ['notes.read'], access: 'read' };
           if (!name.includes('__')) throw new ProviderError(`no tool named ${name}`, { code: 'tool_not_found' });
           throw new ProviderError('access denied: locked grants its MCP scopes to ihc-admins', { code: 'scope_not_granted' });
         },
+        async execute() { return { provider: 'notes', result: { pong: true }, audit: null }; },
       },
       platformTools: createPlatformTools({ listAppsFn: () => [], listHttpHealthFn: async () => ({ available: true, checks: [] }), directory: { configured: false } }),
       listAppsFn: () => [notesApp()],

@@ -88,16 +88,17 @@ Layer 1 of the cloud's agent interface: an app that declares `mcp` in `company-a
 | `mcp.tools_path` | `/mcp/tools` | a path on the app's container |
 | `mcp.execute_path` | `/mcp/tools/{tool}/execute` | a path on the app's container, with `{tool}` |
 | `mcp.scopes` | (required) | a map `scope: [groups]`; every scope starts with `<slug>.`; at least one, each granted to at least one group (Authentik groups: `ihc-users`, `ihc-admins`, or any group you create) |
+| `mcp.tools` | none | per tool, a map `tool: {access, groups, people}`: `access` is `read` or `write` ([reads and writes](#reads-and-writes)); `groups` (Authentik groups) and `people` (emails) narrow who may see and call that tool beyond its scope. A tool without an entry keeps the scope as its only rule |
 | `mcp.enabled` | `true` | `false` keeps the section and leaves the app out |
 
 Write the lists one item per line (`- ihc-users`), not `[ihc-users]`: on a box without PyYAML the executor's own reader takes only block lists.
 
 **What the gateway does.** It reaches the app on the cloud network, `http://<slug>:<runtime.port>`, never through the proxy. For each person it computes the scopes of `mcp.scopes` granted to that person's groups; with none, the app is never called for them and its tools do not show. Otherwise:
 
-- `GET <tools_path>` → the app answers `{"tools": [{"name": "ping", "description": "…", "input_schema": {"type": "object", …}, "access": "read"}]}`. Names: letters, digits, `_` and `-`, up to 64; the gateway shows them as `<slug>__<name>`. The app may list only the tools the person's scopes allow, or answer `403` when there is none.
-- `POST <execute_path>` with `{"arguments": {…}}` → `{"result": <any JSON>}`. Errors: `403` (no access), `404` (no such tool), `400` (bad arguments), each with `{"error": {"code": "…", "message": "…"}}`; the message reaches the person. A `5xx` or a timeout (10 s to list, 30 s to call) counts as the app being down.
+- `GET <tools_path>` → the app answers `{"tools": [{"name": "ping", "description": "…", "input_schema": {"type": "object", …}, "access": "read"}]}`. Names: letters, digits, `_` and `-`, up to 64; the gateway shows them as `<slug>__<name>`. `access` is `read` or `write`; leave it out and the tool is a write (below). The app may list only the tools the person's scopes allow, or answer `403` when there is none.
+- `POST <execute_path>` with `{"arguments": {…}}` → `{"result": <any JSON>}`, and for a write, optionally `"audit": {"previous": …, "new": …, "target": "…"}` next to `result`. Errors: `403` (no access), `404` (no such tool), `400` (bad arguments), each with `{"error": {"code": "…", "message": "…"}}`; the message reaches the person. A `5xx` or a timeout (10 s to list, 30 s to call) counts as the app being down.
 
-Every request carries `Authorization: Bearer <actor JWT>` and `X-Request-ID`.
+Every request carries `Authorization: Bearer <actor JWT>` and `X-Request-ID`. A tool with a `groups` or `people` entry in `mcp.tools` is not listed for anyone outside them, and a call from them is refused by the gateway without reaching the app.
 
 **What the app must check**, on every request to those two paths, before anything else (the template does all of it with `node:crypto`, no library):
 
@@ -107,7 +108,28 @@ Every request carries `Authorization: Bearer <actor JWT>` and `X-Request-ID`.
 4. `scope` (space separated) holds the scope the tool needs; otherwise `403`.
 5. The person is `email` (also in `sub`), with `groups`: apply the app's own rules (what this person may see) to the data, as the app does for a browser user with `X-authentik-email`.
 
-Answer `401` when any of 1 to 3 fails. Keep the tools read only in this layer.
+Answer `401` when any of 1 to 3 fails.
+
+### Reads and writes
+
+A tool is a **read** only when the app's tool list says `"access": "read"` or `mcp.tools.<tool>.access` says `read`, and neither says `write`. Anything else, an undeclared tool included, is a **write** (an app that is down when the gateway needs its list counts as undeclared). The template's `ping` says `read`, so apps made from it are unchanged.
+
+For a write the gateway, not the app:
+
+1. lists it with `readOnlyHint: false` and adds a required argument `confirmed_by` to its input schema (the name is reserved: do not use it for an argument of your own);
+2. refuses a call without `confirmed_by`, or whose `confirmed_by` is not an active person of the company directory in `ihc-users` (matched by email or username, never by free text);
+3. records `requested` in its audit log (a table of the portal's database, out of the app's reach) **before** calling the app; if that record fails, the app is not called;
+4. calls the app with `confirmed_by` removed from `arguments` and put in the actor JWT as the claim `confirmed_by`, the approver's email as the directory has it;
+5. records `completed` with the status, the error code if any, and the app's `audit` block.
+
+So an app with a write tool:
+
+- declares it: `access: write` in the tool list, and preferably `mcp.tools.<tool>.access: write` in the manifest (the manifest is in Git and reviewed; when it says `write` the gateway does not need to ask the app);
+- reads `confirmed_by` from the claims if it wants it in its own records, and never trusts a `confirmed_by` in `arguments` (there is none);
+- returns what changed, so the audit has it: `{"result": {...}, "audit": {"previous": {"price": 10}, "new": {"price": 12}, "target": "sku A1"}}`. `previous` and `new` are any JSON (secrets are redacted by key and by shape, and large values cut, before they are stored); `target` names the record in a few words. The `audit` block is not passed to the client;
+- does not write its own audit of MCP calls for the platform: the gateway's is the record. Keep the app's own history if the app needs it.
+
+`confirmed_by` says who approved the call; the gateway can prove that person exists, not that they clicked. The approval itself belongs in the client (a confirmation the person answers), and the audit makes a false attribution visible after the fact.
 
 Example, a tool that lists the person's own records, next to `ping` in `TOOLS` of `server.js`:
 
@@ -136,6 +158,41 @@ mcp:
 ```
 
 and `scope: "expenses.report"` on the tool that only `finance` may call.
+
+A write tool, granted only to two groups, declared in the manifest:
+
+```yaml
+mcp:
+  scopes:
+    expenses.read:
+      - ihc-users
+  tools:
+    approve_expense:
+      access: write
+      groups:
+        - finance
+        - ihc-admins
+    list_my_expenses:
+      access: read
+```
+
+and in `server.js`:
+
+```js
+approve_expense: {
+  scope: `${slug}.read`,
+  access: "write",
+  description: "Approves an expense.",
+  input_schema: { type: "object", properties: { id: { type: "integer" } }, required: ["id"], additionalProperties: false },
+  run: async (actor, args) => {
+    const before = (await db.query("SELECT status FROM expenses WHERE id = $1", [args.id])).rows[0];
+    await db.query("UPDATE expenses SET status = 'approved', approved_by = $2 WHERE id = $1", [args.id, actor.confirmedBy]);
+    return { result: { id: args.id, status: "approved" }, audit: { previous: before, new: { status: "approved" }, target: `expense ${args.id}` } };
+  },
+},
+```
+
+The template's routes already do the rest: the tool list sends each tool's `access` (`read` when it says nothing), and a tool with `access: "write"` is refused without the `confirmed_by` claim (`actor.confirmedBy`) and returns `{result, audit}` from what `run` gives back.
 
 ## Required Rules
 

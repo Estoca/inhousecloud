@@ -32,7 +32,7 @@ exposed and what still writes.
 |---|---|
 | `GET /health`, `GET /api/health` | public |
 | other `GET /api/*` | anyone signed in through Authentik (group `ihc-users` or `ihc-admins`) |
-| `GET /api/platform/status`, `GET /api/storage-usage`, `GET /api/people`, `GET /api/groups` | admin (group `ihc-admins`); `ihc-users` gets `403` |
+| `GET /api/platform/status`, `GET /api/storage-usage`, `GET /api/people`, `GET /api/groups`, `GET /api/mcp/audit` | admin (group `ihc-admins`); `ihc-users` gets `403` |
 | `POST /api/apps-status/refresh`, `POST /api/platform/status/refresh` | admin (group `ihc-admins`) |
 | `PATCH /api/apps/:slug/metadata`, `PATCH /api/runtime/docker/:name/metadata` | nobody: `405 read_only` |
 | `/api/admins*`, `/api/disk-usage-*` | super admin |
@@ -51,6 +51,10 @@ with `IHC_PORTAL_API_TOKEN`: with that token, any other route answers `403`; a w
 - **The portal itself** writes status and disk snapshots to its own Postgres, and applies
   its own migrations at boot.
 - **Super admins** manage the `portal_admins` table (`/api/admins`).
+- **The MCP gateway** (`src/mcp-gateway.js`, another process of the same image) inserts
+  into `deploy_platform.mcp_audit_log` with its own role (`ihc_mcp_audit`: `SELECT` and
+  `INSERT` on that table only). The table is append-only (triggers refuse `UPDATE`,
+  `DELETE` and `TRUNCATE`); the portal only reads it, at `GET /api/mcp/audit`.
 - The inventory is read only (the `catalog/` directory mounted `:ro`): description, owner
   and category change in the app's `company-app.yaml`, by a push.
 

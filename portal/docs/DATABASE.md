@@ -35,5 +35,6 @@ the schema has only what the read-only portal uses:
 - `deploy_platform.disk_usage_snapshots`: snapshots diarios de disco.
 - `deploy_platform.app_access_daily_metrics`: metricas de acesso do NPM. No ramo `export` o portal nao le nem grava esta tabela.
 - `deploy_platform.portal_admins`: admins do portal.
+- `deploy_platform.mcp_audit_log` (migracao 010): audit log das escritas do gateway MCP. Quem grava e o gateway, com o papel `ihc_mcp_audit` (so `SELECT` e `INSERT` nesta tabela, criado pelo `install.sh`); o portal so le (`GET /api/mcp/audit`). Append-only: triggers recusam `UPDATE`, `DELETE` e `TRUNCATE`, ate do dono. Sem limpeza automatica.
 
 Removidas em `009`: `apps`, `check_events`, `log_chunks` (nunca populadas), `api_tokens` (o portal nao emite mais tokens) e `agent_configs` (o agente LLM com chave OpenAI foi removido).

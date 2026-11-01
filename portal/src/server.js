@@ -36,6 +36,8 @@ import { catalogMcpTools, executeCatalogMcpTool } from './catalog-mcp.js';
 import { createServiceTokenGate } from './service-token.js';
 import { createAuthentikDirectory } from './authentik-directory.js';
 import { attachPeopleRoutes } from './people-routes.js';
+import { createAuditLog } from './mcp-audit.js';
+import { getPool } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, '..', 'dist');
@@ -100,6 +102,7 @@ export function createApp({
   statusCacheConfig = statusCacheConfigFromEnv(),
   auth = createAuth(),
   authentikDirectory = createAuthentikDirectory(),
+  mcpAuditLog = null,
 } = {}) {
   const app = express();
 
@@ -361,6 +364,28 @@ export function createApp({
       return;
     }
     res.json(result);
+  });
+
+  // Audit log das escritas do gateway MCP (deploy_platform.mcp_audit_log, src/mcp-audit.js;
+  // docs/security.md do cloud). Quem grava e o gateway, com papel proprio; o portal so le.
+  // Admin. Filtros: ?limit, ?app, ?tool, ?actor, ?confirmed_by, ?since.
+  let auditLog = mcpAuditLog;
+  app.get('/api/mcp/audit', auth.requireAdmin, async (req, res) => {
+    auditLog ??= createAuditLog({ pool: getPool() });
+    const text = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+    const result = await auditLog.list({
+      limit: req.query.limit,
+      app: text(req.query.app),
+      tool: text(req.query.tool),
+      actor: text(req.query.actor),
+      confirmedBy: text(req.query.confirmed_by),
+      since: text(req.query.since),
+    });
+    if (!result.available) {
+      res.status(/^since /.test(result.error ?? '') ? 400 : 503).json({ error: 'audit_unavailable', detail: result.error });
+      return;
+    }
+    res.json({ count: result.entries.length, entries: result.entries });
   });
 
   app.get('/api/disk-usage-snapshots', auth.requireSuperAdmin, async (req, res) => {

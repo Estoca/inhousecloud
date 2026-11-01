@@ -1,3 +1,4 @@
+import { normalizeToolPolicies } from './mcp-policy.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -208,6 +209,11 @@ function validateMcp(issues, mcp, appSlug, field) {
     if (typeof name !== 'string' || !MCP_SCOPE.test(name) || !name.startsWith(`${appSlug}.`)) {
       issue(issues, `${field}.scopes`, `${JSON.stringify(name)} must start with "${appSlug}."`);
     }
+  }
+  // mcp.tools (opcional): por tool, leitura ou escrita e grant a grupos ou pessoas
+  // (src/mcp-policy.js). Mesmas regras do gateway: entrada invalida tira o app do gateway.
+  if (mcp.tools !== undefined && mcp.tools !== null) {
+    for (const problem of normalizeToolPolicies(mcp.tools).problems) issue(issues, `${field}.tools`, problem);
   }
 }
 

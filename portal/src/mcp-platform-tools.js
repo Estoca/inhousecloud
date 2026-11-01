@@ -10,6 +10,9 @@ import { TOOL_SEPARATOR, grantedScopes, providerFromApp } from './mcp-providers.
 //                         nunca stale quando o portal consegue sondar, com `freshness`
 //   ihc_list_people       admin: pessoas do Authentik (conta de servico ihc-portal)
 //   ihc_list_groups       admin: grupos do Authentik e seus membros
+//   ihc_audit_log         admin: as escritas feitas pelo gateway (quem pediu, quem
+//                         aprovou, tool, argumentos sem segredo, resultado, valor anterior
+//                         e novo), do audit log no banco do portal (src/mcp-audit.js)
 // A mesma regra do portal: quem e so de ihc-users ve catalogo e saude dos apps, nao o
 // detalhe da maquina nem a lista de pessoas (docs/security.md).
 
@@ -52,6 +55,23 @@ export const PLATFORM_TOOLS = Object.freeze([
     admin: true,
     description: 'Groups of the company sign-in (Authentik) and their members. Admins only.',
     inputSchema: EMPTY_INPUT,
+  },
+  {
+    name: 'ihc_audit_log',
+    admin: true,
+    description: 'Audit log of the writes made through this gateway, newest first: when, who asked (actor), who approved (confirmed_by), the tool and app, the arguments (secrets redacted), the status (ok, an error code, refused, or unknown when the outcome was never recorded) and, when the app returned them, the previous and the new value. Written by the gateway, append-only. Admins only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many entries (default 50, at most 200).' },
+        app: { type: 'string', description: 'Only this app (its slug).' },
+        tool: { type: 'string', description: 'Only this tool, by its full name (<app>__<tool>).' },
+        actor: { type: 'string', description: 'Only writes asked by this email.' },
+        confirmed_by: { type: 'string', description: 'Only writes approved by this email.' },
+        since: { type: 'string', description: 'Only entries at or after this ISO date or time.' },
+      },
+      additionalProperties: false,
+    },
   },
 ].map((tool) => Object.freeze({ ...tool, annotations: READ_ONLY })));
 
@@ -108,6 +128,7 @@ export function createPlatformTools({
   listHttpHealthFn = listHttpHealth,
   fetchFn = globalThis.fetch,
   directory = createAuthentikDirectory(),
+  audit = null,
   portalUrl = env.PORTAL_INTERNAL_URL || 'http://portal:8080',
   portalApiToken = env.IHC_PORTAL_API_TOKEN,
   userGroup = env.USER_GROUP || 'ihc-users',
@@ -176,6 +197,14 @@ export function createPlatformTools({
     }
   }
 
+  async function auditLogTool(input = {}) {
+    if (!audit?.configured) throw new PlatformToolError('the audit log is not configured for the gateway (MCP_AUDIT_DATABASE_URL): run install.sh --apply --from foundation', 'not_configured');
+    const text = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+    const out = await audit.list({ limit: input.limit, app: text(input.app), tool: text(input.tool), actor: text(input.actor), confirmedBy: text(input.confirmed_by), since: text(input.since) });
+    if (!out.available) throw new PlatformToolError(`the audit log cannot be read: ${out.error}`, 'audit_unavailable');
+    return { count: out.entries.length, entries: out.entries };
+  }
+
   // Levanta PlatformToolError (forbidden, not_configured, ...).
   async function call(user, name, input = {}) {
     const tool = PLATFORM_TOOLS.find((candidate) => candidate.name === name);
@@ -184,6 +213,7 @@ export function createPlatformTools({
     if (name === 'ihc_list_apps') return listAppsTool(user, input);
     if (name === 'ihc_platform_status') return platformStatus();
     if (name === 'ihc_list_people') return directoryCall('people');
+    if (name === 'ihc_audit_log') return auditLogTool(input);
     return directoryCall('groups');
   }
 

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { appAccess, describeGrant, effectiveAccess, normalizeToolPolicies, toolGranted, withConfirmedBy } from './mcp-policy.js';
 
 // Providers MCP dos apps (camada 1, docs/app-contract.md "MCP"): todo app cujo
 // company-app.yaml tem a secao `mcp` (o inventario guarda em apps.<slug>.mcp) expoe
@@ -11,6 +12,12 @@ import crypto from 'node:crypto';
 //
 // No catalogo do gateway, a tool `ping` do app `notes` vira `notes__ping`: o slug nao tem
 // `__`, entao o prefixo diz sempre a qual provider a chamada vai.
+//
+// Alem do escopo (src/mcp-policy.js): `mcp.tools` do manifesto restringe uma tool a
+// grupos ou pessoas e diz se ela e leitura ou escrita, junto com o `access` que o app
+// devolve na lista. Sem declaracao, a tool e escrita: o gateway pede confirmed_by e grava
+// o audit (src/mcp-gateway.js). Uma tool sem grant para a pessoa nao aparece e a chamada
+// e recusada aqui, sem chamar o app.
 
 export const TOOL_SEPARATOR = '__';
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -72,6 +79,8 @@ export function providerFromApp(app, { userGroup = 'ihc-users' } = {}) {
   const audience = typeof mcp.audience === 'string' && mcp.audience.trim() ? mcp.audience.trim() : `${app.slug}.mcp`;
   const scopes = normalizeScopes(mcp.scopes, { userGroup });
   if (scopes.length === 0) problems.push('scopes must grant at least one scope to a group');
+  const { policies, problems: toolProblems } = normalizeToolPolicies(mcp.tools);
+  problems.push(...toolProblems);
   return {
     slug: app.slug,
     name: app.name || app.slug,
@@ -80,6 +89,7 @@ export function providerFromApp(app, { userGroup = 'ihc-users' } = {}) {
     toolsPath,
     executePath,
     scopes,
+    tools: policies,
     problems,
   };
 }
@@ -130,14 +140,18 @@ export function createProviderGateway({
   listTimeoutMs = 10_000,
   callTimeoutMs = 30_000,
   fallbackMs = 24 * 3600_000,
+  accessTtlMs = 60_000,
   now = () => Date.now(),
   log = () => {},
 }) {
   // Ultimo catalogo bom por (app, pessoa): o app pode filtrar as tools por quem pede.
   const lastGood = new Map();
+  // O `access` que o app declarou por tool, da ultima lista lida ao vivo, por (app, pessoa):
+  // a chamada usa enquanto tiver menos de accessTtlMs; depois, le a lista de novo.
+  const declared = new Map();
 
-  async function request(provider, user, scopes, method, path, { body, timeoutMs, requestId, clientId }) {
-    const token = signer.issue({ audience: provider.audience, scopes, user, requestId, clientId });
+  async function request(provider, user, scopes, method, path, { body, timeoutMs, requestId, clientId, confirmedBy = null }) {
+    const token = signer.issue({ audience: provider.audience, scopes, user, requestId, clientId, confirmedBy });
     let response;
     try {
       response = await fetchFn(`${provider.baseUrl}${path}`, {
@@ -161,22 +175,53 @@ export function createProviderGateway({
     return json;
   }
 
+  // A lista do app, ja com o que o gateway decide: so as tools que a pessoa tem grant,
+  // leitura ou escrita (manifesto + app, na duvida escrita), e nas de escrita o
+  // confirmed_by obrigatorio no schema. Guarda o `access` declarado para a chamada.
   async function fetchTools(provider, user, scopes, requestId) {
     const body = await request(provider, user, scopes, 'GET', provider.toolsPath, { timeoutMs: listTimeoutMs, requestId, clientId: user.clientId });
     if (!body || !Array.isArray(body.tools)) throw new ProviderError(`${provider.slug} answered a tool list without "tools"`, { code: 'invalid_provider_response' });
     const tools = [];
+    const access = new Map();
     for (const tool of body.tools) {
       if (!tool || typeof tool !== 'object' || !TOOL_NAME.test(String(tool.name ?? ''))) continue;
+      access.set(tool.name, appAccess(tool.access));
+      const policy = provider.tools.get(tool.name);
+      if (!toolGranted(policy, user)) continue;
+      const effective = effectiveAccess(policy?.access ?? null, appAccess(tool.access));
       const schema = tool.input_schema ?? tool.inputSchema;
+      const inputSchema = schema && typeof schema === 'object' && schema.type === 'object' ? schema : { type: 'object', properties: {} };
+      const description = typeof tool.description === 'string' ? tool.description : '';
       tools.push({
         name: `${provider.slug}${TOOL_SEPARATOR}${tool.name}`,
         title: typeof tool.title === 'string' ? tool.title : undefined,
-        description: `[${provider.name}] ${typeof tool.description === 'string' ? tool.description : ''}`.trim(),
-        inputSchema: schema && typeof schema === 'object' && schema.type === 'object' ? schema : { type: 'object', properties: {} },
-        annotations: { readOnlyHint: (tool.access ?? 'read') === 'read', ...(tool.annotations && typeof tool.annotations === 'object' ? tool.annotations : {}) },
+        description: `[${provider.name}] ${description}${effective === 'write' ? ' (Writes: needs confirmed_by, the email of the person who approved this exact call.)' : ''}`.trim(),
+        inputSchema: effective === 'write' ? withConfirmedBy(inputSchema) : inputSchema,
+        annotations: { ...(tool.annotations && typeof tool.annotations === 'object' ? tool.annotations : {}), readOnlyHint: effective === 'read' },
       });
     }
+    declared.set(`${provider.slug}\n${user.email}`, { access, fetchedAt: now() });
     return tools;
+  }
+
+  // read | write de uma tool para esta pessoa. O manifesto dizendo write decide sem
+  // perguntar ao app; senao vale o `access` da lista do app (a guardada, se recente, ou
+  // lida de novo). App fora do ar ou tool fora da lista: nao declarado.
+  async function accessOf(provider, user, scopes, tool, requestId) {
+    const policy = provider.tools.get(tool);
+    if (policy?.access === 'write') return 'write';
+    const key = `${provider.slug}\n${user.email}`;
+    let entry = declared.get(key);
+    if (!entry || entry.fetchedAt + accessTtlMs <= now()) {
+      try {
+        await fetchTools(provider, user, scopes, requestId);
+        entry = declared.get(key);
+      } catch (error) {
+        log(`mcp tools/call: ${provider.slug} tool list ${error.code ?? 'failed'}: ${tool} counts as a write`);
+        entry = null;
+      }
+    }
+    return effectiveAccess(policy?.access ?? null, entry?.access.get(tool) ?? null);
   }
 
   // Uma linha por provider: { slug, tools, source: live|fallback|skipped, error }.
@@ -220,9 +265,10 @@ export function createProviderGateway({
     return { tools, providers: outcomes };
   }
 
-  // Roteia ao provider do prefixo. Levanta ProviderError (code tool_not_found,
-  // scope_not_granted, tool_access_denied, ...).
-  async function callTool(user, providers, name, args, { requestId = crypto.randomUUID() } = {}) {
+  // Antes de chamar: o provider do prefixo, o escopo, o grant da tool e se ela escreve.
+  // -> { provider, tool, name, scopes, access }. Levanta ProviderError (tool_not_found,
+  // provider_misconfigured, scope_not_granted, tool_not_granted).
+  async function prepareCall(user, providers, name, { requestId = crypto.randomUUID() } = {}) {
     const parts = splitToolName(name);
     const provider = parts && providers.find((candidate) => candidate.slug === parts.slug);
     if (!provider || !TOOL_NAME.test(parts.tool)) throw new ProviderError(`no tool named ${name}`, { code: 'tool_not_found' });
@@ -232,16 +278,39 @@ export function createProviderGateway({
       const groups = [...new Set(provider.scopes.flatMap((scope) => scope.groups))];
       throw new ProviderError(`access denied: ${provider.slug} grants its MCP scopes to ${groups.join(', ') || 'no group'}, and ${user.email} is in none of them`, { code: 'scope_not_granted', status: 403 });
     }
-    const path = provider.executePath.replace('{tool}', encodeURIComponent(parts.tool));
-    const body = await request(provider, user, scopes, 'POST', path, {
+    const policy = provider.tools.get(parts.tool);
+    if (!toolGranted(policy, user)) {
+      throw new ProviderError(`access denied: ${name} is granted to ${describeGrant(policy)}, and ${user.email} is not among them`, { code: 'tool_not_granted', status: 403 });
+    }
+    const access = await accessOf(provider, user, scopes, parts.tool, requestId);
+    return { provider, tool: parts.tool, name, scopes, access };
+  }
+
+  // Chama o app de um plano de prepareCall. -> { provider, result, audit }, onde audit e o
+  // `audit` que o app devolveu ao lado de `result` ({ previous, new, target }) ou null.
+  async function execute(user, plan, args, { requestId = crypto.randomUUID(), confirmedBy = null } = {}) {
+    const { provider } = plan;
+    const path = provider.executePath.replace('{tool}', encodeURIComponent(plan.tool));
+    const body = await request(provider, user, plan.scopes, 'POST', path, {
       body: { arguments: args && typeof args === 'object' ? args : {} },
       timeoutMs: callTimeoutMs,
       requestId,
       clientId: user.clientId,
+      confirmedBy,
     });
     if (!body || !('result' in body)) throw new ProviderError(`${provider.slug} answered without "result"`, { code: 'invalid_provider_response' });
-    return { provider: provider.slug, result: body.result };
+    const audit = body.audit && typeof body.audit === 'object' && !Array.isArray(body.audit) ? body.audit : null;
+    return { provider: provider.slug, result: body.result, audit };
   }
 
-  return { listTools, callTool };
+  // prepareCall + execute. Uma escrita sem confirmedBy e recusada aqui tambem; quem
+  // confere a pessoa e grava o audit e o gateway (src/mcp-gateway.js).
+  async function callTool(user, providers, name, args, { requestId = crypto.randomUUID(), confirmedBy = null } = {}) {
+    const plan = await prepareCall(user, providers, name, { requestId });
+    if (plan.access === 'write' && !confirmedBy) throw new ProviderError(`${name} writes: it needs confirmed_by`, { code: 'confirmation_required' });
+    const { provider, result } = await execute(user, plan, args, { requestId, confirmedBy });
+    return { provider, result };
+  }
+
+  return { listTools, prepareCall, execute, callTool };
 }

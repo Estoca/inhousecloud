@@ -233,6 +233,85 @@
               "minLength": 1
             }
           }
+        },
+        "tools": {
+          "description": "Per tool, read or write and who may use it beyond the scope (docs/app-contract.md, MCP). A map tool name -> {access, groups, people}; a list of {name, ...} is accepted too.",
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "read",
+                      "write"
+                    ],
+                    "description": "read or write; a tool nobody declares read is a write (the gateway asks confirmed_by and audits it)"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "only these Authentik groups may list and call the tool (with people: either)"
+                  },
+                  "people": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+                    },
+                    "description": "only these people (emails) may list and call the tool (with groups: either)"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "read",
+                      "write"
+                    ],
+                    "description": "read or write; a tool nobody declares read is a write (the gateway asks confirmed_by and audits it)"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "only these Authentik groups may list and call the tool (with people: either)"
+                  },
+                  "people": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+                    },
+                    "description": "only these people (emails) may list and call the tool (with groups: either)"
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  }
+                },
+                "additionalProperties": true,
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          ]
         }
       },
       "additionalProperties": true

@@ -113,7 +113,8 @@ export function createActorSigner({ privateKey, kid, issuer, ttlSeconds = 300, n
     issuer,
     ttlSeconds: ttl,
     jwks: () => ({ keys: [{ ...jwk }] }),
-    issue({ audience, scopes = [], user, requestId = crypto.randomUUID(), clientId = null }) {
+    // confirmedBy: so nas escritas, o e-mail de quem aprovou, ja conferido no diretorio.
+    issue({ audience, scopes = [], user, requestId = crypto.randomUUID(), clientId = null, confirmedBy = null }) {
       const iat = Math.floor(now() / 1000);
       return signJwt({
         iss: issuer,
@@ -125,6 +126,7 @@ export function createActorSigner({ privateKey, kid, issuer, ttlSeconds = 300, n
         groups: [...(user.groups ?? [])],
         scope: scopes.join(' '),
         client_id: clientId,
+        ...(confirmedBy ? { confirmed_by: confirmedBy } : {}),
         request_id: requestId,
         jti: requestId,
         iat,
