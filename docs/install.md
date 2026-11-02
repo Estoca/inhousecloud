@@ -73,8 +73,9 @@ Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository c
 ### Sign in with inhouse.technology
 
 This also enables iht instance tokens at the MCP gateway (`IHT_ISSUER` in the `mcp`
-service). In iht's company form, set InHouseCloud MCP to `https://mcp.<BASE_DOMAIN>`
-(no trailing slash or `/mcp`; local ingress uses `http://mcp.cloud.localhost`).
+service). In iht, open Products (`/empresas/{id}/products`) and set InHouseCloud MCP
+to `https://mcp.<BASE_DOMAIN>` without a trailing slash or `/mcp`; local ingress uses
+`http://mcp.cloud.localhost`.
 Email access defaults to the portal super-admin emails and their domains; explicit
 `IHT_ALLOWED_DOMAINS` / `IHT_ALLOWED_PEOPLE` in the installation `.env` restrict or
 extend it. See [MCP gateway](mcp-gateway.md#via-inhousetechnology).
@@ -118,8 +119,9 @@ If the response was lost, the consumed claim cannot be retried: request a new on
 
 The manual path remains available:
 
-The owner creates an OIDC client for this ihc on inhouse.technology. Register this
-exact redirect URI, substituting the ihc's Authentik host (usually `auth.<base_domain>`):
+An iht company admin creates or rotates this ihc's OIDC client in Login
+(`/empresas/{id}/login`). Register this exact Authentik source callback, including its
+trailing slash, substituting the ihc's Authentik host (usually `auth.<base_domain>`):
 
 ```text
 https://<authentik host>/source/oauth/callback/inhouse-technology/
@@ -145,8 +147,10 @@ authentik:
     client_secret_env: IHC_IHT_CLIENT_SECRET
 ```
 
-The person opens the single-use secret link on their own screen. In the terminal
-that will run the installer, read the **secret value**, not the link, without echo:
+The admin obtains the secret from the private, no-store response after creating or
+rotating the client in Login (`/empresas/{id}/login`). It is shown only in that response;
+there is no separate secret-retrieval link. In the terminal that will run the installer,
+read the **secret value** without echo:
 
 ```bash
 IFS= read -r -s -p 'iht client secret: ' IHC_IHT_CLIENT_SECRET; printf '\n'
@@ -155,8 +159,8 @@ export IHC_IHT_CLIENT_SECRET
 unset IHC_IHT_CLIENT_SECRET
 ```
 
-Never paste the link or secret into an agent conversation, command argument, YAML
-file or repository. Alternatively, an interactive install with that config asks
+Never paste the secret into an agent conversation, command argument, YAML file or
+repository. Alternatively, an interactive install with that config asks
 for the missing secret with hidden input after approval. The installer uses its
 existing secret mechanism to save `IHT_CLIENT_SECRET` in `.env` (0600); it never
 generates a replacement for an external client secret. The current shared `.env`

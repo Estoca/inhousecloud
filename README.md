@@ -8,6 +8,14 @@ One box runs what a small company needs around its internal apps: single sign-on
 
 > **Sibling project:** [InHouseOS](https://github.com/Estoca/inhouseos) is the people-and-work half (a personal LLM agent per person, a second brain, a shared tracker, a company compass). It runs on top of this cloud as ordinary apps and is adopted separately.
 
+With inhouse.technology, admins connect the gateway in Products (`/empresas/{id}/products`)
+and configure OIDC clients in Login (`/empresas/{id}/login`). Approved managed hosting is
+controlled in Hosting (`/empresas/{id}/hosting`). AWS public hosting, when enabled, places
+portal, auth, mcp, git and apps under `<id>.inhouse.technology`, with an ACM certificate pack
+covering the base and wildcard. Public ingress remains behind a flag and has not been validated
+end to end. `iht_status` includes `progress`; company deletion and cancellation live in Settings
+(`/empresas/{id}/settings`). See the [company guide](https://inhouse.technology/docs/company).
+
 ## Try it in 10 minutes
 
 On a Mac with Docker Desktop, directly (15 to 20 GiB free; no `sudo`):
