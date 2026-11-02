@@ -205,8 +205,10 @@ The signed role maps `admin` to `ADMIN_GROUP` + `USER_GROUP`, `member` to `USER_
 external group claims never grant extra access. Actor JWTs, app grants, audit and the directory
 check of `confirmed_by` use the same person and code path as Authentik.
 
-In iht's company instance form set **InHouseCloud MCP** to the gateway base URL. The iht-owned
-`ihc_list_tools` returns the current gateway list as data; use `ihc_call` with a returned tool
+In iht, open Products (`/empresas/{id}/products`) and set **InHouseCloud MCP** to the gateway
+base URL. Hosting (`/empresas/{id}/hosting`) manages approved hosted machines;
+`iht_status.progress` reports their current checklist step. The iht-owned `ihc_list_tools`
+returns the current gateway list as data; use `ihc_call` with a returned tool
 name and arguments. Writes still need human approval and `confirmed_by`. Hosted provisioning
 records this gateway URL separately from the portal display link.
 
