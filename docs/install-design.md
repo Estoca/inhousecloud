@@ -130,7 +130,10 @@ exact public issuer and source creation exercises Gitea's Go discovery client.
 The proxy keeps the original Host and explicitly sends `X-Forwarded-Proto: https`
 and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs.
 It does not infer HTTPS from the local HTTP hop or accept arbitrary forwarded
-scheme headers. Authentik therefore advertises `https://auth.<BASE_DOMAIN>` issuers,
+scheme headers. Sign-in redirects use an explicit HTTPS destination: a relative
+nginx `return 302 /outpost...` would become HTTP when the tunnel reaches port 80.
+First-run probes that HTTP origin separately and requires an HTTPS Location.
+Authentik therefore advertises `https://auth.<BASE_DOMAIN>` issuers,
 endpoints and source callbacks. See [Authentik's required proxy headers](https://docs.goauthentik.io/install-config/reverse-proxy/).
 Provider assignment to the embedded outpost is asynchronous. First-run sends the
 outpost's supported `SIGUSR1` refresh after configuring providers/routes, then waits

@@ -397,6 +397,17 @@ while :; do
   [ $(( $(date +%s) - t0 )) -ge 90 ] && die "portal route is not protected: got '$loc' (wanted 302 to the outpost)"
   sleep 3
 done
+# The tunnel reaches port 80. A relative nginx return would become an absolute
+# HTTP Location on that hop even though its rd parameter and upstream headers say
+# HTTPS. Check the actual origin transport as well as the local TLS path above.
+if [ "$TLS_MODE" = edge ]; then
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $PORTAL_HOST" "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || echo 000)"
+  case "$loc" in
+    "302 https://$PORTAL_HOST/outpost.goauthentik.io/"*) ;;
+    *) die "edge HTTP origin sign-in redirects incorrectly: got '$loc' (wanted HTTPS outpost URL)" ;;
+  esac
+  ok "edge HTTP origin redirects sign-in to HTTPS"
+fi
 ok "portal route redirects anonymous requests to the outpost"
 [ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending portal_api_token_env=IHC_PORTAL_API_TOKEN portal_api_token_fingerprint="$PORTAL_API_FP" mcp_url="$MCP_URL/mcp" mcp_oauth_client_id="$MCP_CLIENT_ID")"
 ok "first-run complete"

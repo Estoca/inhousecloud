@@ -305,7 +305,7 @@ location /outpost.goauthentik.io {
 location @goauthentik_proxy_signin {
     internal;
     add_header Set-Cookie $auth_cookie;
-    return 302 /outpost.goauthentik.io/start?rd=$scheme://$http_host$request_uri;
+    return 302 $scheme://$http_host/outpost.goauthentik.io/start?rd=$scheme://$http_host$request_uri;
 }'
 
 # forward_auth_conf HEALTH_PATH: the advanced config of a protected host, with

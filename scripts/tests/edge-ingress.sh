@@ -96,6 +96,8 @@ if sys.argv[2] == 'edge':
     if sys.argv[3] != 'plain':
         assert 'X-Original-URL https://$http_host$request_uri' in conf
         assert 'rd=https://$http_host$request_uri' in conf
+        assert 'return 302 https://$http_host/outpost.goauthentik.io/start?rd=https://' in conf
+        assert 'return 302 /outpost' not in conf
         assert 'auth_request ' in conf
     else:
         assert 'proxy_set_header Upgrade $http_upgrade;' in conf
