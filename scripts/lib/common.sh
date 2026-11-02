@@ -112,6 +112,19 @@ load_env() {
   set +a
 }
 
+# Reconcile on every foundation run, including upgrades that skip secrets. Public
+# HTTPS names cannot alias an HTTP-only proxy in edge mode. Keep service-name DNS
+# for internal APIs; public URL clients use the public resolver and edge certificate.
+configure_proxy_aliases() {
+  local service host alias
+  for service in PORTAL AUTHENTIK GITEA; do
+    eval 'host="$'"${service}"'_HOST"'
+    alias="$host"
+    [ "$TLS_MODE" != edge ] || alias="proxy-$(printf '%s' "$service" | tr 'A-Z' 'a-z')"
+    env_set "PROXY_${service}_ALIAS" "$alias"
+  done
+}
+
 # dc: docker compose bound to the install directory.
 dc() { docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" "$@"; }
 

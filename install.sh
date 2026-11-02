@@ -1089,6 +1089,7 @@ stage_foundation() {
   render_iht_blueprint
   socket_gid="$(detect_docker_socket_gid)" || { fail "cannot read the Docker socket group"; return 1; }
   env_set DOCKER_SOCKET_GID "$socket_gid"
+  configure_proxy_aliases
   cp "$IHC_ROOT/docker/compose.yml" "$INSTALL_DIR/compose.yml"
   copy_portal || { fail "could not copy $IHC_ROOT/portal into $INSTALL_DIR/portal"; return 1; }
   # Set here, not with the other values: updating the cloud is `--apply --from foundation`,

@@ -343,11 +343,34 @@ for b in json.load(sys.stdin).get("results",[]):
   ensure_binding "$1" "$2" "$3 <- admins only"
 }
 
+# The edge is the TLS endpoint. Never derive the external scheme from the local
+# HTTP connection or trust a client-supplied forwarded-proto header. A custom
+# location is necessary: NPM's default location owns its forwarded-header policy.
+edge_proxy_conf() {
+  local conf="$1"
+  if [ -z "$conf" ]; then
+    conf='location / {
+    proxy_pass $forward_scheme://$server:$port$request_uri;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Scheme https;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $http_connection;
+}'
+  fi
+  # Protected routes also use the external scheme in outpost return URLs.
+  printf '%s' "$conf" | sed 's/\$scheme/https/g'
+}
+
 ensure_proxy_host() { # HOST FORWARD_HOST FORWARD_PORT ADVANCED_CONFIG
   local host="$1" fhost="$2" fport="$3" adv="$4" id cert="0" ssl=false http2=false meta body existing
   id="$(proxy_host_field "$host" id)"
   meta='{"letsencrypt_agree":false,"dns_challenge":false}'
   case "$TLS_MODE" in
+    edge) adv="$(edge_proxy_conf "$adv")" ;;
     internal)
       # The cloud wildcard certificate (ensure_internal_certificate), HTTPS forced.
       case "${PROXY_CERTIFICATE_ID:-0}" in ""|0) die "tls internal: no certificate on the proxy yet (PROXY_CERTIFICATE_ID in .env); run scripts/first-run.sh" ;; esac

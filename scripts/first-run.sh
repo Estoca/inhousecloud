@@ -356,14 +356,16 @@ if [ "$GITEA_OIDC_ENABLED" = true ]; then
   # Gitea fetches the discovery document when the source is added, so the auth route
   # must already answer by its public name from inside the container. Probed with
   # busybox wget: curl resolves every *.localhost name to loopback by itself and would
-  # never reach the proxy alias. With TLS internal, curl checks the certificate against
-  # the cloud CA mounted at /etc/ihc-ca (Gitea itself trusts it through SSL_CERT_DIR).
+  # never reach the proxy alias. Edge mode uses public DNS and the edge certificate,
+  # for discovery AND Gitea's later token/userinfo requests. With TLS internal, curl
+  # checks the certificate against the cloud CA mounted at /etc/ihc-ca (Gitea itself trusts it through SSL_CERT_DIR).
   if [ "$TLS_MODE" = internal ]; then
     disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/ihc-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   else
     disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   fi
-  [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container"
+  [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container (tls=$TLS_MODE; check DNS, TLS and edge client filtering)"
+  [ "$disc" = "${AUTHENTIK_BASE_URL}/application/o/gitea/" ] || die "OIDC issuer mismatch: got $disc, expected ${AUTHENTIK_BASE_URL}/application/o/gitea/ (check proxy Host and X-Forwarded-Proto)"
   ok "OIDC discovery reachable from Gitea (issuer $disc)"
   SRC_ID="$(gitea_cli admin auth list 2>/dev/null | awk -F'\t' -v n="$GITEA_OIDC_SOURCE_NAME" 'NR>1 && $2==n {print $1}' | head -n 1)"
   if [ -z "$SRC_ID" ]; then

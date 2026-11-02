@@ -106,6 +106,33 @@ Refused: `local` with any tunnel; `private` without Tailscale; `public` with `TL
 
 For a company of about thirty people the recommended mode is `private`: a private domain with split DNS over Tailscale, not MagicDNS as the app URL. MagicDNS is fine for administering the machine; a private domain keeps `BASE_DOMAIN`, wildcard routing, stable per-app URLs and a single proxy.
 
+### Public ingress with edge TLS
+
+With `public / edge / cloudflared`, containers resolve public names through public
+DNS and connect through Cloudflare with normal certificate verification. Foundation
+replaces the proxy's public hostname aliases with private `proxy-*` aliases, also on
+upgrades (`--apply --from foundation`). Other modes keep the public aliases because
+the proxy serves their HTTP or HTTPS endpoints itself.
+
+Gitea uses the same public HTTPS discovery, issuer, token and userinfo endpoints as
+a browser. Rewriting only discovery to internal HTTP would leave token exchange
+broken, and an HTTP-only origin cannot accept HTTPS without a certificate. The
+tradeoff is that these public URL calls require working outbound DNS, Cloudflare
+and its tunnel. Edge rules must allow the actual clients (BusyBox wget for the
+installer, Gitea's Go OAuth client, and Python/Node clients); a browser-only check
+can miss a Cloudflare 1010 denial. First-run checks the exact public issuer and
+Gitea's source creation exercises its Go discovery client.
+
+The proxy keeps the original Host and explicitly sends `X-Forwarded-Proto: https`
+and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs.
+It does not infer HTTPS from the local HTTP hop or accept arbitrary forwarded
+scheme headers. Authentik therefore advertises `https://auth.<BASE_DOMAIN>` issuers,
+endpoints and source callbacks. See [Authentik's required proxy headers](https://docs.goauthentik.io/install-config/reverse-proxy/).
+The portal directory and MCP JWKS/userinfo checks already use explicit internal
+service URLs; their configured issuer and browser-facing endpoints stay public
+HTTPS. Provisioned apps also use the internal MCP service for actor-JWT JWKS;
+clients explicitly configured with a public MCP URL use the edge path.
+
 ### Private ingress (`private` / `internal` / `tailscale`)
 
 Built and tested end to end ([`first-run.md`](first-run.md#private-ingress-run)). Every app is `https://<slug>.<BASE_DOMAIN>`, no port, on the tailnet only, with a certificate browsers accept once the cloud CA is installed.

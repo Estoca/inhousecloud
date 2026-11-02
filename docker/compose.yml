@@ -52,11 +52,11 @@ services:
     networks:
       ihc:
         aliases:
-          # Containers resolve the public hostnames to the proxy, so Gitea can
-          # fetch Authentik's OIDC discovery document by its public URL.
-          - ${PORTAL_HOST}
-          - ${AUTHENTIK_HOST}
-          - ${GITEA_HOST}
+          # Foundation selects public names when TLS terminates on this proxy.
+          # Edge TLS uses private aliases: public HTTPS must reach Cloudflare.
+          - ${PROXY_PORTAL_ALIAS:-${PORTAL_HOST}}
+          - ${PROXY_AUTHENTIK_ALIAS:-${AUTHENTIK_HOST}}
+          - ${PROXY_GITEA_ALIAS:-${GITEA_HOST}}
       ops: {}
     healthcheck:
       test: ["CMD", "/usr/bin/check-health"]
