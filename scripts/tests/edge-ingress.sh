@@ -26,8 +26,7 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     lines.append(key + '=' + value)
 Path(sys.argv[2]).write_text('\n'.join(lines) + '\n')
 FIXTURE
-for TLS_MODE in off internal acme edge internal edge; do
-  configure_proxy_aliases
+for TLS_MODE in off internal acme edge; do
   resolved="$(curl_resolve "https://$AUTHENTIK_HOST")"
   [ "$resolved" = "$(printf -- '--resolve\n%s:443:127.0.0.1' "$AUTHENTIK_HOST")" ]
   INSTALL_DIR="$WORK"
@@ -38,17 +37,12 @@ for TLS_MODE in off internal acme edge internal edge; do
       case "$(proxy_args "$AUTHENTIK_HOST")" in *--cacert*) ;; *) exit 1 ;; esac ;;
     *) [ -z "$(ca_args)" ] ;;
   esac
-  for service in PORTAL AUTHENTIK GITEA; do
-    value="$(env_get "PROXY_${service}_ALIAS")"
-    eval 'expected="$'"${service}"'_HOST"'
-    [ "$value" = "$expected" ]
-  done
-  echo "[ok] $TLS_MODE aliases (including mode transitions)"
+  echo "[ok] $TLS_MODE host-side proxy URL and trust"
 done
 env_set PORTAL_HOST "$PORTAL_HOST"
 env_set AUTHENTIK_HOST "$AUTHENTIK_HOST"
 env_set GITEA_HOST "$GITEA_HOST"
-# Verify Compose's actual nested interpolation, rather than duplicating it.
+# Verify public DNS aliases and trust mounts in the rendered Compose configuration.
 if command -v docker >/dev/null 2>&1; then
   docker compose --env-file "$ENV_FILE" -f "$ROOT/docker/compose.yml" config --format json > "$WORK/compose.json"
   $PY - "$WORK/compose.json" <<'CHECK'

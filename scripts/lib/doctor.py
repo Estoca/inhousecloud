@@ -208,7 +208,7 @@ class Box:
         return self.containers.get((project or self.project, service))
 
     # HTTP through the proxy, the way smoke tests reach a public name from the box:
-    # TLS off, plain HTTP to the proxy's port with a Host header; TLS internal, https://NAME
+    # TLS off, plain HTTP to the proxy's port with a Host header; internal/edge, https://NAME
     # pinned to 127.0.0.1 and verified against the cloud CA (never -k).
     def proxy(self, host, path="/", headers=()):
         if self.tls in ("internal", "edge"):

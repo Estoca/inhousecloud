@@ -53,9 +53,9 @@ services:
       ihc:
         aliases:
           # Public names resolve locally; internal/edge modes serve local-CA TLS.
-          - ${PROXY_PORTAL_ALIAS:-${PORTAL_HOST}}
-          - ${PROXY_AUTHENTIK_ALIAS:-${AUTHENTIK_HOST}}
-          - ${PROXY_GITEA_ALIAS:-${GITEA_HOST}}
+          - ${PORTAL_HOST}
+          - ${AUTHENTIK_HOST}
+          - ${GITEA_HOST}
           - mcp.${BASE_DOMAIN}
           - s3.${BASE_DOMAIN}
       ops: {}

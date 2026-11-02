@@ -114,18 +114,19 @@ Cloudflare and validate its public ACM certificate. The tunnel still forwards
 an HTTPS redirect. Inside the box, public platform names resolve to the proxy's
 Docker aliases. NPM also serves those hosts on 443 using the installation's
 name-constrained CA and wildcard certificate (`local/ca`, shared with internal
-mode). Foundation reconciles aliases and generates/renews the CA certificate on
-upgrades too (`--apply --from foundation`).
+mode). Foundation generates or renews the CA certificate before starting the
+containers.
 
 Gitea uses the same `https://auth.<BASE_DOMAIN>` discovery, issuer, token and
-userinfo endpoints as browsers. Its Go runtime trusts the CA through `SSL_CERT_DIR`; portal/MCP Node runtimes add it with
-`NODE_EXTRA_CA_CERTS`. Only the public CA certificate is mounted into containers.
-The embedded outpost uses Authentik's local socket/service transport for its control plane. Box-side curl, Git and S3 probes pin names locally and verify the CA explicitly.
-Browser devices do not install this CA for edge mode. External federation still
-uses normal public trust roots. This avoids routing internal identity traffic
-through Cloudflare, where client-specific filtering (including error 1010) can
-break non-browser clients even when browser HTTPS works. First-run verifies the
-exact public issuer and source creation exercises Gitea's Go discovery client.
+userinfo endpoints as browsers. Its Go runtime trusts the CA through
+`SSL_CERT_DIR`; portal/MCP Node runtimes add it with `NODE_EXTRA_CA_CERTS`. Only
+the public CA certificate is mounted into containers. The embedded outpost uses
+Authentik's local socket/service transport for its control plane. Box-side curl,
+Git and S3 probes pin names locally and verify the CA explicitly. Browser devices
+do not install this CA for edge mode. External federation uses normal public
+trust roots. Internal identity traffic stays on the Docker network. First-run
+verifies the exact public issuer and source creation exercises Gitea's Go
+discovery client.
 
 The proxy keeps the original Host and explicitly sends `X-Forwarded-Proto: https`
 and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs.

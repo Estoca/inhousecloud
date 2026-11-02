@@ -115,15 +115,6 @@ load_env() {
   set +a
 }
 
-# Reconcile on foundation, including upgrades from the former edge public-DNS path.
-configure_proxy_aliases() {
-  local service host
-  for service in PORTAL AUTHENTIK GITEA; do
-    eval 'host="$'"${service}"'_HOST"'
-    env_set "PROXY_${service}_ALIAS" "$host"
-  done
-}
-
 # dc: docker compose bound to the install directory.
 dc() { docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/compose.yml" "$@"; }
 
