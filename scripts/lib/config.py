@@ -99,6 +99,10 @@ def mini_yaml(text):
 
 def load(path):
     text = open(path).read()
+    if text.lstrip().startswith("{"):
+        data = json.loads(text)
+        migrate_old_names(data)
+        return data
     try:
         import yaml  # type: ignore
         data = yaml.safe_load(text) or {}

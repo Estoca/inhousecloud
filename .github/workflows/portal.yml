@@ -68,3 +68,9 @@ jobs:
       - name: optional iht source (offline config, blueprint and stubbed Authentik)
         working-directory: .
         run: scripts/tests/iht-sso.sh
+      - name: installer login claim (loopback HTTP, no Docker)
+        working-directory: .
+        run: bash scripts/tests/iht-claim.sh
+      - name: installer login claim (offline persistence)
+        working-directory: .
+        run: bash scripts/tests/iht-claim-offline.sh
