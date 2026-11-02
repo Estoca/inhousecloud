@@ -93,3 +93,26 @@ CHECK
   done
   echo "[ok] $TLS_MODE route headers and forward-auth return URLs"
 done
+
+# The operator's issuer check must agree with the browser-facing TLS mode too.
+$PY - "$ROOT/scripts/lib" <<'DOCTOR'
+import json, sys
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1])
+from doctor import c_login
+for mode in ('off', 'internal', 'acme', 'edge'):
+    expected = ('http' if mode == 'off' else 'https') + '://auth.example.test/application/o/gitea/'
+    advertised = expected
+    def proxy(host, path):
+        if path == '/':
+            return '302', 'https://auth.example.test/if/flow/default-authentication-flow/', ''
+        if path.endswith('openid-configuration'):
+            return '200', '', json.dumps({'issuer': advertised})
+        return '200', '', ''
+    box = SimpleNamespace(tls=mode, auth_host='auth.example.test', portal_host='portal.example.test',
+                          proxy=proxy, H='/checkout', I='/install')
+    assert c_login(box).status == 'ok', mode
+    advertised = 'https://wrong.example.test/'
+    assert c_login(box).status == 'warn', mode
+print('[ok] doctor validates the public issuer in every TLS mode')
+DOCTOR

@@ -617,7 +617,7 @@ def c_login(box):
     if not to_sso(code, loc, box):
         return c.fail("the outpost does not send an anonymous visitor of the portal to the sign-in (got %s)" % code,
                       "check the embedded outpost and the portal's provider", "route-and-provider")
-    issuer = "https://" if box.tls == "internal" else "http://"
+    issuer = "http://" if box.tls == "off" else "https://"
     issuer += box.auth_host + "/application/o/gitea/"
     code, _, body = box.proxy(box.auth_host, "/application/o/gitea/.well-known/openid-configuration")
     try:
