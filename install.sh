@@ -480,10 +480,11 @@ agent_up() {
   mkdir -p "$AGENT_DIR/state/home" "$AGENT_DIR/workspace" "$AGENT_DIR/reference" "$(env_get AGENT_BACKUP_REPORTS_DIR)" 2>/dev/null || true
   chmod 700 "$AGENT_DIR/state"
   rm -rf "$INSTALL_DIR/agent-proxy"   # the proxy is core now: docker-ro, from $INSTALL_DIR/docker-ro
+  $PY "$IHC_LIB/secretsproxy.py" agent "$INSTALL_DIR" "$ENV_FILE" || return 1
   render_agent_config || return 1
   "$IHC_ROOT/scripts/ihc-operator.sh" agent-sync --install-dir "$INSTALL_DIR" || return 1
-  dc up -d docker-ro agent || return 1
-  wait_healthy 240 docker-ro agent || return 1
+  dc up -d docker-ro secrets-proxy agent || return 1
+  wait_healthy 240 docker-ro secrets-proxy agent || return 1
   # The read-only path works end to end, and a write is refused.
   out="$(dc exec -T agent ihc-ro docker /_ping 2>&1 | tr -d '[:space:]')"
   [ "$out" = OK ] && ok "agent reads the Docker API through docker-ro" || { fail "agent cannot reach docker-ro (agent-docker-proxy on its network): $out"; return 1; }
@@ -1104,6 +1105,7 @@ stage_foundation() {
   mkdir -p "$INSTALL_DIR/docker-ro"
   cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
   chmod 755 "$INSTALL_DIR/docker-ro"; chmod 644 "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
+  $PY "$IHC_LIB/secretsproxy.py" "$INSTALL_DIR" || return 1
   # inventory.json moves into catalog/ (the portal mounts that directory read only) and
   # stays reachable at its old path as a symlink.
   $PY "$IHC_LIB/inventory.py" migrate "$INSTALL_DIR" || { fail "could not set up $INSTALL_DIR/catalog/inventory.json"; return 1; }
@@ -1305,13 +1307,15 @@ stage_optional_profiles() {
   fi
   has_profile storage && svcs="$svcs garage"
   has_profile ops && svcs="$svcs portainer glances filebrowser"
-  if [ -z "$svcs" ]; then log "no optional profile selected"; state stage optional_profiles set probe '{"profiles":"none"}'; return 0; fi
-  dc up -d $svcs || return 1
-  wait_healthy 240 $svcs || return 1
+  if [ -z "$svcs" ] && ! has_profile agent; then log "no optional profile selected"; state stage optional_profiles set probe '{"profiles":"none"}'; return 0; fi
+  if [ -n "$svcs" ]; then
+    dc up -d $svcs || return 1
+    wait_healthy 240 $svcs || return 1
+  fi
   if has_profile storage; then COMPOSE_PROJECT_NAME="$(env_get COMPOSE_PROJECT_NAME)" garage_layout_init "$(env_get GARAGE_CAPACITY)" || return 1; fi
   OPS_PROBE='{"enabled":false}'
   if has_profile ops; then ops_terminal; else dc rm -sf wetty filebrowser portainer glances >/dev/null 2>&1 || true; fi
-  if has_profile agent; then agent_up || return 1; else dc rm -sf agent >/dev/null 2>&1 || true; fi
+  if has_profile agent; then agent_up || return 1; else dc rm -sf agent secrets-proxy >/dev/null 2>&1 || true; fi
   state stage optional_profiles set probe "$(jsonq build profiles="$PROFILES" services="${svcs# }" ops:="$OPS_PROBE")"
 }
 

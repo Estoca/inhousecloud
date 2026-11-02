@@ -137,7 +137,7 @@ The `agent` profile (off by default) runs an LLM agent on the box that reads cha
 |---|---|
 | The Docker socket | only the filter has it; the filter's network (`ihc-agent`) is internal |
 | The install directory, `.env`, `apps/` (the apps' env files), `local/` (keys), `state.json`'s directory | not mounted; smoke test 20 checks every mount source |
-| Any cloud secret in its environment | only `GITEA_READONLY_TOKEN` and `AGENT_*`; smoke test 20 compares its environment with `.env` |
+| Any cloud secret in its environment | only `GITEA_READONLY_TOKEN`, its own `IHC_SECRETS_PROXY_TOKEN` and `AGENT_*`; smoke test 20 compares its environment with `.env` |
 | The ops tools | not on `ihc-ops` |
 | A shell on the host | none; what needs the host, it asks a human to run |
 | A port or route | the gateway listens on the container's loopback; people reach it through the chat channel only |
@@ -147,6 +147,30 @@ Writes. By default none: every POST, PUT, DELETE through the filter answers 403,
 Who can talk to it. `ops.agent.allow_from` lists chat user ids; empty means pairing, and the admin approves each first DM (`docker compose exec agent node dist/index.js pairing approve <channel> <code>`). Anyone who can talk to it can make it read anything above and repeat it in the chat, logs included: keep the allow list to people who could read the logs anyway. Its LLM provider receives what it reads. In a Telegram group it answers only in the chats listed in `ops.agent.groups`, only when the message mentions the bot, and only to the senders in `ops.agent.group_allow_from` (default `allow_from`): a DM pairing never authorizes anyone in a group, and an empty list means no group at all. Another bot in the group is a sender like any other: list its id only if you want it to be able to ask.
 
 What remains. On the `ihc` network it can open a TCP connection to any service: the shared Redis's default user is still open to every container on that network (apps included; a known gap, to be closed), and a vulnerable service there is reachable from it as from any app. Logs can contain whatever an app chose to log. The OpenClaw image downloads channel plugins at first start, and the LLM and the chat channel are on the internet, so it has egress: asked to, it will `git clone` a public repository into its workspace and read it (it did in the conversation run, [`first-run.md`](first-run.md#operator-conversation-run)). It cannot reach the host or the Docker socket from there, but whoever can talk to it can make it fetch and run code inside its own container.
+
+## External API credential proxy
+
+The `agent` profile starts `secrets-proxy`, with no public route, host port, Docker
+socket or installation-wide mount. Only its private directory is mounted. It swaps
+an app/agent identity token for the selected service credential, with fixed hosts,
+explicit methods and segment-bounded prefixes. Manifests never contain credentials
+or upstream URLs. Missing grants deny; redeploying a removed policy revokes grants.
+The app contract describes [configuration, rotation, limits and error mapping](app-contract.md#external-apis-through-the-credential-proxy).
+
+Every non-health call writes one JSON audit line to the container log: app (null
+for an invalid token), known service, method, matched configured path prefix and
+returned status. Raw paths, query strings, request/response bodies, credentials,
+headers and exception messages are excluded. Logs use the existing Compose rotation;
+this is operational auditing, not the MCP gateway's append-only database audit.
+A proxy call does not inherit MCP `confirmed_by`: authorization is the deployed
+manifest's explicit HTTP allowlist. Review POST grants especially carefully.
+
+HTTP restrictions do not restrict resources named in JSON bodies or queries, nor
+operations inside GraphQL (Linear uses POST `/graphql`). Use provider-side scoped
+credentials as well. This proxy protects supported REST integrations; the built-in
+OpenClaw's native LLM/chat transports still hold their existing channel credentials.
+Apps remain on the shared network with internet egress: this is credential isolation,
+not a general outbound firewall or protection against a malicious credential issuer.
 
 ## Rules
 

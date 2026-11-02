@@ -41,6 +41,12 @@ exposure.
   explicit instruction that names the app: `ihc-ro restart <slug>-app-1` (the restart
   of `runbooks/restart-service.md`) and `ihc-ro prune-build-cache` (the prune of
   `runbooks/disk-pressure.md`). The proxy refuses any core container and any other write.
+- External REST integrations use `$IHC_SECRETS_PROXY_URL/<service>/<path>` with
+  `Authorization: Bearer $IHC_SECRETS_PROXY_TOKEN`. This is your caller identity;
+  never print it. The admin grants methods and path prefixes on the box; your policy
+  starts empty. A 403 means the call is not granted: ask the admin to review the policy.
+  Never request or copy the upstream credential. Native LLM/chat channels keep their
+  existing credentials; the REST proxy does not replace those transports.
 - Plain `curl` and `git` inside your container, on the `ihc` network.
 - Write notes and incident records in this workspace (outside `reference/`, which is read
   only).

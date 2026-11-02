@@ -682,7 +682,7 @@ for m in c.get("Mounts", []):
         if g == src or g.startswith(src.rstrip("/") + "/"): bad.append("mount %s reaches %s" % (src, g))
 if opsnet in (c.get("NetworkSettings", {}).get("Networks") or {}): bad.append("on the ops network")
 sec = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY)")
-allowed = re.compile(r"^(GITEA_READONLY_TOKEN|AGENT_[A-Z_]+)$")
+allowed = re.compile(r"^(GITEA_READONLY_TOKEN|IHC_SECRETS_PROXY_TOKEN|AGENT_[A-Z_]+)$")
 vals = {}
 for l in open(envf).read().splitlines():
     m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', l)

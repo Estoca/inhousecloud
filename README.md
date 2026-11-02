@@ -54,7 +54,7 @@ The core (proxy, Authentik, Gitea with its runners, shared Postgres and Redis, t
 |---|---|
 | `storage` | Garage, S3-compatible object storage: a bucket and key per app |
 | `ops` | Portainer, Glances, a web terminal and a file browser, for admins only behind the SSO |
-| `agent` | an operator agent that answers "why is it down" in Slack or Telegram, read only by default, inside a written [contract](docs/operator-contract.md) |
+| `agent` | a credential proxy for app/agent external API calls, plus an operator agent that answers "why is it down" in Slack or Telegram, read only by default, inside a written [contract](docs/operator-contract.md) |
 
 ## For agents
 

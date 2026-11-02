@@ -62,6 +62,9 @@ jobs:
       - name: deploy journal, rollback's refusals and apply's merged-commit gate (fake Gitea)
         working-directory: .
         run: scripts/tests/deploy-journal.sh
+      - name: secrets proxy private caller provisioning (offline)
+        working-directory: .
+        run: scripts/tests/secrets-proxy.sh
       - name: app trust boundary lint and doctor warnings
         working-directory: .
         run: scripts/tests/ihc-app-lint.sh

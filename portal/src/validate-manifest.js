@@ -1,3 +1,4 @@
+import { policyErrors } from './secrets-policy.js';
 import { normalizeToolPolicies } from './mcp-policy.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -294,6 +295,9 @@ export function validateManifest(manifest, options = {}) {
   validateObjectStorage(issues, manifest.object_storage);
   validateDependencies(issues, manifest.dependencies);
   const auth = manifest.auth;
+  if (manifest.secrets_proxy !== undefined) {
+    for (const problem of policyErrors(manifest.secrets_proxy)) issue(issues, 'secrets_proxy', problem);
+  }
 
   const slug = requiredString(issues, app, 'slug', 'app.slug');
   if (slug && !SLUG_RE.test(slug)) {
