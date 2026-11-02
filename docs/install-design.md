@@ -108,22 +108,24 @@ For a company of about thirty people the recommended mode is `private`: a privat
 
 ### Public ingress with edge TLS
 
-With `public / edge / cloudflared`, containers resolve public names through public
-DNS and connect through Cloudflare with normal certificate verification. Foundation
-replaces the proxy's public hostname aliases with private `proxy-*` aliases, also on
-upgrades (`--apply --from foundation`). Other modes keep the public aliases because
-the proxy serves their HTTP or HTTPS endpoints itself. The smoke/sign-in probe
-helper also leaves edge HTTPS names unpinned, so host-side checks use Cloudflare
-rather than attempting TLS on loopback.
+With `public / edge / cloudflared`, TLS exists on two paths. Browsers reach
+Cloudflare and validate its public ACM certificate. The tunnel still forwards
+`*.<BASE_DOMAIN>` to `http://127.0.0.1:80`; port 80 serves routes without forcing
+an HTTPS redirect. Inside the box, public platform names resolve to the proxy's
+Docker aliases. NPM also serves those hosts on 443 using the installation's
+name-constrained CA and wildcard certificate (`local/ca`, shared with internal
+mode). Foundation reconciles aliases and generates/renews the CA certificate on
+upgrades too (`--apply --from foundation`).
 
-Gitea uses the same public HTTPS discovery, issuer, token and userinfo endpoints as
-a browser. Rewriting only discovery to internal HTTP would leave token exchange
-broken, and an HTTP-only origin cannot accept HTTPS without a certificate. The
-tradeoff is that these public URL calls require working outbound DNS, Cloudflare
-and its tunnel. Edge rules must allow the actual clients (BusyBox wget for the
-installer, Gitea's Go OAuth client, and Python/Node clients); a browser-only check
-can miss a Cloudflare 1010 denial. First-run checks the exact public issuer and
-Gitea's source creation exercises its Go discovery client.
+Gitea uses the same `https://auth.<BASE_DOMAIN>` discovery, issuer, token and
+userinfo endpoints as browsers. Its Go runtime trusts the CA through `SSL_CERT_DIR`; portal/MCP Node runtimes add it with
+`NODE_EXTRA_CA_CERTS`. Only the public CA certificate is mounted into containers.
+The embedded outpost uses Authentik's local socket/service transport for its control plane. Box-side curl, Git and S3 probes pin names locally and verify the CA explicitly.
+Browser devices do not install this CA for edge mode. External federation still
+uses normal public trust roots. This avoids routing internal identity traffic
+through Cloudflare, where client-specific filtering (including error 1010) can
+break non-browser clients even when browser HTTPS works. First-run verifies the
+exact public issuer and source creation exercises Gitea's Go discovery client.
 
 The proxy keeps the original Host and explicitly sends `X-Forwarded-Proto: https`
 and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs.
@@ -140,7 +142,9 @@ The refresh handler is implemented in [Authentik 2026.8.4's outpost event loop](
 The portal directory and MCP JWKS/userinfo checks already use explicit internal
 service URLs; their configured issuer and browser-facing endpoints stay public
 HTTPS. Provisioned apps also use the internal MCP service for actor-JWT JWKS;
-clients explicitly configured with a public MCP URL use the edge path.
+the public MCP name also aliases the proxy and uses local TLS. Apps needing other
+public HTTPS names must use the installation CA and the corresponding local DNS
+alias, or use their explicit service URLs.
 
 ### Private ingress (`private` / `internal` / `tailscale`)
 

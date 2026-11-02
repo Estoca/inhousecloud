@@ -29,37 +29,51 @@ FIXTURE
 for TLS_MODE in off internal acme edge internal edge; do
   configure_proxy_aliases
   resolved="$(curl_resolve "https://$AUTHENTIK_HOST")"
-  if [ "$TLS_MODE" = edge ]; then
-    [ -z "$resolved" ]
-  else
-    [ "$resolved" = "$(printf -- '--resolve\n%s:443:127.0.0.1' "$AUTHENTIK_HOST")" ]
-  fi
+  [ "$resolved" = "$(printf -- '--resolve\n%s:443:127.0.0.1' "$AUTHENTIK_HOST")" ]
+  INSTALL_DIR="$WORK"
+  case "$TLS_MODE" in
+    internal|edge)
+      [ "$(proxy_url "$AUTHENTIK_HOST" /discovery)" = "https://$AUTHENTIK_HOST/discovery" ]
+      [ "$(ca_args)" = "--cacert $WORK/local/ca/ca.crt" ]
+      case "$(proxy_args "$AUTHENTIK_HOST")" in *--cacert*) ;; *) exit 1 ;; esac ;;
+    *) [ -z "$(ca_args)" ] ;;
+  esac
   for service in PORTAL AUTHENTIK GITEA; do
     value="$(env_get "PROXY_${service}_ALIAS")"
-    if [ "$TLS_MODE" = edge ]; then
-      [ "$value" = "proxy-$(printf '%s' "$service" | tr 'A-Z' 'a-z')" ]
-    else
-      eval 'expected="$'"${service}"'_HOST"'
-      [ "$value" = "$expected" ]
-    fi
+    eval 'expected="$'"${service}"'_HOST"'
+    [ "$value" = "$expected" ]
   done
   echo "[ok] $TLS_MODE aliases (including mode transitions)"
 done
+env_set PORTAL_HOST "$PORTAL_HOST"
+env_set AUTHENTIK_HOST "$AUTHENTIK_HOST"
+env_set GITEA_HOST "$GITEA_HOST"
 # Verify Compose's actual nested interpolation, rather than duplicating it.
 if command -v docker >/dev/null 2>&1; then
   docker compose --env-file "$ENV_FILE" -f "$ROOT/docker/compose.yml" config --format json > "$WORK/compose.json"
   $PY - "$WORK/compose.json" <<'CHECK'
 import json, sys
 config = json.load(open(sys.argv[1]))
-assert config['services']['proxy']['networks']['ihc']['aliases'] == ['proxy-portal', 'proxy-authentik', 'proxy-gitea']
+aliases = config['services']['proxy']['networks']['ihc']['aliases']
+assert aliases[:3] == ['portal.example.test', 'auth.example.test', 'git.example.test']
+assert any(a.startswith('mcp.') for a in aliases)
+for service in ('gitea', 'authentik-server', 'authentik-worker'):
+    assert config['services'][service]['environment']['SSL_CERT_DIR'] == '/etc/ssl/certs:/etc/ihc-ca'
+for service in ('portal', 'mcp'):
+    assert config['services'][service]['environment']['NODE_EXTRA_CA_CERTS'] == '/etc/ihc-ca/ca.crt'
+for service in ('gitea', 'authentik-server', 'authentik-worker', 'portal', 'mcp'):
+    mounts = config['services'][service]['volumes']
+    assert any(m['target'] == '/etc/ihc-ca/ca.crt' and m['read_only'] for m in mounts)
+    assert not any('ca.key' in m['source'] or 'wildcard.key' in m['source'] for m in mounts)
 CHECK
-  echo '[ok] edge Compose has no public hostname aliases'
+  echo '[ok] edge Compose public aliases and additive CA trust mounts'
 fi
 # Stub only the proxy API; exercise the production route renderer and JSON payload.
 PROXY_HOSTS='[]'; NPM=http://proxy.invalid/api; PROXY_ADMIN_EMAIL=test@example.test
 api_ok() { return 0; }
 api() { API_BODY='{"id":1}'; printf '%s' "$3" > "$WORK/route.json"; }
-for TLS_MODE in off acme edge; do
+PROXY_CERTIFICATE_ID=42
+for TLS_MODE in off internal acme edge; do
   for kind in plain portal protected; do
     case "$kind" in
       plain) conf="" ;;
@@ -73,7 +87,8 @@ route = json.load(open(sys.argv[1]))
 conf = route['advanced_config']
 assert route['forward_scheme'] == 'http'
 if sys.argv[2] == 'edge':
-    assert route['certificate_id'] == 0 and not route['ssl_forced']
+    assert route['certificate_id'] == 42 and not route['ssl_forced']
+    assert route['http2_support']
     assert 'proxy_set_header Host $host;' in conf
     assert 'proxy_set_header X-Forwarded-Proto https;' in conf
     assert 'proxy_set_header X-Forwarded-Scheme https;' in conf
@@ -85,6 +100,10 @@ if sys.argv[2] == 'edge':
     else:
         assert 'proxy_set_header Upgrade $http_upgrade;' in conf
         assert 'location / {' in conf
+elif sys.argv[2] == 'internal':
+    assert route['certificate_id'] == 42 and route['ssl_forced']
+    if sys.argv[3] != 'plain':
+        assert 'X-Forwarded-Proto $scheme' in conf
 elif sys.argv[3] == 'plain':
     assert conf == ''
 else:
@@ -117,6 +136,18 @@ for mode in ('off', 'internal', 'acme', 'edge'):
 print('[ok] doctor validates the public issuer in every TLS mode')
 DOCTOR
 
+# The portal API/doctor host path uses the same pinned local trust in edge mode.
+$PY - "$ROOT/scripts/lib" <<'PORTAL_TARGET'
+import sys
+sys.path.insert(0, sys.argv[1])
+from portalapi import target
+for mode in ('internal', 'edge'):
+    url, args, public = target({'TLS_MODE': mode, 'PORTAL_BASE_URL': 'https://portal.example.test'}, '/install')
+    assert url == public == 'https://portal.example.test/api/platform/status'
+    assert args == ['--resolve', 'portal.example.test:443:127.0.0.1', '--cacert', '/install/local/ca/ca.crt']
+print('[ok] portal API local HTTPS/CA path in internal and edge modes')
+PORTAL_TARGET
+
 # First boot must request a provider refresh and propagate a delivery failure.
 dc() { printf '%s\n' "$*" > "$WORK/signal"; return "${SIGNAL_RESULT:-0}"; }
 refresh_embedded_outpost
@@ -124,3 +155,15 @@ refresh_embedded_outpost
 SIGNAL_RESULT=1
 if refresh_embedded_outpost; then echo '[xx] outpost refresh failure ignored'; exit 1; fi
 echo '[ok] embedded outpost provider refresh signal and failure propagation'
+
+# Verify the real constrained CA, hostname coverage and idempotent renewal.
+. "$ROOT/scripts/lib/tls.sh"
+TLS_MODE=edge; INSTALL_DIR="$WORK"; BASE_DOMAIN=example.test
+ensure_internal_ca "$BASE_DOMAIN"
+fp="$(ca_fingerprint)"
+ensure_internal_ca "$BASE_DOMAIN"
+[ "$(ca_fingerprint)" = "$fp" ]
+openssl verify -CAfile "$WORK/local/ca/ca.crt" -verify_hostname auth.example.test "$WORK/local/ca/wildcard.crt"
+openssl verify -CAfile "$WORK/local/ca/ca.crt" -verify_hostname example.test "$WORK/local/ca/wildcard.crt"
+if openssl verify -CAfile "$WORK/local/ca/ca.crt" -verify_hostname unrelated.test "$WORK/local/ca/wildcard.crt" >/dev/null 2>&1; then exit 1; fi
+echo '[ok] edge local CA covers base/wildcard, rejects unrelated host, survives re-run'

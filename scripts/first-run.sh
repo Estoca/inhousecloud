@@ -228,9 +228,9 @@ done
 # ==================================================================== Proxy
 step "Proxy routes"
 npm_login
-# TLS internal: the wildcard certificate from <install-dir>/local/ca goes up first; every
-# host below is created with it and HTTPS forced.
-if [ "$TLS_MODE" = internal ]; then
+# Local TLS in internal/edge mode: upload the wildcard before creating routes.
+# Only internal mode forces HTTPS; edge keeps tunnel HTTP free of redirects.
+if uses_internal_tls; then
   [ -s "$INSTALL_DIR/local/ca/wildcard.crt" ] || die "tls internal: $INSTALL_DIR/local/ca/wildcard.crt missing; run install.sh --apply --from foundation"
   PROXY_CERTIFICATE_ID="$(ensure_internal_certificate "$INSTALL_DIR/local/ca/wildcard.crt" "$INSTALL_DIR/local/ca/wildcard.key")"
   [ "$(env_get PROXY_CERTIFICATE_ID)" = "$PROXY_CERTIFICATE_ID" ] || env_set PROXY_CERTIFICATE_ID "$PROXY_CERTIFICATE_ID"
@@ -353,13 +353,10 @@ else ok "read-only API token valid"; fi
 api_init gt "Authorization: token $TOKEN"
 
 if [ "$GITEA_OIDC_ENABLED" = true ]; then
-  # Gitea fetches the discovery document when the source is added, so the auth route
-  # must already answer by its public name from inside the container. Probed with
-  # busybox wget: curl resolves every *.localhost name to loopback by itself and would
-  # never reach the proxy alias. Edge mode uses public DNS and the edge certificate,
-  # for discovery AND Gitea's later token/userinfo requests. With TLS internal, curl
-  # checks the certificate against the cloud CA mounted at /etc/ihc-ca (Gitea itself trusts it through SSL_CERT_DIR).
-  if [ "$TLS_MODE" = internal ]; then
+  # Discovery and subsequent Go token/userinfo requests keep the public HTTPS
+  # issuer, resolve to the proxy and verify its local CA in internal/edge mode.
+  # curl verifies explicitly; Gitea's Go runtime uses SSL_CERT_DIR.
+  if uses_internal_tls; then
     disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/ihc-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   else
     disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"

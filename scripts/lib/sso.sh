@@ -377,11 +377,12 @@ ensure_proxy_host() { # HOST FORWARD_HOST FORWARD_PORT ADVANCED_CONFIG
   id="$(proxy_host_field "$host" id)"
   meta='{"letsencrypt_agree":false,"dns_challenge":false}'
   case "$TLS_MODE" in
-    edge) adv="$(edge_proxy_conf "$adv")" ;;
-    internal)
-      # The cloud wildcard certificate (ensure_internal_certificate), HTTPS forced.
+    internal|edge)
+      # The same local wildcard serves internal HTTPS in both modes.
       case "${PROXY_CERTIFICATE_ID:-0}" in ""|0) die "tls internal: no certificate on the proxy yet (PROXY_CERTIFICATE_ID in .env); run scripts/first-run.sh" ;; esac
-      ssl=true; http2=true; cert="$PROXY_CERTIFICATE_ID" ;;
+      http2=true; cert="$PROXY_CERTIFICATE_ID"
+      if [ "$TLS_MODE" = edge ]; then adv="$(edge_proxy_conf "$adv")"
+      else ssl=true; fi ;;
     acme)
       ssl=true; http2=true; cert='"new"'
       meta="$(jsonq build letsencrypt_email="$PROXY_ADMIN_EMAIL" letsencrypt_agree:=true dns_challenge:=false)"

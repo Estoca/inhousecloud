@@ -756,7 +756,7 @@ stage_preflight() {
     fi
   fi
   [ "$AGENT_ON" = true ] && agent_preflight
-  if [ "$TLS_MODE" = internal ]; then
+  if uses_internal_tls; then
     have openssl && ok "tls internal: openssl found; the installer makes a CA in $INSTALL_DIR/local/ca and a certificate for *.$BASE_DOMAIN" \
       || ok "tls internal: no openssl on the host; the CA is made with the proxy image's openssl"
   fi
@@ -780,6 +780,7 @@ stage_plan() {
   log "services          : $services"
   log "ingress           : $INGRESS, tls $TLS_MODE, tunnel $TUNNEL_PROVIDER, bind $BIND_ADDRESS"
   [ "$TLS_MODE" = internal ] && log "tls               : own CA in $INSTALL_DIR/local/ca (name-constrained to $BASE_DOMAIN), wildcard *.$BASE_DOMAIN on the proxy, HTTPS forced"
+  [ "$TLS_MODE" = edge ] && log "tls               : local CA and wildcard on proxy 443; Cloudflare public TLS, tunnel HTTP 80 without redirects"
   has_profile tailscale && log "tailnet           : node ${CFG_ingress__tailscale__hostname:-ihc} (userspace); serve 80, 443 -> proxy, ${GITEA_SSH_PORT:-2222} -> gitea:22; split DNS for $BASE_DOMAIN on <tailnet address>:53"
   log "portal            : $PORTAL_BASE_URL (forward auth; built from $IHC_ROOT/portal, migrations at boot; reads catalog/inventory.json, the backup reports and Docker through docker-ro, all read only)"
   log "mcp gateway       : $MCP_BASE_URL/mcp (same image as the portal; MCP clients sign in through Authentik, provider ihc-mcp, group ${CFG_authentik__app_group:-ihc-users})"
@@ -1118,8 +1119,8 @@ stage_foundation() {
   render_runner_configs
   render_garage_config
   render_tailnet_serve
-  # Gitea mounts local/ca/ca.crt: the cloud CA with TLS internal, an empty file otherwise.
-  if [ "$TLS_MODE" = internal ]; then ensure_internal_ca "$BASE_DOMAIN" || { fail "tls internal: could not make the CA and certificate in $(ca_dir)"; return 1; }
+  # Public CA certificate only: trusted by Gitea/outpost Go clients and Node.
+  if uses_internal_tls; then ensure_internal_ca "$BASE_DOMAIN" || { fail "tls internal: could not make the CA and certificate in $(ca_dir)"; return 1; }
   else (umask 077; mkdir -p "$(ca_dir)"); [ -e "$(ca_dir)/ca.crt" ] || : > "$(ca_dir)/ca.crt"; chmod 644 "$(ca_dir)/ca.crt"; fi
   ok "rendered compose.yml, portal/, docker-ro/, catalog/, backup-job/, runner/, garage/ and tailscale/ into $INSTALL_DIR"
   dc config --quiet || die "compose file does not validate"
