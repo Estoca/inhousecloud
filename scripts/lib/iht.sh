@@ -55,17 +55,20 @@ render_iht_blueprint() {
   chmod 644 "$INSTALL_DIR/authentik/blueprints/iht.yaml"
 }
 
-# The worker imports asynchronously. Keep local login until the source and recovery
-# flow exist; do not echo API bodies, which may contain the source's credentials.
+# The worker imports asynchronously. Keep local login until the source, recovery
+# and built-in default flow exist. Reconcile here too for existing installations;
+# the mounted blueprint keeps the same settings on subsequent worker imports.
+# Never echo API bodies, which may contain the source's credentials.
 ensure_iht_login() {
   [ "${IHT_ENABLED:-false}" = true ] || return 0
   [ -n "${IHT_CLIENT_ID:-}" ] && [ -n "${IHT_CLIENT_SECRET:-}" ] || die "iht enabled without client credentials"
-  local source recovery stage started
+  local source recovery default_flow stage started
   started=$(date +%s)
   while :; do
     source="$(ak_list_find 'sources/oauth/?slug=inhouse-technology' slug inhouse-technology pk)"
     recovery="$(ak_list_find 'flows/instances/?slug=ihc-local-recovery' slug ihc-local-recovery pk)"
-    [ -n "$source" ] && [ -n "$recovery" ] && break
+    default_flow="$(ak_list_find 'flows/instances/?slug=default-authentication-flow' slug default-authentication-flow pk)"
+    [ -n "$source" ] && [ -n "$recovery" ] && [ -n "$default_flow" ] && break
     [ $(( $(date +%s) - started )) -ge 120 ] && die "iht blueprint not ready in 120s: check authentik-worker blueprint status; local login was kept"
     sleep 2
   done
@@ -76,7 +79,14 @@ ensure_iht_login() {
   [ -n "$stage" ] || die "default authentication identification stage not found; local login was kept"
   api PATCH "$AK/stages/identification/$stage/" "$(jsonq build user_fields:='[]' sources:="[\"$source\"]" show_source_labels:=true password_stage:=null enrollment_flow:=null recovery_flow:=null)"
   api_ok || die "reconcile iht login stage: HTTP $API_CODE"
-  ok "login uses inhouse.technology; akadmin recovery: /if/flow/ihc-local-recovery/"
+  api GET "$AK/stages/identification/$stage/"
+  api_ok || die "verify iht login stage: HTTP $API_CODE"
+  printf '%s' "$API_BODY" | $PY -c 'import json,sys
+s=json.load(sys.stdin)
+sys.exit(0 if s.get("user_fields") == [] and s.get("sources") == [sys.argv[1]]
+         and all(s.get(k, "missing") is None for k in ("password_stage", "enrollment_flow", "recovery_flow")) else 1)' "$source" \
+    || die "iht login must redirect to its sole source without local fields or recovery links"
+  ok "login redirects straight to inhouse.technology; akadmin recovery: /if/flow/ihc-local-recovery/"
 }
 
 # Runs only after apply approval and before any Authentik stage, including resumes.

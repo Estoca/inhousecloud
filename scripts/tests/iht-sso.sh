@@ -24,6 +24,10 @@ render_iht_blueprint
 check test ! -e "$INSTALL_DIR/authentik/blueprints/iht.yaml"
 api() { echo "unexpected API call" >&2; return 1; }
 ensure_iht_login
+# An issuer alone must not enable or alter login either.
+(CFG_authentik__iht__issuer=https://inhouse.technology; iht_configure; render_iht_blueprint; ensure_iht_login)
+check cmp -s "$ENV_FILE" "$WORK/before"
+check test ! -e "$INSTALL_DIR/authentik/blueprints/iht.yaml"
 
 # The real config parser, including a custom *_env name.
 cat > "$WORK/config.yaml" <<'YAML'
@@ -83,6 +87,24 @@ assert 'authentication_flow: !KeyOf authentication' in s
 assert 'default-source-authentication' not in s
 assert 'slug: ihc-iht-authentication' in s
 assert 'enrollment_flow: !KeyOf enrollment' in s
+# Inspect each stage separately: a stray user_fields: [] elsewhere cannot make
+# the default stage redirect. The blueprint must preserve first-run's settings.
+entries = s.split('  - model: ')[1:]
+def named(name):
+    found = [e for e in entries if re.search(r'^      name: '+re.escape(name)+r'$', e, re.M)]
+    assert len(found) == 1, name
+    return found[0]
+direct = named('default-authentication-identification')
+assert direct.startswith('authentik_stages_identification.identificationstage\n')
+assert re.search(r'^      user_fields: \[\]$', direct, re.M)
+assert re.search(r'^      sources:\n        - !KeyOf iht\n(?=      \w)', direct, re.M)
+for field in ('password_stage', 'enrollment_flow', 'recovery_flow'):
+    assert re.search(r'^      '+field+r': null$', direct, re.M)
+local = named('ihc-local-recovery-identification')
+assert 'user_fields: [username]' in local and 'sources: []' in local
+assert 'password_stage: !Find [authentik_stages_password.passwordstage, [name, default-authentication-password]]' in local
+assert 'slug: ihc-local-recovery' in s
+assert 'AUTHENTIK_IMAGE=ghcr.io/goauthentik/server:2026.8.4' in (root/'docker/.env.example').read_text()
 ids = set(re.findall(r'^    id: (.+)$', s, re.M))
 assert set(re.findall(r'!KeyOf ([\w-]+)', s)) <= ids
 expressions = re.findall(r'      expression: \|\n((?:        .*\n|\n)+)', s)
@@ -129,16 +151,22 @@ PY
 # Stub only the transport; the real ak_list_find/jsonq and reconciliation run.
 AK=http://offline/api/v3
 IHT_ENABLED=true; IHT_CLIENT_ID=company-client; IHT_CLIENT_SECRET=not-printed
-MATCHING=identifier; PATCH_CODE=200
+MATCHING=identifier; PATCH_CODE=200; VERIFY_CODE=200; BAD_STAGE=
 api() {
   API_CODE=200
   case "$1:$2" in
     GET:*sources/oauth/\?*)
       if [ ! -e "$WORK/ready" ]; then API_BODY='{"results":[]}'; touch "$WORK/ready"; else API_BODY='{"results":[{"slug":"inhouse-technology","pk":"source-pk"}]}'; fi ;;
-    GET:*flows/instances/\?*) API_BODY='{"results":[{"slug":"ihc-local-recovery","pk":"recovery-pk"}]}' ;;
+    GET:*flows/instances/\?slug=ihc-local-recovery) API_BODY='{"results":[{"slug":"ihc-local-recovery","pk":"recovery-pk"}]}' ;;
+    GET:*flows/instances/\?slug=default-authentication-flow)
+      if [ ! -e "$WORK/default-ready" ]; then API_BODY='{"results":[]}'; touch "$WORK/default-ready"; else API_BODY='{"results":[{"slug":"default-authentication-flow","pk":"default-pk"}]}'; fi ;;
     GET:*sources/oauth/inhouse-technology/) API_BODY="{\"user_matching_mode\":\"$MATCHING\"}" ;;
     GET:*stages/identification/\?*) API_BODY='{"results":[{"name":"default-authentication-identification","pk":"stage-pk"}]}' ;;
     PATCH:*stages/identification/stage-pk/) printf '%s\n' "$3" >> "$WORK/patches"; API_CODE="$PATCH_CODE"; API_BODY=not-printed ;;
+    GET:*stages/identification/stage-pk/)
+      API_CODE="$VERIFY_CODE"
+      API_BODY="$(tail -n 1 "$WORK/patches")"
+      if [ -n "$BAD_STAGE" ]; then API_BODY="$BAD_STAGE"; fi ;;
     *) echo "unexpected API call $1 $2" >&2; return 1 ;;
   esac
 }
@@ -151,10 +179,25 @@ patches=[json.loads(l) for l in open(sys.argv[1])]
 assert len(patches)==2 and patches[0]==patches[1]
 assert patches[0] == dict(user_fields=[], sources=['source-pk'], show_source_labels=True,
                         password_stage=None, enrollment_flow=None, recovery_flow=None)
+assert ( __import__('pathlib').Path(sys.argv[1]).parent / 'default-ready').exists()
 print('[ok] repeatable source-only login patch after asynchronous import')
 PY
 if (MATCHING=email_link; ensure_iht_login) >"$WORK/out" 2>&1; then exit 1; fi
 if (PATCH_CODE=400; ensure_iht_login) >"$WORK/out" 2>&1; then exit 1; fi
+if (VERIFY_CODE=503; ensure_iht_login) >"$WORK/out" 2>&1; then exit 1; fi
+# A successful PATCH alone is insufficient: reject a retained local form, a
+# source chooser, or any password/enrollment/recovery link in the readback.
+for drift in user_fields sources password_stage enrollment_flow recovery_flow; do
+  BAD_STAGE="$($PY - "$WORK/patches" "$drift" <<'PY'
+import json, sys
+s = json.loads(open(sys.argv[1]).readlines()[-1])
+s[sys.argv[2]] = {'user_fields': ['username'], 'sources': ['source-pk', 'other-source']}.get(sys.argv[2], 'local-pk')
+print(json.dumps(s))
+PY
+)"
+  if (ensure_iht_login) >"$WORK/out" 2>&1; then echo "[xx] retained $drift accepted"; exit 1; fi
+done
+BAD_STAGE=
 if grep -q not-printed "$WORK/out"; then echo '[xx] API body leaked'; exit 1; fi
 # A failed/missing worker import must time out without touching the login stage.
 before="$(wc -l < "$WORK/patches")"
@@ -166,6 +209,19 @@ if (
   ensure_iht_login
 ) >"$WORK/out" 2>&1; then echo '[xx] absent blueprint accepted'; exit 1; fi
 check test "$(wc -l < "$WORK/patches")" = "$before"
+# Recovery and the default flow must both exist before reconciliation, even if
+# the source is already ready (worker import order on a fresh installation).
+for missing in ihc-local-recovery default-authentication-flow; do
+  rm -f "$WORK/clock"
+  if (
+    ak_list_find() { [ "$3" = "$missing" ] || printf existing-pk; }
+    date() {
+      if [ -e "$WORK/clock" ]; then echo 121; else touch "$WORK/clock"; echo 0; fi
+    }
+    ensure_iht_login
+  ) >"$WORK/out" 2>&1; then echo "[xx] absent $missing accepted"; exit 1; fi
+  check test "$(wc -l < "$WORK/patches")" = "$before"
+done
 if (IHT_CLIENT_SECRET=; ensure_iht_login) >"$WORK/out" 2>&1; then exit 1; fi
 
 # An iht skip covers the entire MCP smoke journey, including revocation and

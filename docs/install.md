@@ -175,10 +175,20 @@ mounted read-only at `/blueprints/custom/` in both Authentik containers. It decl
 the OpenID Connect source, claim mapping, automatic enrollment and an independent
 local recovery flow. Credentials and group names come from container environment;
 the YAML contains no secret. Authentik's worker discovers and reapplies the blueprint.
-First-run waits for the source and recovery flow, checks identifier matching, then
-reconciles the existing `default-authentication-identification` stage to display
-only this source with no username/password fields. This small API step integrates
-with the default flow created by Authentik's own asynchronous blueprints.
+The blueprint also configures `default-authentication-identification` with
+`user_fields: []` and exactly one source, `inhouse-technology`. In the pinned
+Authentik **2026.8.4**, this makes the identification stage **redirect straight to
+iht**: people see iht's sign-in page (including its Google option), without an
+Authentik username/password form or a source-link click. This is the supported
+[identification-stage behavior](https://docs.goauthentik.io/add-secure-apps/flows-stages/stages/identification/)
+implemented in the [pinned stage](https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/stages/identification/stage.py).
+Its password stage, enrollment link and recovery link are unset.
+First-run waits for the source, recovery flow and built-in default flow, checks
+identifier matching, then reconciles and reads back those identification settings.
+The blueprint carries the same settings so worker reimports preserve the redirect;
+the API step also updates existing installations after asynchronous blueprint import.
+Without an enabled iht connection, this blueprint is not installed and first-run
+does not change authentication.
 
 Accounts are linked by the source's provider identifier (`sub`), **never email**:
 `user_matching_mode: identifier`. A same-email local account must remain a different
@@ -203,6 +213,8 @@ membership in groups connected to this source; promotion adds `ihc-admins` and
 demotion removes it while retaining `ihc-users`.
 
 **Recovery:** bookmark `https://<authentik host>/if/flow/ihc-local-recovery/`.
+This separate emergency path is never linked from the default login page; open the
+bookmark directly if iht is unavailable.
 It authenticates a local password but only `akadmin` can finish and receive a
 session; an ordinary local account cannot use it to bypass iht. Keep the current
 `akadmin` password offline (the original is `AUTHENTIK_BOOTSTRAP_PASSWORD` in
@@ -235,7 +247,9 @@ context is selected or used.
 
 The final table checks owner/member groups, company isolation, distinct subjects
 sharing an email, role changes on later logins, administrator-only local recovery,
-and login after restarting Authentik and reapplying the mounted blueprint. Any
+and direct login after restarting Authentik and reapplying the mounted blueprint.
+The restart check deliberately restores a username field while the worker is
+stopped, then verifies the blueprint removes it again without first-run. Any
 failed check exits nonzero. The VM is deleted on success or failure. For diagnosis,
 `--keep-vm` keeps it and its `~/sso-e2e/logs`; `--reuse --keep-vm` reruns in a VM
 previously created by this harness. Delete it afterwards with
@@ -258,7 +272,9 @@ into Authentik or prove OIDC protocol behavior. Before release, on a clean Lima 
    existing smoke tests. Then repeat on a second clean install with real client
    credentials and HTTPS ingress. Confirm blueprint status is successful on the
    pinned Authentik image (2026.8.4), including model/field names and discovery.
-2. Confirm the login page offers only inhouse.technology. Complete a real
+2. Open a protected app in a fresh browser session and confirm Authentik redirects
+   straight to inhouse.technology, with no username/password form, source chooser
+   or recovery link. Complete a real
    authorization-code login with the exact callback above; verify first login
    needs no local password or manual enrollment and maps username, email and name.
 3. Log in twice as the same `sub`, then change its email upstream and log in again:
@@ -274,7 +290,7 @@ into Authentik or prove OIDC protocol behavior. Before release, on a clean Lima 
    fails. Verify normal login cannot authenticate a local user by direct POST.
 6. Repeat first-run, restart/recreate both Authentik containers and restart the VM:
    no duplicate sources/users/flows, secret retained, blueprint reapplied, login
-   still source-only and recovery still works. Exercise worker import delay and
+   still redirects directly and recovery still works. Exercise worker import delay and
    failed blueprint import; first-run must not hide local login on failure.
 7. Verify invalid issuer, audience, signature, expired token, missing `sub`, and
    unapproved company/client access are rejected by the OIDC source/provider.
