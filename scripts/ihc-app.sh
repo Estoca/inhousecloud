@@ -1089,6 +1089,8 @@ print("%s\t%s\t%s"%(a.get("kind","app"),a.get("repository","")," ".join(a.get("r
   case "$API_CODE" in 204|404) ok "Gitea repository $org/$SLUG deleted" ;; *) left="$left gitea:$org/$SLUG" ;; esac
   rm -f "$(journal_file)" 2>/dev/null || true
   [ -e "$(journal_file)" ] && left="$left journal:$(journal_file)"
+  $PY "$IHC_LIB/secretsproxy.py" remove "$INSTALL_DIR" "$SLUG" 2>/dev/null && ok "secrets proxy caller $SLUG removed" \
+    || left="$left secrets-proxy:callers/$SLUG.json"
   for d in "$INSTALL_DIR/apps/$SLUG" "$INSTALL_DIR/app-data/$SLUG" "$DEPLOYS/$SLUG"; do
     rm -rf "$d" 2>/dev/null || docker run --rm -v "$(dirname "$d"):/parent" --entrypoint rm "$POSTGRES_IMAGE" -rf "/parent/$SLUG" >/dev/null 2>&1 || true
     [ -e "$d" ] && left="$left dir:$d"

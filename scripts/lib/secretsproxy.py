@@ -79,12 +79,24 @@ def provision(install_dir, slug, manifest, app_env):
     envfile.write(app_env, lines)
 
 
+def remove(install_dir, slug):
+    # ihc-app remove drops the app's env file; a caller record left behind would fail closed
+    # on the next provision of the same slug (no token to match), so they go together.
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,62}[a-z0-9]', slug) or slug == 'agent':
+        raise ValueError('invalid caller slug')
+    path = os.path.join(install_dir, 'secrets-proxy', 'callers', slug + '.json')
+    if os.path.exists(path):
+        os.unlink(path)
+
+
 if __name__ == '__main__':
     try:
         if len(sys.argv) == 2:
             initialize(sys.argv[1])
         elif len(sys.argv) == 4 and sys.argv[1] == 'agent':
             provision(sys.argv[2], 'agent', None, sys.argv[3])
+        elif len(sys.argv) == 4 and sys.argv[1] == 'remove':
+            remove(sys.argv[2], sys.argv[3])
         else:
             provision(*sys.argv[1:])
     except Exception:
