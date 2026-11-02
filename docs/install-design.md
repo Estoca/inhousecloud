@@ -130,6 +130,13 @@ and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs
 It does not infer HTTPS from the local HTTP hop or accept arbitrary forwarded
 scheme headers. Authentik therefore advertises `https://auth.<BASE_DOMAIN>` issuers,
 endpoints and source callbacks. See [Authentik's required proxy headers](https://docs.goauthentik.io/install-config/reverse-proxy/).
+Provider assignment to the embedded outpost is asynchronous. First-run sends the
+outpost's supported `SIGUSR1` refresh after configuring providers/routes, then waits
+for the protected portal redirect. This avoids treating a not-yet-loaded provider
+(the auth subrequest falls through to core with 404, surfaced by nginx as 500) as a
+working sign-in. It does not bypass forward auth or restart the identity service.
+The refresh handler is implemented in [Authentik 2026.8.4's outpost event loop](https://github.com/goauthentik/authentik/blob/version/2026.8.4/src/outpost/event.rs).
+
 The portal directory and MCP JWKS/userinfo checks already use explicit internal
 service URLs; their configured issuer and browser-facing endpoints stay public
 HTTPS. Provisioned apps also use the internal MCP service for actor-JWT JWKS;

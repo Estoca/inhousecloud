@@ -392,6 +392,7 @@ PORTAL_API_FP="$(sha_fp "$(env_get IHC_PORTAL_API_TOKEN)")"
 
 # ============================================================ Protected route
 step "Protected route"
+refresh_embedded_outpost || die "could not refresh the embedded outpost before the protected route check"
 t0=$(date +%s)
 while :; do
   loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /)" 2>/dev/null || echo 000)"

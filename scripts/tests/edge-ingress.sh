@@ -116,3 +116,11 @@ for mode in ('off', 'internal', 'acme', 'edge'):
     assert c_login(box).status == 'warn', mode
 print('[ok] doctor validates the public issuer in every TLS mode')
 DOCTOR
+
+# First boot must request a provider refresh and propagate a delivery failure.
+dc() { printf '%s\n' "$*" > "$WORK/signal"; return "${SIGNAL_RESULT:-0}"; }
+refresh_embedded_outpost
+[ "$(cat "$WORK/signal")" = 'kill -s USR1 authentik-server' ]
+SIGNAL_RESULT=1
+if refresh_embedded_outpost; then echo '[xx] outpost refresh failure ignored'; exit 1; fi
+echo '[ok] embedded outpost provider refresh signal and failure propagation'

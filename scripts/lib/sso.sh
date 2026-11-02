@@ -97,6 +97,13 @@ print(json.dumps({"providers":prov,"config":cfg}))' "$1" "$AUTHENTIK_BASE_URL")"
   printf '%s' "$pk"
 }
 
+# Provider updates normally arrive over the worker/websocket path. On first boot
+# that path may still be importing blueprints; force the embedded outpost's supported
+# refresh so the newly assigned providers are loaded before probing protected routes.
+refresh_embedded_outpost() {
+  dc kill -s USR1 authentik-server >/dev/null
+}
+
 ensure_binding() { # APP_PK GROUP_PK LABEL
   api GET "$AK/policies/bindings/?target=$1"
   api_ok || die "list bindings: HTTP $API_CODE"
