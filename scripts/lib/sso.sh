@@ -97,6 +97,13 @@ print(json.dumps({"providers":prov,"config":cfg}))' "$1" "$AUTHENTIK_BASE_URL")"
   printf '%s' "$pk"
 }
 
+# Provider updates normally arrive over the worker/websocket path. On first boot
+# that path may still be importing blueprints; force the embedded outpost's supported
+# refresh so the newly assigned providers are loaded before probing protected routes.
+refresh_embedded_outpost() {
+  dc kill -s USR1 authentik-server >/dev/null
+}
+
 ensure_binding() { # APP_PK GROUP_PK LABEL
   api GET "$AK/policies/bindings/?target=$1"
   api_ok || die "list bindings: HTTP $API_CODE"
@@ -298,7 +305,7 @@ location /outpost.goauthentik.io {
 location @goauthentik_proxy_signin {
     internal;
     add_header Set-Cookie $auth_cookie;
-    return 302 /outpost.goauthentik.io/start?rd=$scheme://$http_host$request_uri;
+    return 302 $scheme://$http_host/outpost.goauthentik.io/start?rd=$scheme://$http_host$request_uri;
 }'
 
 # forward_auth_conf HEALTH_PATH: the advanced config of a protected host, with
@@ -343,15 +350,39 @@ for b in json.load(sys.stdin).get("results",[]):
   ensure_binding "$1" "$2" "$3 <- admins only"
 }
 
+# The edge is the TLS endpoint. Never derive the external scheme from the local
+# HTTP connection or trust a client-supplied forwarded-proto header. A custom
+# location is necessary: NPM's default location owns its forwarded-header policy.
+edge_proxy_conf() {
+  local conf="$1"
+  if [ -z "$conf" ]; then
+    conf='location / {
+    proxy_pass $forward_scheme://$server:$port$request_uri;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Scheme https;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $http_connection;
+}'
+  fi
+  # Protected routes also use the external scheme in outpost return URLs.
+  printf '%s' "$conf" | sed 's/\$scheme/https/g'
+}
+
 ensure_proxy_host() { # HOST FORWARD_HOST FORWARD_PORT ADVANCED_CONFIG
   local host="$1" fhost="$2" fport="$3" adv="$4" id cert="0" ssl=false http2=false meta body existing
   id="$(proxy_host_field "$host" id)"
   meta='{"letsencrypt_agree":false,"dns_challenge":false}'
   case "$TLS_MODE" in
-    internal)
-      # The cloud wildcard certificate (ensure_internal_certificate), HTTPS forced.
+    internal|edge)
+      # The same local wildcard serves internal HTTPS in both modes.
       case "${PROXY_CERTIFICATE_ID:-0}" in ""|0) die "tls internal: no certificate on the proxy yet (PROXY_CERTIFICATE_ID in .env); run scripts/first-run.sh" ;; esac
-      ssl=true; http2=true; cert="$PROXY_CERTIFICATE_ID" ;;
+      http2=true; cert="$PROXY_CERTIFICATE_ID"
+      if [ "$TLS_MODE" = edge ]; then adv="$(edge_proxy_conf "$adv")"
+      else ssl=true; fi ;;
     acme)
       ssl=true; http2=true; cert='"new"'
       meta="$(jsonq build letsencrypt_email="$PROXY_ADMIN_EMAIL" letsencrypt_agree:=true dns_challenge:=false)"

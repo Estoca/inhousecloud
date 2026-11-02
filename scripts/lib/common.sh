@@ -77,8 +77,11 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 urlenc() { $PY -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
 
-# Hosts the box itself may not resolve (local ingress on a Mac): curl_resolve prints the
-# --resolve argument that pins URL's host to the proxy on 127.0.0.1.
+# Internal and edge modes serve local-CA HTTPS on the proxy. Edge browsers still
+# use Cloudflare's public certificate; box/container calls stay on the local path.
+uses_internal_tls() { case "${TLS_MODE:-off}" in internal|edge) return 0 ;; *) return 1 ;; esac; }
+
+# Pin host-side checks to the local proxy, preserving public Host and TLS SNI.
 curl_resolve() { # URL
   local host port
   host="${1#*://}"; host="${host%%/*}"; host="${host%%:*}"
@@ -88,20 +91,20 @@ curl_resolve() { # URL
 
 # proxy_url HOST PATH and proxy_args HOST: how a check on the box reaches a public name
 # through the proxy. TLS off: plain HTTP to PROXY (the proxy's port) with a Host header.
-# TLS internal: https://HOST pinned to PROXY_PIN (127.0.0.1 on the box, the proxy's
+# TLS internal/edge: https://HOST pinned to PROXY_PIN (127.0.0.1 on the box, the proxy's
 # address inside a deploy job) and verified against the cloud CA, never with -k.
 # proxy_args prints space-separated curl arguments, none of which contains a space.
 proxy_url() {
-  if [ "${TLS_MODE:-off}" = internal ]; then printf 'https://%s%s' "$1" "$2"
+  if uses_internal_tls; then printf 'https://%s%s' "$1" "$2"
   else printf '%s%s' "${PROXY:-http://127.0.0.1:${PROXY_HTTP_PORT:-80}}" "$2"; fi
 }
 proxy_args() {
-  if [ "${TLS_MODE:-off}" = internal ]; then
+  if uses_internal_tls; then
     printf -- '--resolve %s:%s:%s --cacert %s/local/ca/ca.crt' "$1" "${PROXY_TLS_PORT:-${PROXY_HTTPS_PORT:-443}}" "${PROXY_PIN:-127.0.0.1}" "$INSTALL_DIR"
   else printf -- '-HHost:%s' "$1"; fi
 }
-# ca_args: --cacert for a URL by its public name when TLS is internal, nothing otherwise.
-ca_args() { if [ "${TLS_MODE:-off}" = internal ]; then printf -- '--cacert %s/local/ca/ca.crt' "$INSTALL_DIR"; fi; }
+# ca_args: local CA for internal/edge URLs pinned to the proxy.
+ca_args() { if uses_internal_tls; then printf -- '--cacert %s/local/ca/ca.crt' "$INSTALL_DIR"; fi; }
 
 # load_env: export every variable of the install's .env into this shell.
 load_env() {

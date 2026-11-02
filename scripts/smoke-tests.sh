@@ -124,8 +124,11 @@ case "$1" in *sername*) printf "%s\n" "$GITEA_ADMIN_USERNAME" ;; *) printf "%s\n
 head_ref=""; where=""
 if have git && $PY -c 'import socket,sys;socket.gethostbyname(sys.argv[1])' "$GITEA_HOST" 2>/dev/null; then
   ap="$(mktemp "${TMPDIR:-/tmp}/ihc-askpass.XXXXXX")"; printf '%s\n' "$ASKPASS_SRC" > "$ap"; chmod 700 "$ap"
-  [ "$TLS_MODE" = internal ] && export GIT_SSL_CAINFO="$INSTALL_DIR/local/ca/ca.crt"
-  head_ref="$(GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
+  if uses_internal_tls; then
+    head_ref="$(GIT_SSL_CAINFO="$INSTALL_DIR/local/ca/ca.crt" GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git -c "http.curloptResolve=$GITEA_HOST:$PROXY_HTTPS_PORT:127.0.0.1" ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
+  else
+    head_ref="$(GIT_ASKPASS="$ap" GIT_TERMINAL_PROMPT=0 git ls-remote "$GITEA_SMOKE_REPOSITORY" HEAD 2>/dev/null | awk '{print $2}' | head -n 1)"
+  fi
   rm -f "$ap"; where="from the host, ${GITEA_SMOKE_REPOSITORY#*://}"
 else
   internal="http://127.0.0.1:3000/${GITEA_SMOKE_REPOSITORY#"$GITEA_BASE_URL"/}"
@@ -592,8 +595,8 @@ PY
   garage_app_bucket smoke-s3-a "$a" "$SCHEME_URL://$host" 2>/dev/null; id2="$(envfile get "$a" S3_ACCESS_KEY_ID)"
   [ -n "$id1" ] && [ "$id1" = "$id2" ] && [ "$GARAGE_RESULT" = kept ] || bad="$bad second-provision:$GARAGE_RESULT"
   garage_app_bucket smoke-s3-b "$b" "$SCHEME_URL://$host" 2>/dev/null || { result 19 object-storage fail "provision of smoke-s3-b failed"; return; }
-  s3() { ( set -a; . "$a"; set +a; IHC_CA_FILE="$( [ "$TLS_MODE" = internal ] && echo "$INSTALL_DIR/local/ca/ca.crt")" $PY "$IHC_LIB/s3.py" "$@" ); }
-  local S3URL="$PROXY"; [ "$TLS_MODE" = internal ] && S3URL="https://127.0.0.1:${PROXY_HTTPS_PORT}"
+  s3() { ( set -a; . "$a"; set +a; IHC_CA_FILE="$( uses_internal_tls && echo "$INSTALL_DIR/local/ca/ca.crt")" $PY "$IHC_LIB/s3.py" "$@" ); }
+  local S3URL="$PROXY"; uses_internal_tls && S3URL="https://127.0.0.1:${PROXY_HTTPS_PORT}"
   want="smoke 19 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   code="$(printf '%s' "$want" | s3 put "$S3URL" "$host" app-smoke-s3-a smoke.txt)"
   [ "$code" = 200 ] || bad="$bad put-own=$code"

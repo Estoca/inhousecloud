@@ -208,10 +208,10 @@ class Box:
         return self.containers.get((project or self.project, service))
 
     # HTTP through the proxy, the way smoke tests reach a public name from the box:
-    # TLS off, plain HTTP to the proxy's port with a Host header; TLS internal, https://NAME
+    # TLS off, plain HTTP to the proxy's port with a Host header; internal/edge, https://NAME
     # pinned to 127.0.0.1 and verified against the cloud CA (never -k).
     def proxy(self, host, path="/", headers=()):
-        if self.tls == "internal":
+        if self.tls in ("internal", "edge"):
             url = "https://%s%s" % (host, path)
             args = ["--resolve", "%s:%s:127.0.0.1" % (host, self.https_port), "--cacert", self.ca]
         else:
@@ -468,7 +468,7 @@ def c_routes(box, hosts, err):
             wrong.append((name, kind, "%s is disabled" % name))
         elif h.get("forward_host") != upstream:
             wrong.append((name, kind, "%s goes to %s, not %s" % (name, h.get("forward_host"), upstream)))
-        elif box.tls == "internal" and str(h.get("certificate_id") or "") != box.env.get("PROXY_CERTIFICATE_ID", ""):
+        elif box.tls in ("internal", "edge") and str(h.get("certificate_id") or "") != box.env.get("PROXY_CERTIFICATE_ID", ""):
             wrong.append((name, kind, "%s has no HTTPS certificate of the cloud" % name))
     def fix(n, kind):
         if kind == "app":
@@ -617,7 +617,7 @@ def c_login(box):
     if not to_sso(code, loc, box):
         return c.fail("the outpost does not send an anonymous visitor of the portal to the sign-in (got %s)" % code,
                       "check the embedded outpost and the portal's provider", "route-and-provider")
-    issuer = "https://" if box.tls == "internal" else "http://"
+    issuer = "http://" if box.tls == "off" else "https://"
     issuer += box.auth_host + "/application/o/gitea/"
     code, _, body = box.proxy(box.auth_host, "/application/o/gitea/.well-known/openid-configuration")
     try:

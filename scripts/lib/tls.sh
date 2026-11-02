@@ -1,4 +1,4 @@
-# Internal TLS (TLS_MODE=internal): a CA of the installation's own and one wildcard
+# Local TLS (TLS_MODE=internal or edge): a CA of the installation's own and one wildcard
 # certificate for *.BASE_DOMAIN, in <install-dir>/local/ca/. bash 3.2. Sourced, never
 # executed. The caller sources common.sh first.
 #

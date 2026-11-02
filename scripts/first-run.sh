@@ -228,9 +228,9 @@ done
 # ==================================================================== Proxy
 step "Proxy routes"
 npm_login
-# TLS internal: the wildcard certificate from <install-dir>/local/ca goes up first; every
-# host below is created with it and HTTPS forced.
-if [ "$TLS_MODE" = internal ]; then
+# Local TLS in internal/edge mode: upload the wildcard before creating routes.
+# Only internal mode forces HTTPS; edge keeps tunnel HTTP free of redirects.
+if uses_internal_tls; then
   [ -s "$INSTALL_DIR/local/ca/wildcard.crt" ] || die "tls internal: $INSTALL_DIR/local/ca/wildcard.crt missing; run install.sh --apply --from foundation"
   PROXY_CERTIFICATE_ID="$(ensure_internal_certificate "$INSTALL_DIR/local/ca/wildcard.crt" "$INSTALL_DIR/local/ca/wildcard.key")"
   [ "$(env_get PROXY_CERTIFICATE_ID)" = "$PROXY_CERTIFICATE_ID" ] || env_set PROXY_CERTIFICATE_ID "$PROXY_CERTIFICATE_ID"
@@ -353,17 +353,16 @@ else ok "read-only API token valid"; fi
 api_init gt "Authorization: token $TOKEN"
 
 if [ "$GITEA_OIDC_ENABLED" = true ]; then
-  # Gitea fetches the discovery document when the source is added, so the auth route
-  # must already answer by its public name from inside the container. Probed with
-  # busybox wget: curl resolves every *.localhost name to loopback by itself and would
-  # never reach the proxy alias. With TLS internal, curl checks the certificate against
-  # the cloud CA mounted at /etc/ihc-ca (Gitea itself trusts it through SSL_CERT_DIR).
-  if [ "$TLS_MODE" = internal ]; then
+  # Discovery and subsequent Go token/userinfo requests keep the public HTTPS
+  # issuer, resolve to the proxy and verify its local CA in internal/edge mode.
+  # curl verifies explicitly; Gitea's Go runtime uses SSL_CERT_DIR.
+  if uses_internal_tls; then
     disc="$(docker exec -i "$GITEA_CID" curl -fsS --max-time 20 --cacert /etc/ihc-ca/ca.crt "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   else
     disc="$(docker exec -i "$GITEA_CID" wget -qO- -T 20 "$OIDC_DISCOVERY" 2>/dev/null | jsonq get issuer)"
   fi
-  [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container"
+  [ -n "$disc" ] || die "Gitea cannot fetch $OIDC_DISCOVERY from inside its container (tls=$TLS_MODE; check DNS, TLS and edge client filtering)"
+  [ "$disc" = "${AUTHENTIK_BASE_URL}/application/o/gitea/" ] || die "OIDC issuer mismatch: got $disc, expected ${AUTHENTIK_BASE_URL}/application/o/gitea/ (check proxy Host and X-Forwarded-Proto)"
   ok "OIDC discovery reachable from Gitea (issuer $disc)"
   SRC_ID="$(gitea_cli admin auth list 2>/dev/null | awk -F'\t' -v n="$GITEA_OIDC_SOURCE_NAME" 'NR>1 && $2==n {print $1}' | head -n 1)"
   if [ -z "$SRC_ID" ]; then
@@ -390,6 +389,7 @@ PORTAL_API_FP="$(sha_fp "$(env_get IHC_PORTAL_API_TOKEN)")"
 
 # ============================================================ Protected route
 step "Protected route"
+refresh_embedded_outpost || die "could not refresh the embedded outpost before the protected route check"
 t0=$(date +%s)
 while :; do
   loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 $(proxy_args "$PORTAL_HOST") "$(proxy_url "$PORTAL_HOST" /)" 2>/dev/null || echo 000)"
@@ -397,6 +397,17 @@ while :; do
   [ $(( $(date +%s) - t0 )) -ge 90 ] && die "portal route is not protected: got '$loc' (wanted 302 to the outpost)"
   sleep 3
 done
+# The tunnel reaches port 80. A relative nginx return would become an absolute
+# HTTP Location on that hop even though its rd parameter and upstream headers say
+# HTTPS. Check the actual origin transport as well as the local TLS path above.
+if [ "$TLS_MODE" = edge ]; then
+  loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 15 -H "Host: $PORTAL_HOST" "http://127.0.0.1:${PROXY_HTTP_PORT}/" 2>/dev/null || echo 000)"
+  case "$loc" in
+    "302 https://$PORTAL_HOST/outpost.goauthentik.io/"*) ;;
+    *) die "edge HTTP origin sign-in redirects incorrectly: got '$loc' (wanted HTTPS outpost URL)" ;;
+  esac
+  ok "edge HTTP origin redirects sign-in to HTTPS"
+fi
 ok "portal route redirects anonymous requests to the outpost"
 [ "$HAVE_STATE" = true ] && state stage first_run set probe "$(jsonq build gitea_oidc_source="$GITEA_OIDC_SOURCE_NAME" callback="$GITEA_CALLBACK" discovery="$OIDC_DISCOVERY" portal_protected:=true first_login=pending portal_api_token_env=IHC_PORTAL_API_TOKEN portal_api_token_fingerprint="$PORTAL_API_FP" mcp_url="$MCP_URL/mcp" mcp_oauth_client_id="$MCP_CLIENT_ID")"
 ok "first-run complete"

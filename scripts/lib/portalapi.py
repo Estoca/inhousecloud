@@ -86,7 +86,7 @@ def target(env, install_dir):
     base = env.get("PORTAL_BASE_URL", "").rstrip("/")
     host = host_of(base) or "portal." + env.get("BASE_DOMAIN", "cloud.localhost")
     public = (base or "http://" + host) + PATH
-    if env.get("TLS_MODE", "off") == "internal":
+    if env.get("TLS_MODE", "off") in ("internal", "edge"):
         port = env.get("PROXY_HTTPS_PORT", "443")
         args = ["--resolve", "%s:%s:127.0.0.1" % (host, port), "--cacert", os.path.join(install_dir, "local/ca/ca.crt")]
         return "https://%s%s" % (host, PATH), args, public

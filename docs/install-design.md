@@ -106,6 +106,50 @@ Refused: `local` with any tunnel; `private` without Tailscale; `public` with `TL
 
 For a company of about thirty people the recommended mode is `private`: a private domain with split DNS over Tailscale, not MagicDNS as the app URL. MagicDNS is fine for administering the machine; a private domain keeps `BASE_DOMAIN`, wildcard routing, stable per-app URLs and a single proxy.
 
+### Public ingress with edge TLS
+
+With `public / edge / cloudflared`, TLS exists on two paths. Browsers reach
+Cloudflare and validate its public ACM certificate. The tunnel still forwards
+`*.<BASE_DOMAIN>` to `http://127.0.0.1:80`; port 80 serves routes without forcing
+an HTTPS redirect. Inside the box, public platform names resolve to the proxy's
+Docker aliases. NPM also serves those hosts on 443 using the installation's
+name-constrained CA and wildcard certificate (`local/ca`, shared with internal
+mode). Foundation generates or renews the CA certificate before starting the
+containers.
+
+Gitea uses the same `https://auth.<BASE_DOMAIN>` discovery, issuer, token and
+userinfo endpoints as browsers. Its Go runtime trusts the CA through
+`SSL_CERT_DIR`; portal/MCP Node runtimes add it with `NODE_EXTRA_CA_CERTS`. Only
+the public CA certificate is mounted into containers. The embedded outpost uses
+Authentik's local socket/service transport for its control plane. Box-side curl,
+Git and S3 probes pin names locally and verify the CA explicitly. Browser devices
+do not install this CA for edge mode. External federation uses normal public
+trust roots. Internal identity traffic stays on the Docker network. First-run
+verifies the exact public issuer and source creation exercises Gitea's Go
+discovery client.
+
+The proxy keeps the original Host and explicitly sends `X-Forwarded-Proto: https`
+and `X-Forwarded-Scheme: https` in edge mode, including forward-auth return URLs.
+It does not infer HTTPS from the local HTTP hop or accept arbitrary forwarded
+scheme headers. Sign-in redirects use an explicit HTTPS destination: a relative
+nginx `return 302 /outpost...` would become HTTP when the tunnel reaches port 80.
+First-run probes that HTTP origin separately and requires an HTTPS Location.
+Authentik therefore advertises `https://auth.<BASE_DOMAIN>` issuers,
+endpoints and source callbacks. See [Authentik's required proxy headers](https://docs.goauthentik.io/install-config/reverse-proxy/).
+Provider assignment to the embedded outpost is asynchronous. First-run sends the
+outpost's supported `SIGUSR1` refresh after configuring providers/routes, then waits
+for the protected portal redirect. This avoids treating a not-yet-loaded provider
+(the auth subrequest falls through to core with 404, surfaced by nginx as 500) as a
+working sign-in. It does not bypass forward auth or restart the identity service.
+The refresh handler is implemented in [Authentik 2026.8.4's outpost event loop](https://github.com/goauthentik/authentik/blob/version/2026.8.4/src/outpost/event.rs).
+
+The portal directory and MCP JWKS/userinfo checks already use explicit internal
+service URLs; their configured issuer and browser-facing endpoints stay public
+HTTPS. Provisioned apps also use the internal MCP service for actor-JWT JWKS;
+the public MCP name also aliases the proxy and uses local TLS. Apps needing other
+public HTTPS names must use the installation CA and the corresponding local DNS
+alias, or use their explicit service URLs.
+
 ### Private ingress (`private` / `internal` / `tailscale`)
 
 Built and tested end to end ([`first-run.md`](first-run.md#private-ingress-run)). Every app is `https://<slug>.<BASE_DOMAIN>`, no port, on the tailnet only, with a certificate browsers accept once the cloud CA is installed.

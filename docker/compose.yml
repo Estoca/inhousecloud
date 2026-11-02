@@ -52,11 +52,12 @@ services:
     networks:
       ihc:
         aliases:
-          # Containers resolve the public hostnames to the proxy, so Gitea can
-          # fetch Authentik's OIDC discovery document by its public URL.
+          # Public names resolve locally; internal/edge modes serve local-CA TLS.
           - ${PORTAL_HOST}
           - ${AUTHENTIK_HOST}
           - ${GITEA_HOST}
+          - mcp.${BASE_DOMAIN}
+          - s3.${BASE_DOMAIN}
       ops: {}
     healthcheck:
       test: ["CMD", "/usr/bin/check-health"]
@@ -97,6 +98,7 @@ services:
       IHT_DISCOVERY_URL: ${IHT_DISCOVERY_URL:-}
       IHT_ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
       IHT_USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/ihc-ca
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
       AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
@@ -112,6 +114,7 @@ services:
       # Loopback only: the installer's control-plane path. Users go through the proxy.
       - "127.0.0.1:${AUTHENTIK_LOCAL_PORT}:9000"
     volumes:
+      - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - authentik-media:/media
       - authentik-templates:/templates
       - ./authentik/blueprints:/blueprints/custom:ro
@@ -137,6 +140,7 @@ services:
       IHT_DISCOVERY_URL: ${IHT_DISCOVERY_URL:-}
       IHT_ADMIN_GROUP: ${AUTHENTIK_PORTAL_GROUP:-ihc-admins}
       IHT_USER_GROUP: ${AUTHENTIK_APP_GROUP:-ihc-users}
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/ihc-ca
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
       AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
       AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
@@ -149,6 +153,7 @@ services:
       AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
       AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
     volumes:
+      - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - authentik-media:/media
       - authentik-templates:/templates
       - ./authentik/blueprints:/blueprints/custom:ro
@@ -233,9 +238,9 @@ services:
       GITEA__actions__ENABLED: ${GITEA_ENABLE_ACTIONS}
       GITEA__mailer__ENABLED: "false"
       GITEA__log__LEVEL: Info
-      # TLS internal: Go reads every file of these directories as trusted roots, so Gitea
+      # TLS internal/edge: Go reads these directories as trusted roots, so Gitea
       # trusts the cloud CA when it talks to https://auth.<BASE_DOMAIN> (OIDC). The file is
-      # empty when TLS is not internal.
+      # empty in off/acme mode.
       SSL_CERT_DIR: /etc/ssl/certs:/etc/ihc-ca
     ports:
       - "${BIND_ADDRESS}:${GITEA_SSH_PORT}:22"
@@ -310,6 +315,7 @@ services:
       GITEA_PUBLIC_URL: ${GITEA_BASE_URL}
       GITEA_ORG: ${GITEA_ORGANIZATION}
       GITEA_TOKEN: ${GITEA_READONLY_TOKEN:-}
+      NODE_EXTRA_CA_CERTS: /etc/ihc-ca/ca.crt
       AUTHENTIK_URL: ${AUTHENTIK_BASE_URL}
       AUTHENTIK_HOST: ${AUTHENTIK_HOST}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
@@ -321,6 +327,7 @@ services:
       BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
       TIMEZONE: ${BACKUP_TZ:-UTC}
     volumes:
+      - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - ./catalog:/ihc/catalog:ro
       - ${PORTAL_BACKUP_REPORTS_DIR:-./backups/reports}:/ihc/backup-reports:ro
     networks: [ihc, docker]
@@ -381,12 +388,14 @@ services:
       PORTAL_INTERNAL_URL: http://portal:8080
       IHC_PORTAL_API_TOKEN: ${IHC_PORTAL_API_TOKEN:-}
       IHC_PROXY_URL: http://proxy:80
+      NODE_EXTRA_CA_CERTS: /etc/ihc-ca/ca.crt
       AUTHENTIK_URL: ${AUTHENTIK_BASE_URL}
       AUTHENTIK_HOST: ${AUTHENTIK_HOST}
       AUTHENTIK_INTERNAL_URL: http://authentik-server:9000
       AUTHENTIK_PORTAL_TOKEN: ${AUTHENTIK_PORTAL_TOKEN:-}
       MCP_AUDIT_DATABASE_URL: postgres://${MCP_AUDIT_DB_ROLE:-ihc_mcp_audit}:${MCP_AUDIT_DB_PASSWORD:-}@postgres:5432/${PORTAL_DB_NAME:-ihc_platform}
     volumes:
+      - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - ./catalog:/ihc/catalog:ro
       - mcp-keys:/ihc/mcp-keys
     networks: [ihc]
