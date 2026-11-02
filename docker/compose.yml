@@ -750,6 +750,30 @@ services:
       retries: 3
       start_period: 10s
 
+  # Machine-local credentials; no published port, ingress route, socket or install mount.
+  secrets-proxy:
+    profiles: ["agent"]
+    image: ${COMPOSE_PROJECT_NAME:-ihc}-portal:local
+    command: ["node", "src/secrets-proxy.js"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "80"
+    # Host-owned 0600 files: same installer uid (root under rootless Docker).
+    user: ${AGENT_USER:-1000:1000}
+    restart: unless-stopped
+    logging: *default-logging
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./secrets-proxy:/ihc/secrets-proxy:ro
+    networks: [ihc]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ----------------------------------------------------------------- agent
   # The operator agent (docs/operator-contract.md, docs/security.md), off unless the
   # `agent` profile is on. Reference implementation: OpenClaw. It reads the Docker API
@@ -769,6 +793,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     depends_on:
+      secrets-proxy:
+        condition: service_healthy
       docker-ro:
         condition: service_healthy
     environment:
@@ -791,6 +817,8 @@ services:
       GITEA_READONLY_TOKEN: ${GITEA_READONLY_TOKEN:-}
       AGENT_GITEA_TOKEN: ${AGENT_GITEA_TOKEN:-}
       IHC_DOCKER_API: http://agent-docker-proxy:2375
+      IHC_SECRETS_PROXY_URL: http://secrets-proxy
+      IHC_SECRETS_PROXY_TOKEN: ${IHC_SECRETS_PROXY_TOKEN:-}
       IHC_AGENT_ALLOW_WRITE: ${AGENT_ALLOW_WRITE:-false}
       IHC_GITEA_URL: http://gitea:3000
       IHC_BACKUP_REPORTS: /ihc/backup-reports

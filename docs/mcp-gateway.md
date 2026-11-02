@@ -180,7 +180,7 @@ Inside the service (compose, not `.env`): `MCP_TOOLS_LIST_TIMEOUT_MS` 10000, `MC
 - Health: `GET https://mcp.<BASE_DOMAIN>/health` (`ok`, commit, the actor key's `kid`); the portal's platform status lists "Gateway MCP"; `ihc doctor` checks the container and the route.
 - Logs: `docker compose … logs mcp` has one line per refused sign-in (reason, never the token), per failed provider list (`<slug> provider_timeout`, `serving the last good catalog`) and per tool call (`<tool> by <email>: ok | <code>`, `confirmed by <email>` on a write, `refused <code>` for a refused write, and a `mcp audit:` line when an audit insert fails).
 - Smoke test 25 ([`smoke-tests.md`](smoke-tests.md)) proves the whole path on every install.
-- What is not here yet (later layers): dynamic client registration, a page for the audit log in the portal's UI (the API and the MCP tool exist), grants per tool set by an admin outside the app's manifest, and a credential proxy so apps never hold third-party keys.
+- What is not here yet (later layers): dynamic client registration, a page for the audit log in the portal's UI (the API and the MCP tool exist), grants per tool set by an admin outside the app's manifest. The agent profile now has a separate [credential proxy](app-contract.md#external-apis-through-the-credential-proxy) for outbound REST calls; it does not add MCP tools or routes.
 
 
 ## Via inhouse.technology

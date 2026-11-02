@@ -105,7 +105,7 @@ An InHouseCloud box hands its operator the context the first box's operator had 
 4. **The runbooks**, [`docs/runbooks/`](runbooks/): one file per operation, read mode first, literal commands, post-checks, the level of autonomy.
 5. **The doctor**, `scripts/ihc-doctor.sh` (section 3): the first answer to "is it on the air", with the action for each failure. In the agent profile, `ihc-ro doctor` and the host's last report in `reference/doctor.json`.
 6. **The change policy**: section 2 of this document and [`security.md`](security.md).
-7. **Least-privilege credentials, injected, not pasted.** In the agent profile: Gitea's read-only token, the read-only Docker API, its own LLM key and chat tokens, which a human writes into `.env`. A token pasted into a chat is exposed: rotate it, do not adopt it.
+7. **Least-privilege credentials, injected, not pasted.** In the agent profile: Gitea's read-only token, the read-only Docker API, its own deny-by-default credential-proxy identity ([policy](app-contract.md#external-apis-through-the-credential-proxy)), its own LLM key and chat tokens, which a human writes into `.env`. A token pasted into a chat is exposed: rotate it, do not adopt it.
 
 ## 5. What the operator never receives
 

@@ -22,6 +22,7 @@ import json, os, re, shlex, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config  # noqa: E402  (the installer's YAML reader: PyYAML when present)
+from secretsproxy import policy_errors
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 # Names an app may not take: the compose services of the cloud (an app's network
@@ -29,7 +30,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 RESERVED = {
     "proxy", "authentik-postgres", "authentik-server", "authentik-worker", "postgres",
     "redis", "gitea", "portal", "garage", "gitea-runner", "portainer", "glances", "wetty",
-    "filebrowser", "terminal", "files", "gitea-deployer",
+    "secrets-proxy", "agent", "docker-ro", "filebrowser", "terminal", "files", "gitea-deployer",
     "cloudflared", "tailscale", "backup", "auth", "git", "s3", "s3-console", "ihc",
     "authentik", "www", "api", "admin", "localhost", "ihc-smoke", "mcp",
 }
@@ -199,6 +200,7 @@ def cmd_vars(path, expected, manifest=None):
                    "redis" if name in INFRA["redis"] else "s3" if name in ("minio", "garage", "seaweedfs", "s3", "object_storage") else None
             if kind and isinstance(dep, dict) and dep.get("shared") is False:
                 errors.append("dependencies.%s.shared is false: %s" % (name, ALTERNATIVE[kind]))
+    errors.extend(policy_errors(m.get("secrets_proxy", {})))
     mcp_errors(get(m, "mcp") if get(m, "mcp") is not None else get(m, "agent_interface.mcp"), slug, errors)
     if get(m, "infrastructure.exception"):
         errors.append("infrastructure.exception is not supported by the executor yet: an app that needs "

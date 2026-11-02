@@ -588,6 +588,8 @@ except Exception: print("")' "$INVENTORY" "$SLUG")"
   [ "$M_REDIS" = true ] && ensure_app_redis
   [ "$M_BUCKET" = true ] && ensure_app_bucket
   env_example_defaults "$mdir/$M_ENV_EXAMPLE"
+  # Always reconcile: removing the manifest section revokes every service grant.
+  $PY "$IHC_LIB/secretsproxy.py" "$INSTALL_DIR" "$SLUG" "$MANIFEST" "$APP_ENV" || die "secrets proxy caller registration failed"
   chmod 600 "$APP_ENV"
   printf '%s' "$json" | $PY "$IHC_LIB/appmanifest.py" overlay "$SLUG" "$M_SERVICE" "$APP_ENV" "$IHC_NETWORK" "$APP_DATA" > "$APP_DIR/compose.ihc.yml"
   chmod 644 "$APP_DIR/compose.ihc.yml"

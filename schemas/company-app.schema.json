@@ -315,7 +315,60 @@
         }
       },
       "additionalProperties": true
+    },
+    "secrets_proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slack": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "github": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "linear": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "hubspot": {
+          "$ref": "#/$defs/secretsProxyRule"
+        }
+      }
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "$defs": {
+    "secretsProxyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methods",
+        "path_prefixes"
+      ],
+      "properties": {
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS"
+            ]
+          }
+        },
+        "path_prefixes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^/(?!/)(?!\\.{1,2}(?:/|$))(?!.*(/\\.{1,2})(/|$))(?!.*//)[A-Za-z0-9/_~.-]*(?![\\s\\S])"
+          }
+        }
+      }
+    }
+  }
 }

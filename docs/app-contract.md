@@ -98,7 +98,79 @@ checks:
 | `IHC_MCP_ISSUER`, `IHC_MCP_JWKS_URL`, `IHC_MCP_AUDIENCE` | always | the MCP gateway's public URL (the actor JWT's `iss`), `http://mcp:8090/.well-known/jwks.json`, and `mcp.audience` (default `<slug>.mcp`): what the app checks an actor JWT against ([MCP](#mcp)) |
 | keys of `.env.example` | when absent | the example's value; `LOCAL_*` keys are for a laptop and never reach the box |
 
-Passwords and keys are created once and kept: redeploys never change them. To set a value the example cannot hold (an API key of a third party), edit the env file on the box; provision keeps it.
+Passwords and keys are created once and kept: redeploys never change them.
+Third-party API credentials belong in the machine-local credential proxy below,
+never in an app env file, `.env.example`, manifest or repository.
+
+## External APIs through the credential proxy
+
+With the `agent` profile enabled, apps call `http://secrets-proxy/<service>/<path>`
+with `Authorization: Bearer $IHC_SECRETS_PROXY_TOKEN`. Provision writes this unique
+256-bit token and `IHC_SECRETS_PROXY_URL` into the app's private `.env`. It is an
+app identity, never the upstream credential. Tokens stay stable across deploys;
+the proxy stores only their SHA-256 hashes. An absent or empty section grants nothing.
+
+```yaml
+secrets_proxy:
+  github:
+    methods:
+      - GET
+    path_prefixes:
+      - /repos/example/project/issues
+  slack:
+    methods:
+      - POST
+    path_prefixes:
+      - /chat.postMessage
+```
+
+Each service has an explicit list of uppercase HTTP methods and path prefixes.
+Every listed method applies to every prefix for that service; HEAD is separate
+from GET. Prefixes match an exact path or slash-delimited descendants, so
+`/repos/example/project` cannot grant `/repos/example/project-other`. A trailing
+slash grants descendants only; `/` explicitly grants all paths. Percent escapes,
+backslashes, double slashes and dot segments in paths are refused. Queries pass
+through but do not participate in grants or audit. Use block lists for the
+executor's YAML fallback. Removing the section on the next provision immediately
+replaces the old grants with an empty map, even for a running app.
+
+Destinations are fixed in platform code: `slack` → `https://slack.com/api`,
+`github` → `https://api.github.com`, `linear` → `https://api.linear.app`,
+`hubspot` → `https://api.hubapi.com`. The request path is appended to that base;
+callers and manifests cannot choose a host. The proxy uses Bearer authentication,
+except Linear personal API keys, which use the raw Authorization value. No
+redirects are followed. Unknown services return 404, invalid tokens 401, denied
+methods/paths 403, missing or invalid private configuration 503, oversized uploads
+413, timeouts 504, and transport errors, redirects, upstream authentication errors
+or 5xx responses 502. Other upstream 4xx statuses are preserved with generic bodies.
+
+Headers are deliberately minimal: the proxy forwards only the caller's Content-Type
+and its own authentication, Accept, Accept-Encoding and User-Agent headers.
+Responses expose a validated media type only, plus platform no-store/nosniff headers.
+No cookies, auth, Location or upstream error bodies reach callers. Uploads and
+responses are capped at 1 MiB; a 10-second deadline covers the whole call. Literal,
+URL-encoded and base64 credential echoes are refused. This is defense in depth,
+not a guarantee against a malicious upstream transforming its own credential.
+
+An admin edits `<install-dir>/secrets-proxy/credentials.json` **on the box**, using
+an editor or other existing secure secret-management path, never chat or an app
+repository. The file is a JSON map from the four service names to credential strings;
+the installer initializes an empty map with mode `0600`. Its parent and `callers/`
+are `0700`; caller records are `0600`. Only the proxy mounts this directory, read
+only. Replace files atomically within the directory; the proxy reloads them on each
+call. Credentials can be rotated or removed without restarting apps. Keep these
+files protected alongside the install's `.env`, including in backups.
+
+For a custom agent, provision a caller identity through the same protected platform
+path, or let the installer create `callers/agent.json` and `IHC_SECRETS_PROXY_TOKEN`
+in the install `.env` for the built-in agent. The latter starts with no grants;
+an admin may edit its `policy` field using the same service map above, keeping
+`token_hash` unchanged. App policies come from their deployed manifest, overwritten
+by provision; their approvals therefore follow the existing merge-to-main deploy
+trust boundary. A stolen caller token grants that caller's policy until revoked.
+To rotate a caller token, an admin replaces its env value and matching SHA-256 hash
+on the box, then recreates the caller container. Empty its policy to revoke access
+immediately. Do not manually copy upstream credentials into caller environments.
 
 Behind the SSO the signed-in person arrives in the request headers `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups` and `X-authentik-uid`. Access is the users group (`AUTHENTIK_APP_GROUP`, `ihc-users` by default); narrower access is a policy binding in Authentik, by hand for now.
 
