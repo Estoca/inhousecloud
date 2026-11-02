@@ -112,7 +112,9 @@ With `public / edge / cloudflared`, containers resolve public names through publ
 DNS and connect through Cloudflare with normal certificate verification. Foundation
 replaces the proxy's public hostname aliases with private `proxy-*` aliases, also on
 upgrades (`--apply --from foundation`). Other modes keep the public aliases because
-the proxy serves their HTTP or HTTPS endpoints itself.
+the proxy serves their HTTP or HTTPS endpoints itself. The smoke/sign-in probe
+helper also leaves edge HTTPS names unpinned, so host-side checks use Cloudflare
+rather than attempting TLS on loopback.
 
 Gitea uses the same public HTTPS discovery, issuer, token and userinfo endpoints as
 a browser. Rewriting only discovery to internal HTTP would leave token exchange

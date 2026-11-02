@@ -78,8 +78,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 urlenc() { $PY -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
 
 # Hosts the box itself may not resolve (local ingress on a Mac): curl_resolve prints the
-# --resolve argument that pins URL's host to the proxy on 127.0.0.1.
+# --resolve argument that pins URL's host to the proxy on 127.0.0.1. Edge HTTPS
+# must use public DNS: the local proxy has no certificate for these names.
 curl_resolve() { # URL
+  [ "${TLS_MODE:-off}" != edge ] || return 0
   local host port
   host="${1#*://}"; host="${host%%/*}"; host="${host%%:*}"
   case "$1" in https://*) port="${PROXY_HTTPS_PORT:-443}" ;; *) port="${PROXY_HTTP_PORT:-80}" ;; esac

@@ -28,6 +28,12 @@ Path(sys.argv[2]).write_text('\n'.join(lines) + '\n')
 FIXTURE
 for TLS_MODE in off internal acme edge internal edge; do
   configure_proxy_aliases
+  resolved="$(curl_resolve "https://$AUTHENTIK_HOST")"
+  if [ "$TLS_MODE" = edge ]; then
+    [ -z "$resolved" ]
+  else
+    [ "$resolved" = "$(printf -- '--resolve\n%s:443:127.0.0.1' "$AUTHENTIK_HOST")" ]
+  fi
   for service in PORTAL AUTHENTIK GITEA; do
     value="$(env_get "PROXY_${service}_ALIAS")"
     if [ "$TLS_MODE" = edge ]; then
