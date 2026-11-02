@@ -3,6 +3,7 @@
 #
 #   ./install.sh                                  ask the questions, show the plan, apply
 #   ./install.sh --plan [--config FILE]           print what would happen, change nothing
+#   ./install.sh --iht-claim CODE [--iht-issuer URL]  claim login credentials privately
 #   ./install.sh --apply [--config FILE]          apply without the confirmation prompt
 #   ./install.sh --non-interactive --config FILE  for agents and CI: no prompts at all
 #   ./install.sh --apply --from STAGE             resume (re-run) from STAGE
@@ -34,6 +35,7 @@ IHC_ROOT="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_INSTALL_DIR="/opt/inhousecloud"
 MODE=""              # plan | apply
 NON_INTERACTIVE=false
+IHT_CLAIM=""; IHT_CLAIM_ISSUER=""
 CONFIG_ARG=""
 FROM_STAGE=""
 INSTALL_DIR="${IHC_INSTALL_DIR:-}"
@@ -47,6 +49,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --plan) MODE=plan ;;
     --apply) MODE=apply ;;
+    --iht-claim) [ $# -ge 2 ] || die "--iht-claim requires a code"; IHT_CLAIM="$2"; shift ;;
+    --iht-claim=*) IHT_CLAIM="${1#*=}" ;;
+    --iht-issuer) [ $# -ge 2 ] || die "--iht-issuer requires a URL"; IHT_CLAIM_ISSUER="$2"; shift ;;
+    --iht-issuer=*) IHT_CLAIM_ISSUER="${1#*=}" ;;
     --non-interactive) NON_INTERACTIVE=true; [ -z "$MODE" ] && MODE=apply ;;
     --config) CONFIG_ARG="$2"; shift ;;
     --config=*) CONFIG_ARG="${1#*=}" ;;
@@ -1840,6 +1846,13 @@ if [ "$DRY_RUN" = true ]; then
 fi
 # Keep the answers next to the state so a re-run needs no --config.
 [ "$SOURCE_CONFIG" -ef "$CONFIG_FILE" ] || cp "$SOURCE_CONFIG" "$CONFIG_FILE"
+
+if [ -n "$IHT_CLAIM" ]; then
+  iht_claim || exit 1
+  state init --install-dir "$INSTALL_DIR" --config-sha "$CONFIG_SHA" --env-file .env --compose-file compose.yml >/dev/null
+  # Refresh services and asynchronous blueprint import even on a completed install.
+  state reset-from foundation
+fi
 
 for s in secrets foundation authentik shared_data proxy_ingress gitea portal first_run backup optional_profiles smoke_tests handoff; do
   run_stage "$s"

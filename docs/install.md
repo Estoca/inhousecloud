@@ -86,6 +86,38 @@ its identity provider. A self-installed cloud with no `authentik.iht.client_id`
 keeps its existing login. An issuer alone, or a secret alone, does not enable it.
 A client id without a supplied or previously saved secret fails before enabling it.
 
+For the agent flow, add the `https://inhouse.technology/mcp` connector in Claude,
+ask Claude to connect the instance (`iht_connect_instance`, product `ihc`, gateway URL)
+and create its login client with the callback below. Approve the changes, then run
+one of the commands it gives **on the server** within 15 minutes:
+
+```bash
+./install.sh --iht-issuer https://inhouse.technology --iht-claim <code>
+# Existing install / rotation (add --install-dir if using a custom directory):
+./install.sh --apply --from foundation --iht-issuer https://inhouse.technology --iht-claim <code>
+```
+
+For unattended fresh installs, add `--non-interactive --config local/config.yaml`.
+`--plan` never redeems a claim. Apply redeems it after approval, before the
+Authentik stages. The installer POSTs the code to `authentik.iht.claim_url`
+(default `<issuer>/oidc/clients/claim`); overrides must share the issuer's origin.
+HTTPS is required except local HTTP for testing. Redirects are refused.
+The response issuer must match the configured issuer (`--iht-issuer` overrides it).
+The secret is saved only to the installation's `.env` (0600), as
+`IHC_IHT_CLIENT_SECRET` and the existing Compose key `IHT_CLIENT_SECRET`;
+client ID and issuer are persisted in `config.yaml`. The config is rewritten as
+JSON (valid YAML), preserving its values. No secret is printed or put in config/state.
+Successful claims reset the stages from foundation so an existing install updates
+Authentik and its blueprint. A rotation must keep the same client ID and issuer.
+
+A claim is a temporary bearer credential: run it promptly, and keep it out of logs.
+Redeeming it generates a new secret and invalidates the previous one. On expiry,
+replay or network failure, the installer stops before changing login services;
+local login/recovery remains available. Request a new claim and rerun the command.
+If the response was lost, the consumed claim cannot be retried: request a new one.
+
+The manual path remains available:
+
 The owner creates an OIDC client for this ihc on inhouse.technology. Register this
 exact redirect URI, substituting the ihc's Authentik host (usually `auth.<base_domain>`):
 

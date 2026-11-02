@@ -49,7 +49,8 @@ authentik:
   iht:                           # optional: docs/install.md, "Sign in with inhouse.technology"
     issuer: https://inhouse.technology
     client_id: ""                # empty: keep the existing local login
-    client_secret_env: IHC_IHT_CLIENT_SECRET # supplied by the owner; never generated
+    client_secret_env: IHC_IHT_CLIENT_SECRET # supplied by the owner or --iht-claim
+    # claim_url: https://inhouse.technology/oidc/clients/claim # defaults to <issuer>/oidc/clients/claim
 
 gitea:
   base_url: http://git.cloud.localhost

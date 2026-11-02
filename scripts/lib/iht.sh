@@ -14,7 +14,8 @@ v=sys.stdin.read()
 sys.exit(0 if v.count("\n")==1 and all(c=="\n" or (32 <= ord(c) < 127 and c not in "\"\\$`") for c in v) else 1)' || die "iht client id or issuer contains characters unsupported by the shared .env format"
   printf '%s' "$issuer" | $PY -c 'import sys,urllib.parse
 u=urllib.parse.urlsplit(sys.stdin.read())
-sys.exit(0 if u.scheme=="https" and u.hostname and not u.username and not u.password and not u.query and not u.fragment else 1)' || die "authentik.iht.issuer must be an HTTPS issuer URL without credentials, query or fragment"
+local=u.hostname in ("localhost", "127.0.0.1", "::1") or (u.hostname or "").endswith(".localhost")
+sys.exit(0 if (u.scheme=="https" or (u.scheme=="http" and local)) and u.hostname and u.username is None and u.password is None and not u.query and not u.fragment else 1)' || die "authentik.iht.issuer must be HTTPS (HTTP only on localhost), without credentials, query or fragment"
   secret_var="${CFG_authentik__iht__client_secret_env:-IHC_IHT_CLIENT_SECRET}"
   printf '%s' "$secret_var" | $PY -c 'import re,sys;sys.exit(0 if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",sys.stdin.read()) else 1)' || die "authentik.iht.client_secret_env must name an environment variable"
   eval "supplied=\${$secret_var:-}"
@@ -76,4 +77,22 @@ ensure_iht_login() {
   api PATCH "$AK/stages/identification/$stage/" "$(jsonq build user_fields:='[]' sources:="[\"$source\"]" show_source_labels:=true password_stage:=null enrollment_flow:=null recovery_flow:=null)"
   api_ok || die "reconcile iht login stage: HTTP $API_CODE"
   ok "login uses inhouse.technology; akadmin recovery: /if/flow/ihc-local-recovery/"
+}
+
+# Runs only after apply approval and before any Authentik stage, including resumes.
+iht_claim() {
+  [ -n "${IHT_CLAIM:-}" ] || return 0
+  local issuer endpoint
+  issuer="${IHT_CLAIM_ISSUER:-${CFG_authentik__iht__issuer:-https://inhouse.technology}}"
+  issuer="${issuer%/}"
+  endpoint="${CFG_authentik__iht__claim_url:-$issuer/oidc/clients/claim}"
+  if ! printf '%s' "$IHT_CLAIM" | $PY "$IHC_LIB/iht-claim.py" "$CONFIG_FILE" "$ENV_FILE" "$issuer" "$endpoint"; then
+    unset IHT_CLAIM
+    return 1
+  fi
+  unset IHT_CLAIM
+  eval "$($PY "$IHC_LIB/config.py" "$CONFIG_FILE" flatten)"
+  CONFIG_SHA="$($PY "$IHC_LIB/config.py" "$CONFIG_FILE" sha)"
+  SOURCE_CONFIG="$CONFIG_FILE"
+  ok "iht credentials claimed and saved privately; local recovery remains available"
 }
