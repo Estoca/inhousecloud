@@ -7,7 +7,7 @@ import time
 from urllib.parse import urlsplit
 
 import httpx
-from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
+from playwright.sync_api import sync_playwright
 from iht.store import Store
 from iht.oidc import Identity
 
@@ -52,6 +52,19 @@ def membership(who, expected):
     return u
 
 
+def direct_login_stage():
+    stages = request('GET', 'stages/identification/', params={
+        'name': 'default-authentication-identification'})['results']
+    assert len(stages) == 1, 'expected one default identification stage'
+    stage = stages[0]
+    source = request('GET', 'sources/oauth/inhouse-technology/')
+    assert stage['user_fields'] == [], 'default login still offers local user fields'
+    assert stage['sources'] == [source['pk']], 'default login must have exactly the iht source'
+    for field in ('password_stage', 'enrollment_flow', 'recovery_flow'):
+        assert stage[field] is None, f'default login exposes {field}'
+    return stage
+
+
 def journey(browser, who, allowed=True):
     context = browser.new_context(ignore_https_errors=True)
     context.add_cookies([{'name': 'test_user', 'value': who, 'url': os.environ['MOCK_ISSUER']}])
@@ -63,12 +76,9 @@ def journey(browser, who, allowed=True):
     page.on('request', lambda req: visited.append(req.url) if req.is_navigation_request() else None)
     try:
         page.goto('http://portal.cloud.localhost', wait_until='domcontentloaded')
-        # Authentik automatically follows a sole source when no local fields are
-        # offered. Still support a version which renders its source button.
-        try:
-            page.wait_for_url(os.environ['IHT_PUBLIC_URL'] + '/**', timeout=5000)
-        except BrowserTimeout:
-            page.get_by_role('link', name='inhouse.technology', exact=False).click(timeout=30000)
+        # LAB-108: the default flow must reach iht without any Authentik form or
+        # source-link click, including after the worker reapplies the blueprint.
+        page.wait_for_url(os.environ['IHT_PUBLIC_URL'] + '/**', timeout=30000)
         if allowed:
             page.get_by_role('link', name='Google', exact=False).click(timeout=30000)
         else:
@@ -146,6 +156,7 @@ with sync_playwright() as pw:
         journey(browser, who)
         membership(who, expected)
 
+    check('a0. default identification redirects with no local login links', direct_login_stage)
     check('a. owner login; admin and users groups', lambda: login('ana', {'ihc-admins', 'ihc-users'}))
     check('b. member login; only users group', lambda: login('bia', {'ihc-users'}))
 
@@ -185,6 +196,11 @@ with sync_playwright() as pw:
             'name': 'SSO restart probe', **{k: source[k] for k in (
                 'authorization_url', 'access_token_url', 'profile_url')}})
         subprocess.run(compose + ['stop', 'authentik-worker'], check=True)
+        # Reproduce LAB-108 while no worker can repair it. The mounted blueprint
+        # must remove the local field again without another first-run API patch.
+        stage = direct_login_stage()
+        request('PATCH', f'stages/identification/{stage["pk"]}/', json={
+            'user_fields': ['username']})
         # Change the file while the watcher is stopped: startup discovery must
         # notice the new hash and restore this deliberately drifted attribute.
         with (ROOT / 'cloud/authentik/blueprints/iht.yaml').open('a') as out:
@@ -202,6 +218,7 @@ with sync_playwright() as pw:
             raise AssertionError('Startup discovery did not reapply the mounted blueprint')
         bp = request('GET', 'managed/blueprints/')['results']
         assert any(b['path'] == 'custom/iht.yaml' and b['status'] == 'successful' for b in bp)
+        direct_login_stage()
         login('ana', {'ihc-admins', 'ihc-users'})
         login('bia', {'ihc-users'})
     check('g. restart; blueprint reapplies; owner/member login', restart)

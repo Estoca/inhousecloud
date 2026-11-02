@@ -117,8 +117,7 @@ entries:
       user_property_mappings:
         - !KeyOf claims
 
-  # Separate password flow: the usual identification stage is reconciled to the
-  # source only by first-run. No local user other than akadmin can finish recovery.
+  # Separate password flow. No local user other than akadmin can finish recovery.
   - model: authentik_flows.flow
     id: recovery
     identifiers:
@@ -166,3 +165,19 @@ entries:
     attrs:
       enabled: true
       failure_result: false
+
+  # Authentik 2026.8.4 redirects automatically when identification has no user
+  # fields and exactly one source. Own this in the blueprint as well as first-run
+  # reconciliation: a worker reimport must not restore the username/password form.
+  # https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/stages/identification/stage.py
+  - model: authentik_stages_identification.identificationstage
+    identifiers:
+      name: default-authentication-identification
+    attrs:
+      user_fields: []
+      sources:
+        - !KeyOf iht
+      show_source_labels: true
+      password_stage: null
+      enrollment_flow: null
+      recovery_flow: null
