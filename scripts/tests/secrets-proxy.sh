@@ -50,6 +50,20 @@ for file in [env, record_path, credentials]:
     assert file.stat().st_mode & 0o777 == 0o600
 for directory in [work / 'secrets-proxy', work / 'secrets-proxy/callers']:
     assert directory.stat().st_mode & 0o777 == 0o700
+# Removing the app takes its caller record too, so the same slug provisions again from a
+# fresh env file (smoke-app on every installer update).
+secretsproxy.remove(str(work), 'demo')
+assert not record_path.exists()
+secretsproxy.remove(str(work), 'demo')
+env.write_text('')
+secretsproxy.provision(str(work), 'demo', str(manifest), str(env))
+assert record_path.exists() and token() != first
+for bad in ['agent', '../x', 'A']:
+    try:
+        secretsproxy.remove(str(work), bad)
+        raise AssertionError('invalid caller removed')
+    except ValueError:
+        pass
 # Built-in agent starts denied and preserves admin-set policy on installer reruns.
 agent_env = work / 'agent.env'
 secretsproxy.provision(str(work), 'agent', None, str(agent_env))
