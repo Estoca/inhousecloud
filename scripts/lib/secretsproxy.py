@@ -7,8 +7,10 @@ import secrets
 import sys
 import tempfile
 
-import config
-import envfile
+# The installer runs Python with -I, which drops the script's own directory from sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config  # noqa: E402
+import envfile  # noqa: E402
 
 SERVICES = {'slack', 'github', 'linear', 'hubspot'}
 METHODS = {'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'}
