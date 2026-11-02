@@ -53,7 +53,9 @@ def main():
     envfile = module("envfile")
     data = config.load(config_path)
     request = urllib.request.Request(endpoint, data=urllib.parse.urlencode({"code": code}).encode(), method="POST",
-                                     headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+                                     headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
+                                              # Cloudflare (error 1010) blocks the default Python-urllib signature.
+                                              "User-Agent": "InHouseCloud-installer (+https://inhouse.technology)"})
     opener = urllib.request.build_opener(NoRedirect)
     with opener.open(request, timeout=10) as response:
         if response.status != 200:
