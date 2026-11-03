@@ -14,7 +14,7 @@ inst, checkout, bin_dir = work / 'install', work / 'checkout', work / 'bin'
 for path in [inst / 'secrets-proxy/callers', checkout / 'scripts/lib', bin_dir]:
     path.mkdir(parents=True)
 secret = 'fake-doctor-secret-value'
-(inst / '.env').write_text('TEST_VALUE="' + secret + '"\nGITEA_ORGANIZATION=company\n')
+(inst / '.env').write_text('TEST_SECRET="' + secret + '"\nGITEA_ORGANIZATION=company\nRUNNER_NAME=company-runner\n')
 (inst / 'compose.yml').write_text('services: {}\n')
 (inst / 'config.yaml').write_text('{}\n')
 (inst / 'inventory.json').write_text('{"apps":{}}\n')
@@ -160,6 +160,9 @@ assert r['doctor_version'] == 2 and r['product'] == 'ihc' and r['mode'] == 'fix'
 assert set(r['summary']) == {'ok', 'warn', 'fail', 'fix_now', 'recommended', 'repaired'}
 assert r['summary']['recommended'] == r['summary']['warn']
 assert box.redact('token=' + 'Ab9/' * 10) == 'token=[redacted]'
+# Settings in the install's .env stay readable; only secret-named keys are values to hide.
+assert box.redact('runners company-runner, company-runner-deploy') == 'runners company-runner, company-runner-deploy'
+assert box.redact('x fake-doctor-secret-value') == 'x [redacted]'
 box.secret_values.add('fake-app-secret-value')
 c.see('app returned fake-app-secret-value ghp_exampletoken123 eyJexampletoken123 ' + 'c' * 40)
 r = d.report(box, [c], [], d.time.time())

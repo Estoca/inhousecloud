@@ -60,7 +60,7 @@ Fields of a check:
 * `status`: `ok`, `warn` or `fail`, **after** any repair of this run (a repaired check is re-checked).
 * `detail`: one line, what was seen.
 * `action` and `runbook`: only when not `ok`; the next step a person or agent takes, with the literal command.
-* `evidence`: list of short strings. **Redacted by value**: every value of the product's secret files (`server/.env`, `.iho/tunnel.env` / `.iha/tunnel.env`, ihc's `.env` and app env files) that is 8 characters or longer is replaced by `[redacted]` wherever it appears, plus anything that looks like a token (`eyJ...`, `ghp_`, `gho_`, `sk-`, a long hex or base64 run of 32+ characters). Never print a secret to find out whether it is a secret.
+* `evidence`: list of short strings. **Redacted by value**: the secret values the product holds (8 characters or longer) are replaced by `[redacted]` wherever they appear: every value of `server/.env` and `.iho/tunnel.env` / `.iha/tunnel.env`; in ihc, the secret-named keys of the install's `.env` (it also holds settings such as domains, profiles and runner names, which stay readable) and every value of the app and agent env files. Also anything that looks like a token (`eyJ...`, `ghp_`, `gho_`, `sk-`, a long hex or base64 run of 32+ characters), except the commits the report names. `commit` is never redacted: a full hex commit, `-dirty` when the checkout has local changes, or `unknown`. Never print a secret to find out whether it is a secret.
 * `repair` (optional): present when the doctor knows a repair, whether or not it is safe.
   * `id`: stable, kebab-case.
   * `description`: one line.
