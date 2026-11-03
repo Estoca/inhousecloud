@@ -4,17 +4,23 @@ The company's own cloud on one machine: an agent installs it, and an agent puts 
 
 One box runs what a small company needs around its internal apps: single sign-on (Authentik), Git with push-to-deploy (Gitea and Actions), shared Postgres and Redis, a portal, an MCP gateway for AI clients and a nightly backup, all behind one sign-in and under one contract an agent can read. The box can be a Mac with Docker Desktop, a VM on a laptop or a server in the office. Open source, MIT.
 
-**Documentation: <https://inhousecloud.estoca.com.br/>** (built from [`docs/`](docs/)).
+**Documentation: <https://inhouse.technology/cloud/docs/>** (built from [`docs/`](docs/)).
+
+Want to build something for your team? Start with [Publish your first app](docs/first-app.md).
 
 > **Sibling project:** [InHouseOS](https://github.com/Estoca/inhouseos) is the people-and-work half (a personal LLM agent per person, a second brain, a shared tracker, a company compass). It runs on top of this cloud as ordinary apps and is adopted separately.
 
-With inhouse.technology, admins connect the gateway in Products (`/empresas/{id}/products`)
-and configure OIDC clients in Login (`/empresas/{id}/login`). Approved managed hosting is
-controlled in Hosting (`/empresas/{id}/hosting`). AWS public hosting, when enabled, places
-portal, auth, mcp, git and apps under `<id>.inhouse.technology`, with an ACM certificate pack
-covering the base and wildcard. Public ingress remains behind a flag and has not been validated
-end to end. `iht_status` includes `progress`; company deletion and cancellation live in Settings
-(`/empresas/{id}/settings`). See the [company guide](https://inhouse.technology/docs/company).
+Managed hosting runs on AWS us-east-1, with one machine per company, an encrypted
+disk, daily backups to S3 and a Cloudflare tunnel in front. Managed clouds have
+run since 2026-11-02. A managed dry run on 2026-11-03 completed new company
+creation, domain proof, hosting and setup-os in claude.ai through the downloadable
+skill. inhouse.technology itself has run on AWS since 2026-11-03.
+
+Sign in to inhouse.technology with Google Workspace; Microsoft sign-in is
+experimental, and personal Gmail accounts cannot get in. Admins connect the
+gateway in Products and configure login clients in Login. See
+[Connect ihc to inhouse.technology](docs/install.md#connect-ihc-to-inhousetechnology)
+and the [company guide](https://inhouse.technology/docs/company).
 
 ## Try it in 10 minutes
 
@@ -70,13 +76,20 @@ Start at [`AGENTS.md`](AGENTS.md): it routes an install, a new app or "why is it
 
 ## Status
 
-Usable on one box, with `local` ingress (on the machine itself) or `private` ingress (Tailscale, tested end to end). The portal has people and groups and a read-only status API for agents; the MCP gateway serves read-only tools, and every new app is born with one. Next: write tools and an audit log in the gateway, restoring one app on its own, and the off-site backup copy. `public` ingress, for a cloud on the open internet, comes after that: the installer has the modes, and they get their own run first. Everything done and ahead: [status and roadmap](docs/roadmap.md).
+Usable on one box with `local` ingress, `private` ingress over Tailscale, or managed
+Cloudflare edge ingress. The portal has people, groups and a read-only status API.
+The MCP gateway serves platform read tools and app tools, with confirmation and
+an audit log for writes. Still ahead: deploy jobs without the Docker socket,
+restoring one app on its own and automated restore rehearsals. Standalone public
+DNS with Let's Encrypt has no recorded live run. The self-hosted backup script's
+off-site copy is also still ahead; managed hosting already backs up daily to S3.
+See [status and roadmap](docs/roadmap.md).
 
 ## Documentation
 
-The site, <https://inhousecloud.estoca.com.br/>, has six parts, all from [`docs/`](docs/):
+The site, <https://inhouse.technology/cloud/docs/>, has six parts, all from [`docs/`](docs/):
 
-- **Start**: [try it](docs/try-it.md), [day zero](docs/day-zero.md), [the first person after you](docs/first-user.md), [install and deploy](docs/install.md), [quickstart](docs/quickstart.md).
+- **Start**: [publish your first app](docs/first-app.md), [try it](docs/try-it.md), [day zero](docs/day-zero.md), [the first person after you](docs/first-user.md), [install and deploy](docs/install.md), [quickstart](docs/quickstart.md).
 - **Concepts**: [one machine, one cloud](docs/single-box.md), [the deploy loop](docs/deploy-loop.md), [why it exists](docs/why.md).
 - **Operate**: [doctor](docs/doctor.md), [backup](docs/backup.md), [stop or remove](docs/cleanup.md), [runbooks](docs/runbooks/), [security](docs/security.md), [install design](docs/install-design.md).
 - **Build apps**: [app contract](docs/app-contract.md), [MCP in an app](docs/app-mcp.md), [app rules example](docs/app-rules-example.md), [GitOps flow](docs/gitops-flow.md).

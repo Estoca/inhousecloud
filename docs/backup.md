@@ -2,6 +2,10 @@
 
 The minimum backup of [`install-design.md`](install-design.md#backup), as built. One script, [`scripts/ihc-backup.sh`](../scripts/ihc-backup.sh), run on a schedule by a small container, writing an encrypted restic repository and a status file the portal reads.
 
+Managed hosting backs up daily to S3. This page describes the self-hosted backup
+script, whose destination is a host directory. Its separate off-site copy and
+automated restore rehearsal are still planned.
+
 ## What a run does
 
 1. Takes the lock (`<destination>/.lock`, an atomic `mkdir`). A second run while one is live refuses to start.
@@ -99,5 +103,4 @@ Not built yet, in the order they matter:
 
 - **Encrypted off-site copy** (`backup.remote`): `restic copy` to a second repository, S3-compatible or rclone, with its own key. A box that dies with its disks takes the local repository with it.
 - **Monthly restore rehearsal** (`backup.restore_test`): restore one database per month into an isolated Postgres container, compare row counts, and restore everything once a year. Today `verify` proves the bytes are there, not that the restore works.
-- **The portal's backup card** reading `latest-status.json` and alarming on age. That belongs to the portal project; the file is ready.
 - Consistent volume snapshots (stopping Gitea for the length of its volume backup, or `gitea dump`), when a box has enough write traffic for a live copy to matter.

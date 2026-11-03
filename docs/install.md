@@ -68,9 +68,38 @@ scripts/ihc-backup.sh --install-dir /opt/inhousecloud verify --latest
 scripts/ihc-backup.sh --install-dir /opt/inhousecloud status
 ```
 
-Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The off-site copy and the monthly restore rehearsal are not built yet. Details and restore steps: [`backup.md`](backup.md). App databases live on the shared Postgres, so they are in the nightly dump with everything else.
+Keep a copy of `BACKUP_ENCRYPTION_KEY` from `.env` off the box: the repository cannot be read without it. The self-hosted backup script's off-site copy and automated monthly restore rehearsal are not built yet. Managed hosting already backs up daily to S3. Details and restore steps: [`backup.md`](backup.md). App databases live on the shared Postgres, so they are in the nightly dump with everything else.
 
-### Sign in with inhouse.technology
+<span id="sign-in-with-inhousetechnology"></span>
+
+### Connect ihc to inhouse.technology
+
+Use this path as a company admin when your cloud should use inhouse.technology
+for sign-in. Have your cloud's base domain ready. Sign in to inhouse.technology
+with Google Workspace; Microsoft sign-in is experimental, and personal Gmail
+accounts cannot get in.
+
+1. In Claude, add the `https://inhouse.technology/mcp` connector and sign in with
+   your company account.
+2. Ask Claude: "Connect InHouseCloud to our company. Its gateway is
+   `https://mcp.<BASE_DOMAIN>`. Create its login client with callback
+   `https://auth.<BASE_DOMAIN>/source/oauth/callback/inhouse-technology/`."
+   Replace `<BASE_DOMAIN>` with your cloud's domain and keep the callback's trailing slash.
+3. Review and approve the connection and login-client changes. Claude gives you
+   an installer command with a single-use claim code. Keep that code private;
+   it expires after 15 minutes.
+4. Have the person operating the server run that command **on the server**.
+   For an existing installation, use the command with `--apply --from foundation`
+   and your install directory. Review the install plan before approving changes.
+5. Open `https://portal.<BASE_DOMAIN>` and complete the company sign-in. Bookmark
+   `https://auth.<BASE_DOMAIN>/if/flow/ihc-local-recovery/` for emergency admin
+   access and have the operator test it. In inhouse.technology, check Products
+   shows the gateway URL without a trailing slash or `/mcp`.
+
+If the claim expires or fails, ask Claude for a new one. Never send a client
+secret in chat. A self-installed cloud can keep its own login without this connection.
+
+### How it works (internals)
 
 This also enables iht instance tokens at the MCP gateway (`IHT_ISSUER` in the `mcp`
 service). In iht, open Products (`/empresas/{id}/products`) and set InHouseCloud MCP
@@ -262,11 +291,18 @@ real `access_denied` callback response and closes that page before asserting no
 session. A local non-admin's recovery policy skips the login stage and returns
 to normal login without a session. With `--keep-vm`, logs may require `sudo` to read.
 
-#### Additional release verification (requires a real iht)
+#### Verification coverage
+
+Managed clouds have run since 2026-11-02. On 2026-11-03, a managed dry run completed
+new company creation, domain proof, hosting and setup-os in claude.ai through the
+downloadable skill. That run does not establish every role, recovery or token
+rejection case below.
 
 The offline test `scripts/tests/iht-sso.sh` checks config, secret handling,
 expressions, mounts and stubbed reconciliation. It does not import a blueprint
-into Authentik or prove OIDC protocol behavior. Before release, on a clean Lima VM:
+into Authentik or prove OIDC protocol behavior. The Lima harness above covers the
+browser flow with a mock provider. The repository does not record the following
+full matrix against a live provider; use it for release verification on a clean VM:
 
 1. Install with no iht configuration; verify the existing local login and all
    existing smoke tests. Then repeat on a second clean install with real client

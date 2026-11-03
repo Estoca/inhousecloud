@@ -270,42 +270,21 @@ What is built ([`backup.md`](backup.md)) and what is next:
 | Manifest with checksums per run and `reports/latest-status.json` for the portal | built |
 | `verify --latest` as smoke test 14 | built |
 | Scheduling: a sidecar container with crond (`backup` profile) | built |
-| Encrypted off-site copy of the repository | next |
+| Self-hosted off-site copy of the repository | next; managed hosting already backs up daily to S3 |
 | Monthly restore rehearsal into an isolated target | next |
-| The portal's backup card and alarm on age | next (portal project; the status file is ready) |
+| The portal's backup status and age check | built |
 
-## Renamed twice: Open Company App Harness, Open Company Cloud, InHouseCloud
+## Naming and compatibility
 
-The project has had three names, none of them announced:
+The product is InHouseCloud. Repository and directory names use `inhousecloud`;
+commands, environment variables, Compose projects and groups use `ihc` or `IHC`.
+The default install directory is `/opt/inhousecloud`.
 
-- Until 2026-10-20, **Open Company App Harness** (repository `open-company-app-harness`). It began as a harness around coding agents and became the company's cloud on one machine.
-- From 2026-10-20 to 2026-10-21, **Open Company Cloud** (`open-company-cloud`, prefix `occ`), the name of what it is, next to its sibling, then Open Company OS (InHouseOS since 2026-10-27). A trademark search the next day showed "OpenCompany" already carried three open-source AI-agent projects and "OpenCloud" live marks held by other companies.
-- Since 2026-10-21, **InHouseCloud** (`inhousecloud`, prefix `ihc`): the company's own cloud, with no collision in trademark databases, GitHub or package registries. The prose name is InHouseCloud; slugs, directories, images and networks use `inhousecloud`; commands, variables and groups use `ihc`.
-
-Every name changed at once, both times:
-
-| What | Harness (until 2026-10-20) | Open Company Cloud (2026-10-20) | InHouseCloud (now) |
-|---|---|---|---|
-| Product, repository | Open Company App Harness, `open-company-app-harness` | Open Company Cloud, `open-company-cloud` | InHouseCloud, `inhousecloud` |
-| Commands | `scripts/harness-app.sh`, `harness-backup.sh`, `harness-operator.sh`; the agent's `harness-ro` | `scripts/occ-app.sh`, `occ-backup.sh`, `occ-operator.sh`; `occ-ro` | `scripts/ihc-app.sh`, `ihc-backup.sh`, `ihc-operator.sh`; `ihc-ro` |
-| Variables | `HARNESS_*` (`HARNESS_INSTALL_DIR`, `HARNESS_TAILSCALE_AUTHKEY`, `HARNESS_AGENT_*`, the `*_env` names in the config) | `OCC_*` | `IHC_*` |
-| Compose project, networks | `harness`, `harness-ops`, `harness-agent` | `occ`, `occ-ops`, `occ-agent` | `ihc`, `ihc-ops`, `ihc-agent` |
-| Deploy runner label, app overlay | `harness-deploy`, `apps/<slug>/compose.harness.yml` | `occ-deploy`, `compose.occ.yml` | `ihc-deploy`, `apps/<slug>/compose.ihc.yml` |
-| Authentik groups | `harness-admins`, `harness-users` | `occ-admins`, `occ-users` | `ihc-admins`, `ihc-users` |
-| Probe header | `X-Harness-Probe` | `X-OCC-Probe` | `X-IHC-Probe` |
-| Default install directory | `/opt/open-company-harness` | `/opt/open-company-cloud` | `/opt/inhousecloud` |
-| Example domains | `harness.localhost`, `harness.internal` | `cloud.localhost`, `cloud.example.internal` | unchanged: `cloud.localhost`, `cloud.example.internal` (a placeholder: use a name you control, e.g. `apps.internal`) |
-| Shared Postgres superuser and database, portal database | `harness`, `harness_platform` | `occ`, `occ_platform` | `ihc`, `ihc_platform` |
-| Tailnet hostname | `harness` | `occ` | `ihc` |
-
-The commands stay three, each with its own file, rather than one `ihc` with subcommands: the rename changes names, not behavior, and the deploy workflow, the runbooks and the agent's instructions call them by path.
-
-What still reads the previous names: the `OCC_*` variables (in the environment, and as the `*_env` names of a config) and nothing else, for this version only (the next one removes them), each with a warning. Not the `HARNESS_*` variables (their fallback of 2026-10-20 went with this rename, since nothing was published between the two); not the old command names (`occ-app.sh`, `occ-backup.sh`, `occ-operator.sh`, `occ-ro` and their `harness-` forms do not exist any more, and nothing answers to them); not an installation made under a previous name (below).
-
-- **Environment.** Every script that sources `scripts/lib/common.sh` (`install.sh`, `ihc-app`, `ihc-backup`, `ihc-operator`, first-run, the smoke tests) reads `OCC_<X>` as `IHC_<X>` when `IHC_<X>` is unset, and warns once per name: `[!!] OCC_INSTALL_DIR is the old name of IHC_INSTALL_DIR ...`.
-- **Config.** A `config.yaml` written for Open Company Cloud loads. Its `*_env` values `OCC_<X>` are read as `IHC_<X>`, and values that carry the old defaults (`/opt/open-company-cloud`, `occ-admins`, `occ-users`, `occ_platform`, the tailnet hostname `occ`) are used as given. `install.sh` says both in two warning lines at the start of the run. A config from the Harness days (`HARNESS_*`, `harness.localhost`) is not read any more.
-
-What does not carry over: an installation made under a previous name. It keeps its `.env`, Compose project, networks, volumes, app overlays, deploy runner and groups under that name, and there is no in-place migration. This checkout does not operate it with the old names either: `install.sh` (`status`, `handoff`, `stop`, `start`, `remove`, `--plan`, `--apply`), `ihc-operator`, `ihc-app`, `ihc-backup` and `ihc doctor` (its `install` check) stop with one message that says which name the installation uses, that it does not migrate, and how to remove it ([`scripts/lib/legacy.py`](../scripts/lib/legacy.py)). It tells by what the installation itself recorded: the foundation's network and volumes in `state.json`, `COMPOSE_PROJECT_NAME` and the `HARNESS_`/`OCC_` network variables in `.env`, the `compose.harness.yml` or `compose.occ.yml` overlays in `apps/`; not by the values an old config carries over on purpose (groups, install directory), so a new installation made from an Open Company Cloud config is not taken for an old one (`scripts/tests/legacy-install.sh`). The way forward is to remove it, with the `install.sh remove` of a checkout of that time for `occ` or by hand ([`cleanup.md`](cleanup.md#an-installation-made-under-a-previous-name)), and install fresh; copy out first what you want to keep, since nothing moves over by itself. App repositories created under a previous name carry a deploy workflow for the `harness-deploy` or `occ-deploy` runner: regenerate it from `templates/app/.gitea/workflows/deploy.yml`.
+Use the `IHC_*` variables and current config example for new installations.
+The scripts still accept `OCC_*` environment variables when the corresponding
+`IHC_*` variable is unset, with a warning. Unsupported installations are detected
+before any changes; there is no in-place migration. Keep a verified backup and
+follow the [compatibility guidance](cleanup.md#an-installation-made-under-a-previous-name).
 
 ## What the First Box Taught Us
 

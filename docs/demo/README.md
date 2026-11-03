@@ -1,6 +1,6 @@
 # Demo recordings
 
-Three terminal recordings made on 2026-10-23 on one clean Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9.2 rootless, Compose 5.6.1, no host mounts, every port forward ignored), from `main` at `581b4a8`, with the InHouseCloud names throughout (`ihc-app`, `/opt/inhousecloud`, `*.cloud.localhost`). They replace the recordings of 2026-10-20, made before the two renames. Play one with `asciinema play docs/demo/<file>.cast`, or render it with [agg](https://github.com/asciinema/agg) (`agg <file>.cast <file>.gif`).
+Three terminal recordings made on 2026-10-23 on one clean Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, 2 CPU, 4 GiB, 30 GiB, Docker 29.9.2 rootless, Compose 5.6.1, no host mounts, every port forward ignored), from `main` at `581b4a8`, with the InHouseCloud names throughout (`ihc-app`, `/opt/inhousecloud`, `*.cloud.localhost`). Play one with `asciinema play docs/demo/<file>.cast`, or render it with [agg](https://github.com/asciinema/agg) (`agg <file>.cast <file>.gif`).
 
 | File | What it shows | Real time | Recording |
 |---|---|---|---|

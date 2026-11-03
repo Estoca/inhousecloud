@@ -45,7 +45,7 @@ private environment. Never request the secret in chat. For that path, accept
 (default `IHC_IHT_CLIENT_SECRET`); this external secret must be supplied, unlike generated
 platform passwords. Without a client id, login stays unchanged. Register the gateway URL
 in Products (`/empresas/{id}/products`). See
-[Sign in with inhouse.technology](install.md#sign-in-with-inhousetechnology) for the exact
+[Connect ihc to inhouse.technology](install.md#connect-ihc-to-inhousetechnology) for the exact
 callback, identifier-only linking, the `akadmin` recovery URL and required real-provider tests.
 
 Then show `./install.sh --plan` and ask: "apply this plan?". That yes covers starting the services.

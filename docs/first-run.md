@@ -6,8 +6,6 @@ What `scripts/first-run.sh` automates after the stack is healthy, what it leaves
 scripts/first-run.sh --install-dir /opt/inhousecloud
 ```
 
-The test records below that predate 2026-10-21 ran under the project's previous names, Open Company App Harness (until 2026-10-20) and Open Company Cloud (2026-10-20 to 2026-10-21); their commands and paths are written here with the current names (`ihc-app`, `/opt/inhousecloud`, `cloud.localhost`), which map one to one, except the record of the first rename, kept with the names of that day ([`install-design.md`](install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud)).
-
 It is repeatable. Every action probes before it creates and reconciles what exists, so running it twice changes nothing, and running it after a half-finished attempt completes the missing pieces.
 
 ## Automated
@@ -212,7 +210,7 @@ Day one through an agent: a clean box with nothing of the cloud on it, a person 
 
 **Result: installed in both rounds, 18 of 18 smoke tests.** Round 1 needed no help to install, but its report sent the person to URLs their laptop cannot open. The docs and the handoff were fixed, and round 2 on a new VM installed again and gave the person a way in that works.
 
-| | Round 1 (main as of PR 6) | Round 2 (this branch) |
+| | Round 1 (initial run) | Round 2 (this branch) |
 |---|---|---|
 | Calls to the agent (person's messages) | 3: request, answers, "pode instalar" | 4: request, answers, a correction (the person mixed up the order of two answers), "sim, pode instalar" |
 | Turns / tool calls / refused by the tool limits | 21 / 18 / 5 | 20 / 16 / 3 |
@@ -398,7 +396,7 @@ Not covered: installing the CA on Windows, iOS, Android and in Firefox (the hand
 
 The install on a Mac with no VM: Docker Desktop instead of Linux and rootless Docker.
 
-**Setup.** A Mac mini (Apple Silicon M4, macOS 26.7) with Docker Desktop: Docker 29.8, not rootless, Compose v5.5. `main` at `a0057a5` (before the rename; the names below are the current ones). A second agent on a Mac mini ran it from the repository's instructions: `local` ingress, profiles `core` and `backup`, the install directory in the user's home, no `sudo`.
+**Setup.** A Mac mini (Apple Silicon M4, macOS 26.7) with Docker Desktop: Docker 29.8, not rootless, Compose v5.5. `main` at `a0057a5`. A second agent on a Mac mini ran it from the repository's instructions: `local` ingress, profiles `core` and `backup`, the install directory in the user's home, no `sudo`.
 
 **Result.**
 
@@ -417,56 +415,6 @@ The install on a Mac with no VM: Docker Desktop instead of Linux and rootless Do
 - `docs/try-it.md`: a Mac with Docker Desktop installs directly; Lima is the path for a Mac without Docker or for a throwaway VM.
 - `/etc/hosts` on macOS is a fallback ("if a name does not resolve, add it"), not a step, here, in `try-it.md` and in the handoff.
 - `install.sh --plan` printed "nothing was changed" after creating the backup directory in the preflight. The plan no longer creates it (it says "created on apply"), and its last line says what it did write: `state.json` and `config.yaml` in the install directory.
-
-## Rename run (Open Company Cloud, 2026-10-20)
-
-The first rename, to Open Company Cloud (commands, variables, project, networks, groups, example domains, default directory) on two clean boxes, and the one-version compatibility with the old names ([`install-design.md`](install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud)).
-
-**Setup.** Two new Lima VMs (Ubuntu 26.04.1, kernel 7.0, Lima's `docker` template with no host mounts and every port forward ignored, Docker 29.9.1 rootless), the branch cloned onto each box.
-
-**New names, every profile on.** 2 CPU, 6 GiB, 30 GiB. `bootstrap/config.example.yaml` with `storage`, `ops` (terminal key installed) and `agent` (no keys) on, backup on.
-
-| Step | Result |
-|---|---|
-| VM created and started | 64 s |
-| `install.sh --non-interactive`, all stages | 459 s, exit 0; smoke tests in the stage **21 passed, 0 failed, 0 skipped** |
-| `scripts/smoke-tests.sh` again | 21 passed, 0 failed, 0 skipped (test 16: push to green run in 10 s) |
-| `occ-app new pedidos --push`, then `occ-app wait pedidos` | exit 0; healthy 23 s after the push; `/health` 200 and `/` 302 to the sign-in through the proxy |
-| `occ-backup.sh verify --latest` | `verify: ok` (snapshots present, `restic check` without errors) |
-| Names on the box | Compose project `occ` (18 containers `occ-*-1`), networks `occ`, `occ-ops`, `occ-agent`, volumes `occ_*`, runner label `occ-deploy`, image `occ-deployer:local`, databases `occ_platform` and `occ`, smoke user `occ-smoke-user`; no `harness` in `.env`, the rendered `compose.yml`, the app's `compose.occ.yml` or any container name |
-
-**Old names, a config from before the rename.** 2 CPU, 4 GiB, 30 GiB. The `bootstrap/config.example.yaml` of `main` before the rename, unchanged (core and backup), and `HARNESS_BACKUP_DESTINATION` exported for `install.sh`.
-
-| Step | Result |
-|---|---|
-| `install.sh --non-interactive` | 328 s, exit 0; smoke tests 17 passed, 0 failed, 4 skipped (`ops`, `storage`, `agent` off) |
-| Warnings at the start | one for `HARNESS_BACKUP_DESTINATION` (read as `OCC_BACKUP_DESTINATION`), one listing the 10 `*_env` names read as `OCC_*`, one listing the 10 values kept with the old defaults |
-| `.env` | `BACKUP_DESTINATION` from the old variable; `AUTHENTIK_PORTAL_GROUP=harness-admins` and `BASE_DOMAIN=harness.localhost`, as the old config says |
-
-On the same box, `install.sh --plan` of the new commit into a fresh directory reported the backup destination as "created on apply" and did not create it (its preflight stopped on ports held by the first install, as it should).
-
-The names in this record are the ones of that day (`occ`); the rename of 2026-10-21 to InHouseCloud (`ihc`) has its own record below.
-
-## Rename run (InHouseCloud, 2026-10-21)
-
-The second rename, to InHouseCloud (`ihc`), on a clean box, and the one-version compatibility with the Open Company Cloud names ([`install-design.md`](install-design.md#renamed-twice-open-company-app-harness-open-company-cloud-inhousecloud)). On 2026-10-21.
-
-**Setup.** A new Lima VM (Lima 2.2.1, `template:docker`: Ubuntu 26.04.1, Docker 29.9.2 rootless), 2 CPU, 6 GiB, 30 GiB, the branch cloned onto the box. `bootstrap/config.example.yaml` with `storage`, `ops` (terminal key installed) and `agent` on (`ops.agent.model: anthropic/claude-sonnet-5-5`, LLM key and Telegram token passed to `install.sh` through its environment, read from a file outside the repository over stdin), backup on, `local` ingress.
-
-| Step | Result |
-|---|---|
-| `install.sh --non-interactive`, all stages | 421 s, exit 0; smoke tests in the stage **21 passed, 0 failed, 0 skipped** (test 16: push to green run in 15 s, redeploy in 11 s) |
-| `install.sh status` | `InHouseCloud at /opt/inhousecloud: completed`, 18 of 18 services healthy, backup 0.0 h old, no apps |
-| `scripts/smoke-tests.sh` again | 21 passed, 0 failed, 0 skipped in 50 s (test 16: push to green in 10 s; test 19: Garage buckets and keys, PUT+GET 200, 403 across keys) |
-| `ihc-app new pedidos --push`, then `ihc-app wait pedidos` from the app folder | exit 0; `/health` 200 and `/` 302 to the sign-in through the proxy; `ihc-app list` shows it; container `pedidos-app-1` |
-| `ihc-backup.sh verify --latest` | `verify: ok` (`restic check` without errors) |
-| `ihc-operator.sh brief` | generated |
-| `install.sh --plan` into a fresh directory | stopped at the preflight (directory not created yet, ports 80 and 443 held by the running install, as it should) and created nothing: the directory does not exist afterwards |
-| Names on the box | Compose project `ihc` (18 containers `ihc-*-1`), networks `ihc`, `ihc-ops`, `ihc-agent`, volumes `ihc_*`, images `ihc-deployer:local`, `ihc-backup:local`, `ihc-portal:placeholder`, smoke repository `ihc-smoke.git`, smoke user `ihc-smoke-user`, databases `ihc_platform`; no `occ` or `harness` in `.env`, the rendered `compose.yml`, `state.json`, any container name or the installer's output |
-
-**Old names, a config from Open Company Cloud.** On the same box, `install.sh --plan` with the `bootstrap/config.example.yaml` of the day before (unchanged) and `OCC_BACKUP_DESTINATION` exported: one warning for `OCC_BACKUP_DESTINATION` (read as `IHC_BACKUP_DESTINATION`), one listing the 10 `*_env` names read as `IHC_*`, one listing the 6 values kept with the old defaults (`install.directory`, the tailnet hostname, both groups, the portal database and role). The `HARNESS_*` names are no longer read.
-
-**Not revalidated.** `private` ingress (Tailscale): on a second clean VM (2 CPU, 4 GiB) the install reached `proxy_ingress` with the new names (`ihc-tailscale-1`, volume `ihc_tailscale-state`) and stopped there because the Tailscale auth key available for the test was refused by the control plane (state `NeedsLogin`): the key, not the rename. The operator agent in conversation (Telegram) was not exercised either; smoke test 20 covered the agent container, its Docker API and the brief. Both VMs were deleted.
 
 ## Doctor run
 
@@ -589,7 +537,7 @@ What happens after a successful install: the day-zero handoff, a real dry-run `-
 
 The operator agent of the `agent` profile in a real conversation: a person on Telegram asks the questions an operator gets, and the run checks each answer against what happened on the box (the agent's Docker API audit log, the containers, the session transcript). Until this run the profile had been tested without an LLM key; every link below the conversation had a smoke test, the conversation had none.
 
-**Setup.** A new Lima VM (Ubuntu 26.04.1, Lima's `docker` template, no host mounts, Docker 29.9.1 rootless), first with 2 CPU, 4 GiB and 30 GiB, then resized to 6 GiB (below). `bootstrap/config.example.yaml` with `storage`, `ops`, `agent` and backup on, `ops.agent.model: anthropic/claude-sonnet-5-5`. The LLM key and the Telegram bot token were exported on the box only in the environment of `install.sh` (read from a file outside the repository, passed on stdin); `.env` on the VM held them until the VM was deleted. OpenClaw 2026.10.5 (`-slim`), thinking `high`. The run was on the code before the rename, so the agent ran `harness-ro`; the commands below use today's names (`ihc-ro`).
+**Setup.** A new Lima VM (Ubuntu 26.04.1, Lima's `docker` template, no host mounts, Docker 29.9.1 rootless), first with 2 CPU, 4 GiB and 30 GiB, then resized to 6 GiB (below). `bootstrap/config.example.yaml` with `storage`, `ops`, `agent` and backup on, `ops.agent.model: anthropic/claude-sonnet-5-5`. The LLM key and the Telegram bot token were exported on the box only in the environment of `install.sh` (read from a file outside the repository, passed on stdin); `.env` on the VM held them until the VM was deleted. OpenClaw 2026.10.5 (`-slim`), thinking `high`.
 
 **Install.** `install.sh --non-interactive`: 555 s, exit 0, 20 of 20 smoke tests. The agent came up with Telegram connected and DM pairing; the owner sent the bot a first message, got the pairing code and approved it with `pairing approve telegram <code>`.
 
@@ -632,7 +580,7 @@ No third round was needed. Nothing in the OpenClaw configuration beyond what the
 - It asks a lot of questions back (a hypothesis before a core restart, `docker events` before an app restart). That is the contract, but on a box where the owner just wants the app back, (c) without writes is a longer conversation than a restart.
 - The host paths it gives (the install directory, the checkout of this repository) come from the brief; on this VM they named the login user's home. That is the box's own data, but it ends up in the chat.
 
-**After the rename.** The branch on a new clean VM (6 GiB, same profiles, `allow_write: true`): install 430 s, exit 0, 21 of 21 smoke tests, the channel started by the installer, the agent's container limited to 3 GiB, `ihc-ro writes` on, the smoke test's probes marked in the audit log. Asked through the admin path (`docker compose exec agent node dist/index.js agent -m …`) to restart the smoke app: one `POST /containers/<smoke-app>/restart` (204), then container, app, proxy and SSO proved, in 66 s. No agent restart.
+**Follow-up run.** The branch on a new clean VM (6 GiB, same profiles, `allow_write: true`): install 430 s, exit 0, 21 of 21 smoke tests, the channel started by the installer, the agent's container limited to 3 GiB, `ihc-ro writes` on, the smoke test's probes marked in the audit log. Asked through the admin path (`docker compose exec agent node dist/index.js agent -m …`) to restart the smoke app: one `POST /containers/<smoke-app>/restart` (204), then container, app, proxy and SSO proved, in 66 s. No agent restart.
 
 ## Outside operator, cold install on macOS (2026-10-21)
 
@@ -851,9 +799,9 @@ What the doc should tell a person without Docker, now in [`gitops-flow.md`](gito
 
 Not covered: a Codex session with approvals (`on-request`), which could have run `init` outside the sandbox on the person's yes; a broken `Dockerfile` pushed without Docker; Windows and Linux laptops; ingress other than `local`. The VM, the exports, the app folders and the temporary `CODEX_HOME` were deleted.
 
-## Gateway writes run (LAB-64, 2026-11-01)
+## Gateway writes run (2026-11-01)
 
-The MCP gateway's writes: `confirmed_by`, the append-only audit log `deploy_platform.mcp_audit_log` written with the gateway's own Postgres role `ihc_mcp_audit` (made by `install.sh`, stage `portal`), and smoke test 13 checking that role's grants. On the branch `lab-64-gateway-audit` (PR 41), from `b23e633`.
+The MCP gateway's writes: `confirmed_by`, the append-only audit log `deploy_platform.mcp_audit_log` written with the gateway's own Postgres role `ihc_mcp_audit` (made by `install.sh`, stage `portal`), and smoke test 13 checking that role's grants. Tested from `b23e633`.
 
 **Setup.** A new Lima VM (Lima `template:docker`: Ubuntu 26.04.1 LTS, Docker 29.9.2 rootless, `git` 2.53, `python3` 3.14; 2 CPU, 4 GiB, 30 GiB, no mounts, no port forwards; `/opt` holding only `containerd`). The repository cloned from GitHub inside the VM and the branch checked out; `/opt/inhousecloud` made with the README's `sudo install -d`; `install.sh --non-interactive --config bootstrap/config.example.yaml` (core and backup, `local` ingress, TLS off).
 
@@ -906,9 +854,9 @@ No value of the audit role's password is in the install, upgrade or remove logs,
 
 **Not exercised.** A real client signing in through a browser (the token came from `sso-login-check.sh`, the same requests), a second person as `confirmed_by` (the approver was the smoke user, who is also the caller; the directory check is the same, and `nobody@example.com` was the negative case), a deactivated approver and one outside `ihc-users` (unit-tested in `portal/test/mcp-writes.test.js`), `GET /api/mcp/audit` over HTTP, a restore of the audit table from a backup, ingress other than `local`, `ops`, `storage` and `agent` profiles, macOS with Docker Desktop. The template has no write tool of its own (`prices` added one for the test); `ihc-app wait SLUG` reads `company-app.yaml` of the current folder and says "cannot read" when run from elsewhere (not changed here). The VM was deleted.
 
-## Deploy journal run (LAB-65, 2026-11-01)
+## Deploy journal run (2026-11-01)
 
-Deploys as transactions: `ihc-app build` (a release from the commit's files, images tagged per release), `ihc-app apply` (the app's lock, the head of `main` only, the journal written before anything changes, provision, the release's images, the healthcheck), `ihc-app rollback` and `ihc-app journal`, and smoke test 26. On the branch `lab-65-deploy-journal` (PR 42).
+Deploys as transactions: `ihc-app build` (a release from the commit's files, images tagged per release), `ihc-app apply` (the app's lock, the head of `main` only, the journal written before anything changes, provision, the release's images, the healthcheck), `ihc-app rollback` and `ihc-app journal`, and smoke test 26.
 
 **Setup.** A new Lima VM (Lima `template:docker`: Ubuntu 26.04.1 LTS, Docker 29.9.2 rootless, Compose 5.6.1, `git` 2.53, `python3` 3.14; 2 CPU, 4 GiB, 30 GiB, no mounts, no port forwards; `/opt` holding only `containerd`). The repository cloned from GitHub inside the VM and the branch checked out; `/opt/inhousecloud` made with the README's `sudo install -d`; `install.sh --non-interactive --config bootstrap/config.example.yaml` (core and backup, `local` ingress, TLS off).
 
@@ -941,7 +889,7 @@ Deploys as transactions: `ihc-app build` (a release from the commit's files, ima
 
 | Step | Result |
 |---|---|
-| `--apply --from foundation` | 140 s, exit 0, smoke **22/0/4** (test 26 passed); `.env` byte for byte the same; `ihc-portal-1` and `ihc-mcp-1` recreated (new portal image), the 12 others and `legacy-app-1` kept their ids; `legacy` 200. No `set -u` error on this path (the `SECRET_FPS` fix of LAB-64 holds) |
+| `--apply --from foundation` | 140 s, exit 0, smoke **22/0/4** (test 26 passed); `.env` byte for byte the same; `ihc-portal-1` and `ihc-mcp-1` recreated (new portal image), the 12 others and `legacy-app-1` kept their ids; `legacy` 200. No `set -u` error on this path (`SECRET_FPS` remains safe when unset) |
 | A push to `legacy` with its old workflow | green in 21 s, `version: 2` served; the job's log warns "this deploy is not in the deploy journal: the repository's .gitea/workflows/deploy.yml predates it. Copy …" |
 | The template's `deploy.yml` copied into `legacy` and pushed | green in 21 s, `version: 3`; journal: `deploy ok`, replaced `(none)`, `before.images` the running `legacy-app` image |
 | `ihc-app rollback legacy` | exit 1, "… replaced a version the journal does not have … nothing to roll back to" |

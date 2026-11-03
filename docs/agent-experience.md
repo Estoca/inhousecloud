@@ -18,6 +18,6 @@ The test of this is a cold run: an agent given only the repository and a one-lin
 
 Once the cloud is up, an agent off the box reads its health through the portal's status API with a read-only token ([`portal-api.md`](portal-api.md)), and a person's AI client uses the cloud through the MCP gateway, signed in as that person ([`mcp-gateway.md`](mcp-gateway.md)). An operator agent on the box (the `agent` profile) answers "why is it down" inside its own contract ([`operator-contract.md`](operator-contract.md)).
 
-`private` ingress (Tailscale, own CA, split DNS, `https://<app>.<domain>` on the tailnet only) is tested end to end: [`install-design.md`](install-design.md#private-ingress-private--internal--tailscale). `public` ingress, for a cloud reachable from the internet, comes later.
+`private` ingress (Tailscale, own CA, split DNS, `https://<app>.<domain>` on the tailnet only) is tested end to end: [`install-design.md`](install-design.md#private-ingress-private--internal--tailscale). Managed clouds use [Cloudflare edge ingress](install-design.md#public-ingress-with-edge-tls) and have run since 2026-11-02. Standalone public DNS with Let's Encrypt has no recorded live run.
 
 The cloud should also expose live app-building rules for day-to-day app creation. See [`app-rules-example.md`](app-rules-example.md) for a generalized example based on a real internal app platform rules file.

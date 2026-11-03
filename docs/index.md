@@ -5,6 +5,7 @@ The company's own cloud on one machine: an agent installs it, and an agent puts 
 One box runs what a small company needs around its internal apps: single sign-on, Git with push-to-deploy, shared Postgres and Redis, object storage, backups, ops tools and an optional operator agent. The machine can be a Mac with Docker Desktop, a VM on a laptop or a server in the office; the cloud starts there, on hardware the company already has.
 
 - **New here?** [Try it in 10 minutes](try-it.md), then the [day-zero steps](day-zero.md).
+- **Ready to build?** [Publish your first app](first-app.md): what to ask Claude and where your app appears.
 - **An agent?** Start at [AGENTS.md](../AGENTS.md).
 - **Why it is built this way?** [One machine, one cloud](single-box.md) and [the deploy loop](deploy-loop.md).
 
@@ -45,13 +46,21 @@ Details: [install design](install-design.md#layers-as-compose-profiles).
 
 Every claim above has a run on a clean machine behind it, written down with the commands, the times and what broke ([first run and test records](first-run.md)):
 
-- The core install on a clean VM, checked by the [smoke tests](smoke-tests.md) (25 in all; 21 run on the core, the rest need the `ops` or `agent` profile or `private` ingress), and the app loop from `new` to the air by a push ([app loop](first-run.md#test-record-the-app-loop-smoke-test-16)).
+- The core install on a clean VM, checked by the [smoke tests](smoke-tests.md) (26 in all; 22 run on the core, the rest need the `ops` or `agent` profile or `private` ingress), and the app loop from `new` to the air by a push ([app loop](first-run.md#test-record-the-app-loop-smoke-test-16)).
 - On a Mac with Docker Desktop, no VM ([macOS run](first-run.md#macos-run-docker-desktop)).
 - A coding agent that has never seen the cloud installs it from a layperson's request ([cold install run](first-run.md#cold-install-run)) and puts a new app on the air ([cold agent run](first-run.md#cold-agent-run)).
 - `private` ingress over Tailscale, with the installation's own CA and split DNS, signed in from another device ([private ingress run](first-run.md#private-ingress-run)).
 - The portal, its people and groups, its status API, and the MCP gateway with a real client ([portal run](first-run.md#portal-run), [people run](first-run.md#people-run), [portal API run](first-run.md#portal-api-run), [MCP gateway run](first-run.md#mcp-gateway-run)).
 - `ihc doctor` against failures caused on purpose ([doctor run](first-run.md#doctor-run)); the operator agent in a conversation ([operator conversation run](first-run.md#operator-conversation-run)).
 
-## What comes later
+## Managed hosting and what comes next
 
-The cloud starts on a machine you control and reach directly or over a private network. Putting it on the open internet (`public` ingress, through a Cloudflare tunnel or public DNS) is a later feature: the installer already knows the modes, and it will be documented once it has its own run. Also ahead: write tools and an audit log in the gateway, restoring one app from a snapshot, and an off-site copy of the backup. The list, with what has already shipped: [status and roadmap](roadmap.md).
+Managed clouds have run since 2026-11-02. Managed hosting uses AWS us-east-1, one
+machine per company, an encrypted disk, daily backups to S3 and a Cloudflare
+tunnel. On 2026-11-03, a managed dry run completed new company creation, domain
+proof, hosting and setup-os in claude.ai through the downloadable skill.
+
+App write tools and their audit log are implemented. Still ahead: deploy jobs
+without the Docker socket, restoring one app from a snapshot, automated restore
+rehearsals and the self-hosted backup script's off-site copy. Standalone public
+DNS with Let's Encrypt has no recorded live run. See [status and roadmap](roadmap.md).
