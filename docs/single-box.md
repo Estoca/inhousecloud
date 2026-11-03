@@ -25,7 +25,7 @@ That machine runs the control plane, the support plane, and the apps:
 
 - code is hosted in the same environment through Gitea or another Git server;
 - SSO is handled by Authentik or another identity gateway;
-- ingress enters through a reverse proxy: on the box itself (`local`, tested), or through Tailscale with the installation's own CA and split DNS (`private`, tested end to end: `https://<app>.<domain>` on the tailnet only); a Cloudflare tunnel or public DNS (`public`) is a later step, already in the installer and documented once it has its own run;
+- ingress enters through a reverse proxy: on the box itself (`local`, tested), or through Tailscale with the installation's own CA and split DNS (`private`, tested end to end: `https://<app>.<domain>` on the tailnet only); managed Cloudflare edge ingress has run since 2026-11-02 ([edge setup](install-design.md#public-ingress-with-edge-tls)); standalone public DNS with Let's Encrypt has no recorded live run;
 - internal apps run as Docker Compose projects;
 - shared databases and queues run locally when the app does not need managed services;
 - Portainer, Glances, a web terminal (Wetty) and a file browser (FileBrowser) make the machine inspectable, for admins only behind the SSO (the `ops` profile);

@@ -3,7 +3,7 @@
 # Local preview: pip install -r docs/requirements.txt && mkdocs serve
 site_name: InHouseCloud
 site_description: The company's own cloud on one machine, installed and operated by an agent.
-site_url: https://inhousecloud.estoca.com.br/
+site_url: https://inhouse.technology/cloud/docs/
 repo_url: https://github.com/Estoca/inhousecloud
 repo_name: inhousecloud
 edit_uri: edit/main/docs/
@@ -76,6 +76,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Start:
+      - Publish your first app: first-app.md
       - Try it in 10 minutes: try-it.md
       - Day zero: day-zero.md
       - The first person after you: first-user.md
