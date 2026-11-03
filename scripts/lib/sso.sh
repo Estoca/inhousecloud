@@ -73,6 +73,38 @@ ensure_application() { # SLUG NAME PROVIDER_PK LAUNCH_URL -> pk
   printf '%s' "$API_BODY" | jsonq get pk
 }
 
+# Authentik 2026.8.4: core/brands/{brand_uuid}/ accepts default_application as
+# an application UUID (not its slug or provider id). External users reaching /
+# or /if/user/ launch it; internal users keep their Authentik interface.
+# https://github.com/goauthentik/authentik/blob/version/2026.8.4/schema.yml
+# https://github.com/goauthentik/authentik/blob/version/2026.8.4/authentik/core/views/interface.py
+ensure_default_application() { # APPLICATION_SLUG
+  local slug="$1" app_pk brand brand_pk current
+  api GET "$AK/core/applications/$slug/"
+  api_ok || die "probe default application $slug: HTTP $API_CODE"
+  app_pk="$(printf '%s' "$API_BODY" | jsonq get pk)"
+  [ -n "$app_pk" ] || die "default application $slug has no pk"
+
+  api GET "$AK/core/brands/?default=true"
+  api_ok || die "list Authentik default brand: HTTP $API_CODE"
+  brand="$(printf '%s' "$API_BODY" | jsonq find results default True .)"
+  brand_pk="$(printf '%s' "$brand" | jsonq get brand_uuid)"
+  [ -n "$brand_pk" ] || die "Authentik default brand not found"
+  current="$(printf '%s' "$brand" | jsonq get default_application)"
+  if [ "$current" = "$app_pk" ]; then
+    ok "Authentik default brand already launches $slug"
+  else
+    api PATCH "$AK/core/brands/$brand_pk/" "$(jsonq build default_application="$app_pk")"
+    api_ok || die "set Authentik default brand application to $slug: HTTP $API_CODE"
+    api GET "$AK/core/brands/$brand_pk/"
+    api_ok || die "verify Authentik default brand application: HTTP $API_CODE"
+    [ "$(printf '%s' "$API_BODY" | jsonq get default_application)" = "$app_pk" ] \
+      || die "Authentik default brand did not retain default application $slug"
+    ok "Authentik default brand now launches $slug"
+  fi
+  record "authentik:brand:$brand_pk"
+}
+
 # outpost_serve PROVIDER_PK -> outpost pk. Adds the provider to the embedded outpost and
 # points browsers at the public Authentik URL. Never removes a provider.
 outpost_serve() {

@@ -6,7 +6,8 @@
 #
 # Repeatable: every action probes before it creates and reconciles what exists.
 #   1. Authentik: groups, OIDC provider + application for Gitea, proxy provider +
-#      application for the portal (bound to ihc-admins and ihc-users), embedded
+#      application for the portal (bound to ihc-admins and ihc-users), the default
+#      brand's application for external logins with no target, embedded
 #      outpost, group policy bindings; the read-only service account ihc-portal, whose
 #      API token goes to AUTHENTIK_PORTAL_TOKEN in .env (the portal's people page);
 #      the user AUTHENTIK_SMOKE_USER (ihc-users only, password in .env), so smoke
@@ -123,6 +124,7 @@ GITEA_APP_PK="$(ensure_application gitea Gitea "$GITEA_PROVIDER_PK" "$GITEA_BASE
 # Proxy provider (forward auth, single application) for the portal.
 PORTAL_PROVIDER_PK="$(ensure_proxy_provider portal "$PORTAL_BASE_URL" "^/health\$")"
 PORTAL_APP_PK="$(ensure_application portal "App Portal" "$PORTAL_PROVIDER_PK" "$PORTAL_BASE_URL")"
+ensure_default_application portal
 
 # Embedded outpost: add the portal provider, point browsers at the public Authentik URL.
 OUTPOST_PK="$(outpost_serve "$PORTAL_PROVIDER_PK")"
