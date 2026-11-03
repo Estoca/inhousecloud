@@ -112,6 +112,7 @@ nav:
       - LLM bootstrap: llm-bootstrap.md
       - Agent setup contract: agent-setup-contract.md
       - Operator contract: operator-contract.md
+      - Doctor contract: doctor-contract.md
       - Portal API: portal-api.md
       - MCP gateway: mcp-gateway.md
   - Reference:

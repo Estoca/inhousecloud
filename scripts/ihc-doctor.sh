@@ -2,10 +2,14 @@
 # ihc-doctor: is the cloud on the air, and if not, what to do. Run it when something
 # looks wrong; the operator runs it before saying "it is on the air".
 #
-#   scripts/ihc-doctor.sh [--install-dir DIR] [--verbose] [--json]
-#   <install-dir>/ihc doctor [--verbose] [--json]      the same, from the install directory
+#   scripts/ihc-doctor.sh [--install-dir DIR] [--verbose] [--json] [--lint | --fix [--yes]]
+#   <install-dir>/ihc doctor [--verbose] [--json] [--lint | --fix [--yes]]      the same, from the install directory
 #
-# Checks the box the way the smoke tests do, read only and in under 30 seconds: the
+# Report mode writes only its report (and the quick backup check's restic cache); --lint
+# writes nothing. --fix backs up before
+# removing orphan callers or system-test apps and before resuming interrupted stages.
+# It runs only safe repairs, after confirmation or --yes; core updates stay manual.
+# Checks the box the way the smoke tests do: the
 # install and state.json, Docker, the containers, disk and memory, the proxy's routes,
 # DNS and TLS for the ingress, the sign-in, Gitea and its runners, Postgres, Redis, the
 # backup, every app in the inventory, the operator agent, and this checkout's version.
@@ -25,12 +29,12 @@ INSTALL_DIR="${IHC_INSTALL_DIR:-}"
 ARGS=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --install-dir) INSTALL_DIR="$2"; shift ;;
+    --install-dir) [ $# -ge 2 ] || { fail "--install-dir requires a directory"; exit 2; }; INSTALL_DIR="$2"; shift ;;
     --install-dir=*) INSTALL_DIR="${1#*=}" ;;
-    --json|--verbose) ARGS="$ARGS $1" ;;
+    --json|--verbose|--lint|--fix|--yes) ARGS="$ARGS $1" ;;
     -v) ARGS="$ARGS --verbose" ;;
     -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $1 (see --help)" ;;
+    *) fail "unknown argument: $1 (see --help)"; exit 2 ;;
   esac
   shift
 done

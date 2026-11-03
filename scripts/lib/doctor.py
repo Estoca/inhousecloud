@@ -1,40 +1,45 @@
 #!/usr/bin/env python3
 """ihc-doctor: checks an installed box the way the smoke tests do, and says what is wrong.
 
-    doctor.py INSTALL_DIR IHC_ROOT [--json] [--verbose] [--out DIR]
+    doctor.py INSTALL_DIR IHC_ROOT [--json] [--verbose] [--lint | --fix [--yes]] [--out DIR]
 
-Called by scripts/ihc-doctor.sh. Read only: it reads state.json, .env, inventory.json and
-the backup reports, asks Docker, the proxy's admin API and the services, and changes
-nothing on the box. The one file it writes is its own report, <install-dir>/agent/
-reference/doctor.json, when the agent profile's workspace exists (or --out DIR), so the
-operator agent can read the last full run (ihc-ro doctor).
+Called by scripts/ihc-doctor.sh. Report mode reads the box and writes only its own report,
+<install-dir>/agent/reference/doctor.json (or --out DIR). --lint writes nothing, including
+no report, no temporary credentials and no quick backup verification (which writes
+restic's cache and locks). --fix may back up and remove orphan secrets-proxy callers, remove only apps
+marked kind: system-test and their recorded test resources, and resume interrupted install
+stages. It runs only safe repairs, with confirmation or --yes, then rechecks each one.
+It never automatically applies a newer checkout (that restarts core services).
 
 Every check has a stable name, a status (ok, warn, fail), one line of explanation and,
 for warn and fail, one line of what to do (with the runbook when there is one). Checks
 that do not apply to this box (TLS with tls off, the agent without its profile) are not
 in the list; they are named under not_applicable. The JSON is
-  {doctor_version, generated_at, install_dir, checkout, duration_seconds,
-   checks: [{name, status, detail, action, runbook, evidence}], summary: {ok, warn, fail},
+  {doctor_version, product, mode, commit, generated_at, install_dir, checkout, duration_seconds,
+   checks: [{name, status, detail, action, runbook, evidence, repair?, repaired?}], summary: {ok, warn, fail, fix_now, recommended, repaired},
    not_applicable: [{name, reason}], source, platform, portal_api}
 source says where the platform view came from: "portal-api" when the portal's read-only
 API answered (platform is its GET /api/platform/status, docs/portal-api.md, and the
 portal-api check compares it), "local" when it did not (platform is null, portal_api.reason
 says why, and the report is the local checks alone).
-Exit status: 0 without a fail, 1 with one. Secrets: the proxy admin password and the
+Exit status: 0 without a fail, 1 with one, 2 for usage errors. Secrets: the proxy admin password and the
 Gitea tokens are read from .env into this process and sent only to loopback services,
 never on a command line, never printed.
 """
-import concurrent.futures, datetime, json, os, re, shutil, socket, subprocess, sys, tempfile, time
+import argparse, concurrent.futures, contextlib, datetime, glob, io, json, os, re, shlex, shutil, socket, subprocess, sys, tempfile, time
 import urllib.error, urllib.request
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import legacy  # noqa: E402  (an installation under a previous name: one message, no checks)
 import portalapi  # noqa: E402  (the portal's read-only status API, docs/portal-api.md)
 import applint  # noqa: E402  (static trust boundary and install path ownership)
 
-DOCTOR_VERSION = 1
+DOCTOR_VERSION = 2
 RUNBOOK = "docs/runbooks/%s.md"
-SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY|DATABASE_URL|REDIS_URL)")
+# A slash-delimited filesystem path is not a bearer token. Require token boundaries;
+# base64 may contain slashes but cannot start inside an absolute filesystem path.
+TOKEN = re.compile(r"(?:eyJ[A-Za-z0-9_.=-]+|(?:ghp_|gho_|sk-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9/_.-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+_-][A-Za-z0-9+/_-]{31,}={0,2})(?![A-Za-z0-9/_-]))")
 
 # Disk and memory: the preflight's thresholds (install.sh stage_preflight) are the warning
 # line; a fail is a box that is about to stop writing.
@@ -77,9 +82,9 @@ def ago(seconds):
     return "%d days" % (seconds // 86400)
 
 
-def run(cmd, timeout=20, stdin=None):
+def run(cmd, timeout=20, stdin=None, cwd=None):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=stdin)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=stdin, cwd=cwd)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "timed out after %ds" % timeout
@@ -110,6 +115,11 @@ class Check:
     def __init__(self, name):
         self.name, self.status, self.detail = name, "ok", ""
         self.action, self.runbook, self.evidence = "", "", []
+        self.repair = self.repaired = None
+
+    def with_repair(self, id, description, safe, command):
+        self.repair = {"id": id, "description": description, "safe": safe, "command": command}
+        return self
 
     def ok(self, detail):
         self.status, self.detail = "ok", detail
@@ -132,16 +142,26 @@ class Check:
             d["action"] = self.action
             d["runbook"] = (RUNBOOK % self.runbook) if self.runbook else ""
         d["evidence"] = self.evidence
+        if self.repair is not None:
+            d["repair"] = self.repair
+        if self.repaired is not None:
+            d["repaired"] = self.repaired
         return d
 
 
 class Box:
     """What every check reads: the files of the installation and one look at Docker."""
 
-    def __init__(self, install_dir, root):
+    def __init__(self, install_dir, root, mode="report"):
         self.I, self.H = install_dir, root
+        self.mode = mode
+        rc, head, _ = run(["git", "-C", root, "rev-parse", "HEAD"], timeout=5)
+        self.commit = head.strip() if rc == 0 else ""
         self.env_file = os.path.join(install_dir, ".env")
-        self.env = read_env(self.env_file)
+        self.env = read_env(self.env_file) if os.access(self.env_file, os.R_OK) else {}
+        self.inventory = load_json(os.path.join(install_dir, "inventory.json"), {}) or {}
+        self.secret_values = set()
+        self.read_secrets()
         e = self.env.get
         self.project = e("COMPOSE_PROJECT_NAME", "ihc")
         self.profiles = [p for p in e("COMPOSE_PROFILES", "").split(",") if p]
@@ -153,10 +173,34 @@ class Box:
         self.http_port, self.https_port = e("PROXY_HTTP_PORT", "80"), e("PROXY_HTTPS_PORT", "443")
         self.ca = os.path.join(install_dir, "local/ca/ca.crt")
         self.state = load_json(os.path.join(install_dir, "state.json"), {})
-        self.inventory = load_json(os.path.join(install_dir, "inventory.json"), {}) or {}
         self.containers = {}
         self.dc = ["docker", "compose", "--project-directory", install_dir, "-f", os.path.join(install_dir, "compose.yml")]
         self.dc_shown = "docker compose --project-directory %s -f %s/compose.yml" % (install_dir, install_dir)
+
+    def read_secrets(self):
+        paths = [self.env_file] + glob.glob(os.path.join(self.I, "apps/*/.env"))
+        paths += glob.glob(os.path.join(self.I, "deploys/*/releases/*/*.env"))
+        paths += glob.glob(os.path.join(self.I, "app-env/*.env"))
+        for _, app in self.apps():
+            if app.get("env_file"):
+                paths.append(app["env_file"])
+        paths += [os.path.join(self.I, "agent/agent.env")]
+        for path in paths:
+            try:
+                self.secret_values.update(v for v in read_env(path).values() if len(v) >= 8)
+            except OSError:
+                pass
+
+    def redact(self, value):
+        if isinstance(value, dict):
+            return {k: self.redact(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.redact(v) for v in value]
+        if isinstance(value, str):
+            for secret in sorted(self.secret_values, key=len, reverse=True):
+                value = value.replace(secret, "[redacted]")
+            return TOKEN.sub(lambda m: m.group() if m.group() == self.commit else "[redacted]", value)
+        return value
 
     def has(self, profile):
         return profile in self.profiles
@@ -227,25 +271,24 @@ def host_of(url):
 
 def curl(url, args=(), headers=(), timeout=10):
     """-> (code, redirect_url, first bytes of the body). A header with a secret travels in
-    a 0600 config file, never as an argument."""
+    curl's config on stdin, never as an argument or a temporary file."""
     cfg = None
     cmd = ["curl", "-sS", "--max-time", str(timeout), "-o", "-", "-w", "\n%{http_code} %{redirect_url}"] + list(args)
     if headers:
-        fd, cfg = tempfile.mkstemp(prefix="ihc-doctor.")
-        with os.fdopen(fd, "w") as f:
-            for h in headers:
-                f.write('header = "%s"\n' % h.replace('"', '\\"'))
-        cmd += ["-K", cfg]
-    try:
-        rc, out, err = run(cmd + [url], timeout=timeout + 5)
-    finally:
-        if cfg:
-            os.unlink(cfg)
+        cfg = "".join('header = "%s"\n' % h.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '') for h in headers)
+        cmd += ["-K", "-"]
+    rc, out, err = run(cmd + [url], timeout=timeout + 5, stdin=cfg)
     body, _, tail = out.rpartition("\n")
     code, _, loc = tail.partition(" ")
     if not re.match(r"^\d{3}$", code):
         code = "000"
     return code, loc.strip(), body[:65536] if code != "000" else (err.strip().splitlines() or [""])[-1][:200]
+
+
+def portal_get(url, args, headers, timeout):
+    # portalapi accepts a transport; reuse the doctor's stdin-only credential handling.
+    code, _, body = curl(url, args, headers, timeout)
+    return code, body
 
 
 def to_sso(code, loc, box):
@@ -278,6 +321,114 @@ def c_install(box):
         return c.warn("the install has not finished (next stage: %s)" % (pending[0] if pending else "?"),
                       "if no install is running now, resume it: %s/install.sh --apply --install-dir %s" % (box.H, box.I))
     return c.ok("installed and complete (%d stages), installation %s" % (len(stages), st.get("installation_id", "?")[:8]))
+
+
+def orphan_callers(box):
+    # Without an inventory we cannot establish ownership; never guess before deleting.
+    inventory = load_json(os.path.join(box.I, "inventory.json"))
+    if not isinstance(inventory, dict) or not isinstance(inventory.get("apps"), dict):
+        return None
+    return [os.path.basename(p)[:-5] for p in sorted(glob.glob(os.path.join(box.I, "secrets-proxy/callers/*.json")))
+            if os.path.basename(p)[:-5] != "agent" and os.path.basename(p)[:-5] not in inventory["apps"]]
+
+
+def c_secrets_proxy_callers(box):
+    c = Check("secrets-proxy-callers")
+    slugs = orphan_callers(box)
+    if slugs is None:
+        return c.warn("no readable app inventory; caller ownership cannot be checked", "restore inventory.json, then run the doctor again")
+    if not slugs:
+        return c.ok("no orphan secrets proxy callers (agent is retained)")
+    command = " && ".join(shlex.join([sys.executable, os.path.join(box.H, "scripts/lib/secretsproxy.py"), "remove", box.I, slug]) for slug in slugs)
+    c.see("orphan callers: " + ", ".join(slugs))
+    safe = all(re.fullmatch(r"[a-z0-9][a-z0-9-]{1,62}[a-z0-9]", slug) for slug in slugs)
+    return c.warn("orphan secrets proxy callers: " + ", ".join(slugs), command).with_repair(
+        "remove-orphan-callers", "back up and remove caller records without an app; keep agent", safe, command)
+
+
+def system_test_apps(box):
+    return [(slug, app) for slug, app in box.apps() if app.get("kind") == "system-test"]
+
+
+def test_app_problem(box, slug, app):
+    import appmanifest
+    if appmanifest.slug_problem(slug):
+        return "invalid or reserved app slug"
+    org = box.env.get("GITEA_ORGANIZATION", "company")
+    if app.get("repository") not in (None, "", org + "/" + slug):
+        return "repository does not belong to the test slug"
+    db = "app_" + slug.replace("-", "_")
+    allowed = {"postgres:database:" + db, "postgres:role:" + db, "redis:acl-user:app-" + slug,
+               "redis:prefix:" + slug + ":", "garage:bucket:app-" + slug, "garage:key:app-" + slug,
+               "authentik:application:" + slug, "authentik:provider:proxy:app-" + slug,
+               "proxy:" + slug + "." + box.base}
+    extra = set(app.get("resources") or []) - allowed
+    return "recorded resources may belong to something else: " + ", ".join(sorted(extra)) if extra else ""
+
+
+def c_system_test_apps(box):
+    c = Check("system-test-apps")
+    apps = system_test_apps(box)
+    if not apps:
+        return c.ok("no system-test apps left in the inventory")
+    problems = [slug + ": " + why for slug, app in apps if (why := test_app_problem(box, slug, app))]
+    command = " && ".join(shlex.join([os.path.join(box.H, "scripts/ihc-app.sh"), "remove", slug, "--install-dir", box.I, "--yes"]) for slug, _ in apps)
+    for problem in problems:
+        c.see(problem)
+    description = "back up local test files and remove only system-test apps and their test resources"
+    if problems:
+        description = "manual review required: " + "; ".join(problems)
+    return c.warn("system-test apps left behind: " + ", ".join(slug for slug, _ in apps), command).with_repair(
+        "remove-system-test-app", description, not problems, command)
+
+
+def install_running(box):
+    rc, out, _ = run(["ps", "-eo", "pid=,args="], timeout=5)
+    if rc:
+        return True  # Cannot prove it is safe to start another installer.
+    for line in out.splitlines():
+        try:
+            words = shlex.split(line)
+        except ValueError:
+            continue
+        # The installer is a shell script; ignore doctor/status and this Python process.
+        if len(words) < 3 or os.path.basename(words[1]) not in ("bash", "sh", "zsh"):
+            continue
+        if any(os.path.basename(w) == "install.sh" for w in words[2:4]) and not any(
+                w in ("doctor", "status", "handoff", "stop", "start", "remove", "--plan") for w in words[2:]):
+            return True
+    return False
+
+
+def resume_args(box, name, stage):
+    command = stage.get("resume_command")
+    args = shlex.split(command) if command else [os.path.join(box.H, "install.sh"), "--apply", "--install-dir", box.I, "--from", name]
+    if not args or os.path.basename(args[0]) != "install.sh":
+        raise ValueError("recorded resume command is not an installer command")
+    for flag in ("--yes", "--non-interactive"):
+        if flag not in args:
+            args.append(flag)
+    return args
+
+
+def c_install_stages(box):
+    c = Check("install-stages")
+    active = install_running(box)
+    stages = box.state.get("stages") or {}
+    bad = [(n, st) for n, st in stages.items() if st.get("status") == "failed" or
+           (st.get("status") in ("running", "started") and not active)]
+    if not bad:
+        return c.ok("installer running; no failed stages" if active else "no failed or interrupted install stages")
+    for name, stage in bad:
+        c.see("%s: %s" % (name, stage.get("status")))
+    detail = "failed or interrupted install stages: " + ", ".join(n for n, _ in bad)
+    try:
+        command = shlex.join(resume_args(box, *bad[0]))
+    except ValueError as e:
+        return c.fail(detail + "; " + str(e), "check state.json and resume with install.sh --apply --from " + bad[0][0])
+    return c.fail(detail, command).with_repair("resume-install",
+        "back up installation files and resume the recorded stage; stages probe before acting" if not active else
+        "wait for the current installer to finish before resuming", not active, command)
 
 
 def c_docker(box):
@@ -717,6 +868,11 @@ def c_backup(box):
     if age > max_h:
         return c.fail("the newest good backup is %s old, older than the %g h window" % (ago(age * 3600), max_h),
                       "find why the scheduled run did not happen (%s logs --tail 50 backup), then run one: %s" % (box.dc_shown, run_line), "backup-stuck")
+    # --lint writes nothing, and the quick verification writes restic's cache and locks:
+    # lint stops at the age. Report and fix modes verify as they always did.
+    if box.mode == "lint":
+        c.see("repository verification not run under --lint (it writes restic's cache and locks)")
+        return c.ok("newest good backup %s old (window %g h); repository not verified (--lint)" % (ago(age * 3600), max_h))
     # Quick verification: the repository opens with the key, the newest run's snapshots are
     # there, restic check (structure) passes. No dump is restored; that is verify --latest.
     rc, out, err = run([os.path.join(box.H, "scripts/ihc-backup.sh"), "--install-dir", box.I, "verify", "--latest", "--quick", "--json"], timeout=25)
@@ -759,10 +915,15 @@ def app_runtime(box, slug, a):
     try:
         req = urllib.request.Request(url, headers={"Authorization": "token " + box.env.get("GITEA_READONLY_TOKEN", "")})
         text = urllib.request.urlopen(req, timeout=8).read().decode()
-        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-            f.write(text)
-        rc, out, _ = run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "appmanifest.py"), "vars", f.name, slug], timeout=10)
-        os.unlink(f.name)
+        import appmanifest, config
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                appmanifest.cmd_vars("company-app.yaml", slug, manifest=config.mini_yaml(text))
+                rc = 0
+            except SystemExit:
+                rc = 1
+        out = stream.getvalue()
         v = dict(re.findall(r"^(M_[A-Z_]+)='?([^'\n]*)'?$", out, re.M))
         if rc == 0 and v.get("M_HEALTH_PATH"):
             return {"service": v["M_SERVICE"], "health_path": v["M_HEALTH_PATH"], "health_status": int(v["M_HEALTH_STATUS"]),
@@ -848,7 +1009,7 @@ def c_app_lint(box, slug):
         else:
             source = os.path.join(box.I, "apps", slug)
     if os.path.isfile(os.path.join(source, manifest)):
-        rc, out, _ = run([sys.executable, "-I", os.path.join(box.H, "scripts/lib/applint.py"),
+        rc, out, _ = run([sys.executable, "-I", "-B", os.path.join(box.H, "scripts/lib/applint.py"),
                           source, box.I, manifest], timeout=20)
         findings += out.splitlines()
         if rc and not out.strip():
@@ -898,6 +1059,16 @@ def c_version(box):
     head = head.strip()
     _, branch, _ = run(["git", "-C", box.H, "rev-parse", "--abbrev-ref", "HEAD"], timeout=5)
     c.see("checkout %s on %s at %s" % (box.H, branch.strip(), head[:12]))
+    installed = box.state.get("installed_commit", "")
+    if installed and installed != head:
+        c.see("last completed install at " + installed)
+        rc, _, _ = run(["git", "-C", box.H, "merge-base", "--is-ancestor", installed, head], timeout=5)
+        if rc == 0:
+            command = shlex.join([os.path.join(box.H, "install.sh"), "--apply", "--from", "foundation", "--install-dir", box.I, "--yes", "--non-interactive"])
+            return c.warn("checkout %s is ahead of the last completed install %s" % (head[:12], installed[:12]), command).with_repair(
+                "apply-checkout", "apply this checkout; restarts core services (operator level 3)", False, command)
+    if not installed:
+        c.see("installed commit not recorded by this older installer; running version cannot be compared")
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     try:
         p = subprocess.run(["git", "-C", box.H, "ls-remote", "origin", "refs/heads/main"], capture_output=True, text=True, timeout=8, env=env)
@@ -950,11 +1121,11 @@ def c_portal_api(box, reading):
 
 # ------------------------------------------------------------------------------ main
 
-def doctor(install_dir, root):
+def doctor(install_dir, root, mode="report"):
     t0 = time.time()
-    box = Box(install_dir, root)
+    box = Box(install_dir, root, mode)
     checks, na = [], []
-    checks.append(c_install(box))
+    checks += [c_install(box), c_install_stages(box), c_secrets_proxy_callers(box), c_system_test_apps(box), c_version(box)]
     d = c_docker(box)
     checks.append(d)
     if d.status != "fail":
@@ -977,10 +1148,9 @@ def doctor(install_dir, root):
         jobs.append(("agent", c_agent))
     else:
         na.append({"name": "agent", "reason": "the agent profile is off"})
-    jobs.append(("version", c_version))
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         hosts_f = pool.submit(npm_hosts, box)
-        portal_f = pool.submit(portalapi.fetch_status, box.env, box.I)
+        portal_f = pool.submit(portalapi.fetch_status, box.env, box.I, http=portal_get)
         futs = [(n, pool.submit(f, box)) for n, f in jobs]
         hosts, err = hosts_f.result()
         # routes after memory and the apps after backup: the order a person reads them in.
@@ -1003,22 +1173,118 @@ def doctor(install_dir, root):
     return box, checks, na, t0
 
 
+LOCAL_CHECKS = {"install-stages": c_install_stages, "secrets-proxy-callers": c_secrets_proxy_callers,
+                "system-test-apps": c_system_test_apps}
+
+
+def backup_files(box, paths):
+    existing = [p for p in paths if os.path.lexists(os.path.join(box.I, p))]
+    if not existing:
+        return None
+    parent = os.path.join(box.I, "doctor-backups")
+    if os.path.islink(parent):
+        raise ValueError("doctor-backups must be a local directory, not a symlink")
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    os.chmod(parent, 0o700)
+    directory = tempfile.mkdtemp(prefix=now_utc().strftime("%Y%m%dT%H%M%S.%fZ-"), dir=parent)
+    for relative in existing:
+        src, dst = os.path.join(box.I, relative), os.path.join(directory, relative)
+        if not applint.within(src, box.I):
+            raise ValueError("backup source leaves the install directory: " + relative)
+        os.makedirs(os.path.dirname(dst), mode=0o700, exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, symlinks=True)
+        else:
+            shutil.copy2(src, dst)
+    for path, dirs, _ in os.walk(directory):
+        os.chmod(path, 0o700)
+    return directory
+
+
+def apply_repair(box, check):
+    backup = None
+    try:
+        if check.name == "secrets-proxy-callers":
+            slugs = orphan_callers(box)
+            if slugs is None:
+                raise ValueError("inventory unavailable; nothing removed")
+            paths = ["secrets-proxy/callers/" + slug + ".json" for slug in slugs]
+            backup = backup_files(box, paths)
+            commands = [[sys.executable, "-I", "-B", os.path.join(box.H, "scripts/lib/secretsproxy.py"), "remove", box.I, slug] for slug in slugs]
+        elif check.name == "system-test-apps":
+            apps = system_test_apps(box)
+            if any(test_app_problem(box, slug, app) for slug, app in apps):
+                raise ValueError("test resources require manual review; nothing removed")
+            paths = ["inventory.json"]
+            for slug, _ in apps:
+                paths += ["apps/" + slug, "app-data/" + slug, "deploys/" + slug, "secrets-proxy/callers/" + slug + ".json"]
+            backup = backup_files(box, paths)
+            commands = [[os.path.join(box.H, "scripts/ihc-app.sh"), "remove", slug, "--install-dir", box.I, "--yes"] for slug, _ in apps]
+        else:
+            if install_running(box):
+                raise ValueError("an installer may be running; nothing resumed")
+                        # The stages rewrite the installation's top-level files (state.json, .env,
+            # compose.yml, config.yaml, inventory.json); data directories are not copied.
+            paths = [n for n in os.listdir(box.I) if os.path.isfile(os.path.join(box.I, n))
+                     and not os.path.islink(os.path.join(box.I, n))]
+            backup = backup_files(box, paths)
+            commands = [shlex.split(check.repair["command"])]
+        output = []
+        for command in commands:
+            rc, out, err = run(command, timeout=3600, cwd=box.I)
+            if rc:
+                raise RuntimeError("repair command exited %d: %s" % (rc, (err or out).strip()[-500:]))
+            output.append("command completed")
+        return {"ok": True, "detail": "; ".join(output) or "nothing left to repair", "backup": backup}
+    except (OSError, ValueError, RuntimeError) as e:
+        return {"ok": False, "detail": str(e), "backup": backup}
+
+
+def fix_checks(box, checks, yes=False, as_json=False):
+    attempted = {}
+    if not yes and (as_json or not sys.stdin.isatty()):
+        print("[!!] no repairs applied: --fix needs --yes without a terminal (and with --json)", file=sys.stderr)
+        return attempted
+    for original in checks:
+        f = LOCAL_CHECKS.get(original.name)
+        if not f:
+            continue
+        fresh = Box(box.I, box.H, "fix")
+        check = f(fresh)
+        if check.status == "ok" or not check.repair or not check.repair["safe"]:
+            continue
+        if not yes:
+            prompt = fresh.redact("Apply %s: %s? [y/N] " % (check.repair["id"], check.repair["description"]))
+            print(prompt, end="", file=sys.stderr, flush=True)
+            if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+                continue
+        result = apply_repair(fresh, check)
+        after = f(Box(box.I, box.H, "fix"))
+        result["ok"] = result["ok"] and after.status == "ok"
+        if after.status != "ok":
+            result["detail"] += "; " + after.detail
+        else:
+            result["detail"] = after.detail if result["ok"] else result["detail"]
+        attempted[check.name] = result
+        # Keep values that a successful repair may just have removed from an env file.
+        box.secret_values.update(fresh.secret_values)
+    return attempted
+
+
 def report(box, checks, na, t0):
     s = {"ok": 0, "warn": 0, "fail": 0}
     for c in checks:
         s[c.status] += 1
-    r = {"doctor_version": DOCTOR_VERSION, "generated_at": iso(now_utc()), "install_dir": box.I, "checkout": box.H,
+    r = {"doctor_version": DOCTOR_VERSION, "product": "ihc", "mode": box.mode, "commit": box.commit,
+         "generated_at": iso(now_utc()), "install_dir": box.I, "checkout": box.H,
          "duration_seconds": round(time.time() - t0, 1),
          "ingress": "%s/%s" % (box.ingress, box.tls), "profiles": ["core"] + box.profiles,
          "checks": [c.as_dict() for c in checks], "summary": s, "not_applicable": na}
     reading = getattr(box, "reading", None) or {"source": "local", "platform": None, "portal_api": {"token_env": portalapi.TOKEN_ENV, "reason": "Docker is not answering: nothing else was read"}}
     r.update(reading)
-    # The same guard as the brief: no value of .env may leave in a report.
-    text = json.dumps(r)
-    for k, v in box.env.items():
-        if SECRET_NAME.search(k) and len(v) >= 8 and v in text:
-            sys.exit("refused: a secret value would appear in the report")
-    return r
+    s.update(fix_now=s["fail"], recommended=s["warn"],
+             repaired=sum(bool(c.repaired and c.repaired["ok"]) for c in checks))
+    return box.redact(r)
 
 
 def text(r, verbose):
@@ -1034,6 +1300,8 @@ def text(r, verbose):
         out.append("%s %-*s  %s" % (mark[c["status"]], w, c["name"], c["detail"]))
         if c["status"] != "ok":
             out.append("     %-*s  do: %s%s" % (w, "", c["action"], " (%s)" % c["runbook"] if c.get("runbook") else ""))
+        if c.get("repaired") and not c["repaired"]["ok"]:
+            out.append("     repair failed: " + c["repaired"]["detail"])
         if verbose:
             for e in c["evidence"]:
                 out.append("     %-*s  - %s" % (w, "", e))
@@ -1049,41 +1317,60 @@ def text(r, verbose):
         out.append("All %d checks ok: the cloud is on the air." % s["ok"])
     if not verbose:
         out.append("Details: --verbose. For an agent: --json.")
+    for label, status in (("Fix now", "fail"), ("Recommended", "warn"), ("Repaired", None)):
+        group = [c for c in r["checks"] if c["status"] == status] if status else [c for c in r["checks"] if c.get("repaired", {}).get("ok")]
+        out.append(label + ":")
+        for c in group:
+            out.append("  %s: %s" % (c["name"], c["detail"]))
+            if status:
+                out.append("    " + c["action"])
+        if not group:
+            out.append("  none")
     return "\n".join(out)
 
 
 def main():
-    if len(sys.argv) < 3:
-        sys.exit(__doc__)
-    install_dir, root, args = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3:]
-    as_json, verbose = "--json" in args, "--verbose" in args or "-v" in args
-    out_dir = args[args.index("--out") + 1] if "--out" in args else os.path.join(install_dir, "agent/reference")
-    # Two cases where no check can run: no installation, or one under a previous name
-    # (legacy.py). Either is the install check, failed, alone.
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("install_dir")
+    parser.add_argument("root")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--verbose", "-v", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--lint", action="store_true")
+    modes.add_argument("--fix", action="store_true")
+    parser.add_argument("--yes", action="store_true")
+    parser.add_argument("--out")
+    args = parser.parse_args()
+    install_dir, root = os.path.abspath(args.install_dir), os.path.abspath(args.root)
+    mode = "fix" if args.fix else "lint" if args.lint else "report"
+    out_dir = args.out or os.path.join(install_dir, "agent/reference")
+    box = Box(install_dir, root, mode)
     msg = action = None
     evidence = []
     old = legacy.detect(install_dir)
-    if not os.access(os.path.join(install_dir, ".env"), os.R_OK):
+    if not os.access(box.env_file, os.R_OK):
         msg = "no readable .env in %s: no installation there, or run the doctor as the user who installed it (--install-dir DIR for another place)" % install_dir
         action = "pass --install-dir with the directory install.sh used"
     elif old:
         lines = legacy.message(install_dir, *old).splitlines()
         msg, action, evidence = lines[0], " ".join(l.strip() for l in lines[3:]), [lines[1], lines[2]]
     if msg:
-        if as_json:
-            print(json.dumps({"doctor_version": DOCTOR_VERSION, "generated_at": iso(now_utc()), "install_dir": install_dir,
-                              "checks": [{"name": "install", "status": "fail", "detail": msg, "action": action, "runbook": "",
-                                          "evidence": evidence}],
-                              "summary": {"ok": 0, "warn": 0, "fail": 1}, "not_applicable": []}, indent=2))
-        elif evidence:
-            print("[xx] install  " + "\n             ".join(legacy.message(install_dir, *old).splitlines()), file=sys.stderr)
-        else:
-            print("[xx] install  " + msg, file=sys.stderr)
-        sys.exit(1)
-    box, checks, na, t0 = doctor(install_dir, root)
+        c = Check("install").fail(msg, action)
+        c.evidence = evidence
+        checks, na, t0 = [c], [], time.time()
+    else:
+        box, checks, na, t0 = doctor(install_dir, root, mode)
+        if args.fix:
+            attempted = fix_checks(box, checks, args.yes, args.json)
+            if attempted:
+                old_secrets = box.secret_values
+                box, checks, na, _ = doctor(install_dir, root, mode)
+                box.secret_values.update(old_secrets)
+                for c in checks:
+                    c.repaired = attempted.get(c.name)
     r = report(box, checks, na, t0)
     # The operator agent's copy of the last full run (ihc-ro doctor reads it).
-    if os.path.isdir(out_dir) and os.access(out_dir, os.W_OK):
+    if not args.lint and os.path.isdir(out_dir) and os.access(out_dir, os.W_OK):
         try:
             fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".doctor.")
             with os.fdopen(fd, "w") as f:
@@ -1091,10 +1378,10 @@ def main():
             os.chmod(tmp, 0o644); os.replace(tmp, os.path.join(out_dir, "doctor.json"))
         except OSError:
             pass
-    if as_json:
+    if args.json:
         print(json.dumps(r, indent=2))
     else:
-        print(text(r, verbose), file=sys.stderr)
+        print(text(r, args.verbose), file=sys.stderr)
     sys.exit(1 if r["summary"]["fail"] else 0)
 
 

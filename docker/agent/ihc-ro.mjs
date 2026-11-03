@@ -140,6 +140,7 @@ const commands = {
   // container never gets. Here: the checks that a read-only view allows, live, with the same
   // names and shape, plus the last full run the host wrote to reference/doctor.json.
   async doctor(flag) {
+    if (args.includes("--fix")) throw new Error("ihc-ro doctor is read-only; --fix is refused. Ask a human to run ihc doctor --fix on the host.");
     const brief = readJson(REF + "brief.json") || {};
     const base = process.env.IHC_BASE_DOMAIN || (brief.endpoints || {}).base_domain || "";
     const tls = ((brief.endpoints || {}).ingress || "").split("/")[1] === "internal";
