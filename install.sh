@@ -7,7 +7,7 @@
 #   ./install.sh --apply [--config FILE]          apply without the confirmation prompt
 #   ./install.sh --non-interactive --config FILE  for agents and CI: no prompts at all
 #   ./install.sh --apply --from STAGE             resume (re-run) from STAGE
-#   ./install.sh doctor [--verbose] [--json]      is it on the air, and what to do if not (scripts/ihc-doctor.sh)
+#   ./install.sh doctor [--verbose] [--json] [--lint | --fix [--yes]]      is it on the air, and what to do if not (scripts/ihc-doctor.sh)
 #   ./install.sh status [--verbose] [--json]      short state: URLs, health, backup age, apps;
 #                                                 --json reads the portal API (docs/portal-api.md)
 #   ./install.sh handoff                          the day-zero steps again
@@ -41,6 +41,7 @@ FROM_STAGE=""
 INSTALL_DIR="${IHC_INSTALL_DIR:-}"
 ASSUME_YES=false
 SUBCOMMAND=""
+DOCTOR_ARGS=()
 VERBOSE=false; CONFIRM_ARG=""; REMOVE_IMAGES=false; REMOVE_DIR=false
 
 usage() { sed -n '2,20p' "$SELF" | sed 's/^# \{0,1\}//'; }
@@ -60,6 +61,7 @@ while [ $# -gt 0 ]; do
     --from=*) FROM_STAGE="${1#*=}" ;;
     --install-dir) INSTALL_DIR="$2"; shift ;;
     --install-dir=*) INSTALL_DIR="${1#*=}" ;;
+    --lint|--fix) DOCTOR_ARGS+=("$1") ;;
     --json) JSON_OUTPUT=true ;;
     --yes|-y) ASSUME_YES=true ;;
     status|handoff|stop|start|remove|doctor) SUBCOMMAND="$1" ;;
@@ -73,6 +75,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+[ ${#DOCTOR_ARGS[@]} -eq 0 ] || [ "$SUBCOMMAND" = doctor ] || { fail "--lint and --fix are doctor options"; exit 2; }
 
 # ------------------------------------------------------------ configuration
 # Answers come from --config, from <install-dir>/config.yaml on a re-run, or from
@@ -1510,7 +1514,7 @@ write_shortcut() {
   cat > "$INSTALL_DIR/ihc.new" <<SH
 #!/bin/sh
 # Written by install.sh: this installation's commands, run from the checkout that installed it.
-#   ihc doctor [--verbose] [--json]   is it on the air, and what to do if not
+#   ihc doctor [--verbose] [--json] [--lint | --fix [--yes]]   is it on the air, and what to do if not
 #   ihc status | handoff              the short state; the day-zero steps
 #   ihc brief [--json]                the operator's map of the box
 #   ihc app ARGS | ihc backup ARGS    scripts/ihc-app.sh, scripts/ihc-backup.sh
@@ -1540,6 +1544,11 @@ run_stage() {
   state stage "$name" start --config-sha "$CONFIG_SHA" --resume "$RESUME_PREFIX --from $name"
   if "stage_$name"; then
     state stage "$name" complete
+    if [ "$name" = foundation ]; then
+      local installed_commit
+      installed_commit="$(git -C "$IHC_ROOT" rev-parse HEAD 2>/dev/null || true)"
+      [ -z "$installed_commit" ] || state set installed_commit "$installed_commit"
+    fi
   else
     state stage "$name" fail --error-code "E_$(printf '%s' "$name" | tr 'a-z' 'A-Z')"
     [ "${DRY_RUN:-false}" = true ] && die "the plan stopped at $name; nothing was created. Fix the cause above and plan again."
@@ -1807,7 +1816,7 @@ onboarding_main() {
 # -------------------------------------------------------------------- main
 case "$SUBCOMMAND" in
   status|handoff|stop|start|remove) onboarding_main "$SUBCOMMAND"; exit $? ;;
-  doctor) exec "$IHC_ROOT/scripts/ihc-doctor.sh" ${INSTALL_DIR:+--install-dir "$INSTALL_DIR"} $( [ "$VERBOSE" = true ] && echo --verbose) $( [ "$JSON_OUTPUT" = true ] && echo --json) ;;
+  doctor) exec "$IHC_ROOT/scripts/ihc-doctor.sh" ${INSTALL_DIR:+--install-dir "$INSTALL_DIR"} $( [ "$VERBOSE" = true ] && echo --verbose) $( [ "$JSON_OUTPUT" = true ] && echo --json) $( [ "$ASSUME_YES" = true ] && echo --yes) ${DOCTOR_ARGS[@]+"${DOCTOR_ARGS[@]}"} ;;
 esac
 
 resolve_config
