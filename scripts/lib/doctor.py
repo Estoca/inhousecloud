@@ -39,6 +39,7 @@ DOCTOR_VERSION = 2
 RUNBOOK = "docs/runbooks/%s.md"
 # A slash-delimited filesystem path is not a bearer token. Require token boundaries;
 # base64 may contain slashes but cannot start inside an absolute filesystem path.
+SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|_KEY$|AUTHKEY|DATABASE_URL|REDIS_URL|CREDENTIAL)")
 TOKEN = re.compile(r"(?:eyJ[A-Za-z0-9_.=-]+|(?:ghp_|gho_|sk-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9/_.-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+_-][A-Za-z0-9+/_-]{31,}={0,2})(?![A-Za-z0-9/_-]))")
 
 # Disk and memory: the preflight's thresholds (install.sh stage_preflight) are the warning
@@ -178,7 +179,10 @@ class Box:
         self.dc_shown = "docker compose --project-directory %s -f %s/compose.yml" % (install_dir, install_dir)
 
     def read_secrets(self):
-        paths = [self.env_file] + glob.glob(os.path.join(self.I, "apps/*/.env"))
+        # The install's .env mixes settings (domains, profiles, TLS mode, runner names) with
+        # secrets: only the values of secret-named keys there. App and agent env files: every value.
+        self.secret_values.update(v for k, v in self.env.items() if SECRET_NAME.search(k) and len(v) >= 8)
+        paths = glob.glob(os.path.join(self.I, "apps/*/.env"))
         paths += glob.glob(os.path.join(self.I, "deploys/*/releases/*/*.env"))
         paths += glob.glob(os.path.join(self.I, "app-env/*.env"))
         for _, app in self.apps():
