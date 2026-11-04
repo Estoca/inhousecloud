@@ -2,6 +2,16 @@
 
 InHouseCloud is an installer and a handful of scripts that put a company cloud on one machine, plus the portal (`portal/`). A change here runs as root-equivalent on someone's box, so the bar is a change that was run, not only read. This page says how to test, how to open a pull request, and what is not accepted.
 
+## Contributor License Agreement
+
+Before we can merge a pull request from outside Estoca, its author signs the [Estoca Individual Contributor License Agreement](CLA.md) once. A check on the pull request asks for it: comment exactly
+
+```
+I have read the CLA Document and I hereby sign the CLA
+```
+
+and the check turns green. The signature covers all your future contributions to the InHouse repositories. You keep the copyright in your work; the agreement lets Estoca accept it and offer the project under the AGPL-3.0 and under other licenses. Contributions made before 2026-11-04 under the MIT license stay covered by the [`NOTICE`](NOTICE).
+
 ## Running the tests
 
 Three levels, from seconds to a quarter of an hour. CI ([`.github/workflows/portal.yml`](.github/workflows/portal.yml)) runs the first two on every pull request.
