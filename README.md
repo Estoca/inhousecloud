@@ -100,4 +100,4 @@ Preview it locally: `pip install -r docs/requirements.txt && mkdocs serve`.
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE).
+AGPL-3.0-only, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) (versions released before 2026-11-04 remain available under the MIT License).
