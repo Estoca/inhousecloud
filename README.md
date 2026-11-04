@@ -102,4 +102,4 @@ Preview it locally: `pip install -r docs/requirements.txt && mkdocs serve`.
 
 AGPL-3.0-only. Copyright © 2026 Estoca. See [LICENSE](LICENSE).
 
-You can use, modify and self-host it freely. If you run a modified version as a service for others, you must offer them its source under the same license. Versions published before 2026-11-04 were released under MIT.
+You can use, modify and self-host it freely. If you run a modified version as a service for others, you must offer them its source under the same license. Versions published before 2026-11-04 were released under MIT; their MIT notice is kept in [NOTICE](NOTICE).
