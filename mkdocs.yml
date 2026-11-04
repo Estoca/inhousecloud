@@ -7,7 +7,7 @@ site_url: https://inhouse.technology/cloud/docs/
 repo_url: https://github.com/Estoca/inhousecloud
 repo_name: inhousecloud
 edit_uri: edit/main/docs/
-copyright: MIT licensed
+copyright: AGPL-3.0-only · © 2026 Estoca
 
 docs_dir: docs
 strict: true
