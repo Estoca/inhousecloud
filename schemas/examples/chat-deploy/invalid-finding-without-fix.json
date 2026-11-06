@@ -1,0 +1,2 @@
+{"def": "Finding", "valid": false, "note": "every finding says what to do",
+ "value": {"code": "IHC-BUILD-FAILED", "stage": "build", "severity": "error", "message": "x"}}

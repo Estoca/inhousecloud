@@ -1,0 +1,2 @@
+{"def": "AppCheckInput", "valid": false, "note": "a path that leaves the repository",
+ "value": {"slug": "purchase-requests", "base_commit": null, "tree": "full", "files": [{"path": "../../etc/passwd", "content": "x"}]}}

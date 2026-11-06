@@ -1,0 +1,2 @@
+{"def": "Finding", "valid": false, "note": "codes are stable identifiers, not prose",
+ "value": {"code": "build failed", "stage": "build", "severity": "error", "message": "x", "fix": "y"}}

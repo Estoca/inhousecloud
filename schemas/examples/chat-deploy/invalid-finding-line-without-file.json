@@ -1,0 +1,2 @@
+{"def": "Finding", "valid": false, "note": "a line needs its file",
+ "value": {"code": "IHC-BUILD-FAILED", "stage": "build", "severity": "error", "line": 3, "message": "x", "fix": "y"}}

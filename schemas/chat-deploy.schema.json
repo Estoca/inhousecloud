@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Estoca/inhousecloud/schemas/chat-deploy.schema.json",
+  "title": "InHouseCloud chat deploy contract",
+  "description": "Inputs and outputs of the gateway tools ihc_app_spec, ihc_app_check, ihc_app_deploy and ihc_deploy_status. Proposed, not implemented: docs/chat-deploy-contract.md.",
+  "$defs": {
+    "Slug": {
+      "description": "Same rule as company-app.yaml; reserved names and the app-/ihc- prefixes are refused by the tool, as by ihc-app provision.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$"
+    },
+    "Commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "Sha256Id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "JobId": { "type": "string", "pattern": "^job_[0-9a-z]{8,40}$" },
+    "Timestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "Email": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", "maxLength": 254 },
+    "RelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))(?!\\.git(/|$))(?!.*//)[^\\\\\\u0000]+$"
+    },
+    "FindingCode": { "type": "string", "pattern": "^IHC-[A-Z]+(-[A-Z0-9]+)+$" },
+    "Stage": {
+      "enum": ["manifest", "lint", "secrets", "build", "start", "migrate", "health", "auth", "commit", "apply"]
+    },
+
+    "AppSpecInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slug": { "$ref": "#/$defs/Slug" },
+        "include": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["template", "source", "upload"] }
+        },
+        "start_from": {
+          "description": "Reserved for the app catalog; refused today.",
+          "type": "string"
+        }
+      }
+    },
+
+    "AppSpecOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec_version", "stack", "manifest", "env", "auth", "rules", "limits", "check_stages", "deploy_policy"],
+      "properties": {
+        "spec_version": { "const": "1" },
+        "stack": {
+          "type": "object",
+          "required": ["runtime", "starters"],
+          "properties": {
+            "runtime": { "const": "docker-compose" },
+            "starters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "image", "description"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "image": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "manifest": {
+          "type": "object",
+          "required": ["schema_url", "example"],
+          "properties": {
+            "schema_url": { "type": "string" },
+            "example": { "type": "string", "description": "A minimal valid company-app.yaml." }
+          }
+        },
+        "env": {
+          "type": "object",
+          "required": ["provided"],
+          "properties": {
+            "provided": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "meaning"],
+                "properties": {
+                  "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                  "meaning": { "type": "string" },
+                  "when": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "required": ["person_header"],
+          "properties": {
+            "person_header": { "const": "X-authentik-email" },
+            "notes": { "type": "string" }
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "text"],
+            "properties": {
+              "code": { "$ref": "#/$defs/FindingCode" },
+              "text": { "type": "string" }
+            }
+          }
+        },
+        "limits": { "$ref": "#/$defs/Limits" },
+        "check_stages": { "type": "array", "items": { "$ref": "#/$defs/Stage" } },
+        "deploy_policy": {
+          "type": "object",
+          "required": ["existing_app", "new_app_group"],
+          "properties": {
+            "existing_app": { "const": "same as push to main in Gitea" },
+            "new_app_group": { "type": "string" }
+          }
+        },
+        "template": {
+          "type": "object",
+          "required": ["files"],
+          "properties": { "files": { "type": "array", "items": { "$ref": "#/$defs/FileEntry" } } }
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slug", "exists"],
+          "properties": {
+            "slug": { "$ref": "#/$defs/Slug" },
+            "exists": { "type": "boolean" },
+            "head_commit": { "$ref": "#/$defs/Commit" },
+            "url": { "type": "string" },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["path", "size", "sha256"],
+                "properties": {
+                  "path": { "$ref": "#/$defs/RelativePath" },
+                  "size": { "type": "integer", "minimum": 0 },
+                  "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            },
+            "source": { "$ref": "#/$defs/SignedLink" }
+          }
+        },
+        "upload": {
+          "allOf": [
+            { "$ref": "#/$defs/SignedLink" },
+            { "type": "object", "required": ["upload_id", "max_bytes"] }
+          ]
+        }
+      }
+    },
+
+    "Limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inline_bytes", "file_bytes", "files", "upload_bytes", "candidate_ttl_seconds", "checks_per_hour"],
+      "properties": {
+        "inline_bytes": { "type": "integer", "minimum": 1 },
+        "file_bytes": { "type": "integer", "minimum": 1 },
+        "files": { "type": "integer", "minimum": 1 },
+        "upload_bytes": { "type": "integer", "minimum": 1 },
+        "candidate_ttl_seconds": { "type": "integer", "minimum": 1 },
+        "checks_per_hour": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "SignedLink": {
+      "type": "object",
+      "required": ["url", "expires_at"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^https?://" },
+        "expires_at": { "$ref": "#/$defs/Timestamp" },
+        "upload_id": { "type": "string", "pattern": "^up_[0-9a-z]{8,40}$" },
+        "max_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "FileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content"],
+      "properties": {
+        "path": {
+          "allOf": [
+            { "$ref": "#/$defs/RelativePath" },
+            { "not": { "pattern": "(^|/)\\.env$" } }
+          ]
+        },
+        "content": { "type": "string", "maxLength": 262144 },
+        "encoding": { "enum": ["utf8", "base64"], "default": "utf8" }
+      }
+    },
+
+    "AppCheckInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "base_commit", "tree"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/Slug" },
+        "base_commit": { "oneOf": [{ "$ref": "#/$defs/Commit" }, { "type": "null" }] },
+        "tree": { "enum": ["full", "changes"] },
+        "files": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/FileEntry" } },
+        "delete": { "type": "array", "items": { "$ref": "#/$defs/RelativePath" } },
+        "upload_id": { "type": "string", "pattern": "^up_[0-9a-z]{8,40}$" }
+      },
+      "oneOf": [
+        { "required": ["files"], "not": { "required": ["upload_id"] } },
+        { "required": ["upload_id"], "not": { "required": ["files"] } }
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "tree": { "const": "changes" } } },
+          "then": { "properties": { "base_commit": { "$ref": "#/$defs/Commit" } } }
+        },
+        {
+          "if": { "properties": { "tree": { "const": "full" } } },
+          "then": { "not": { "required": ["delete"] } }
+        }
+      ]
+    },
+
+    "AppDeployInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "candidate_id", "base_commit", "message", "confirmed_by"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/Slug" },
+        "candidate_id": { "$ref": "#/$defs/Sha256Id" },
+        "base_commit": { "oneOf": [{ "$ref": "#/$defs/Commit" }, { "type": "null" }] },
+        "message": { "type": "string", "minLength": 3, "maxLength": 200, "pattern": "^[^\\n]+$" },
+        "confirmed_by": { "$ref": "#/$defs/Email" }
+      }
+    },
+
+    "JobAccepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "kind", "state", "poll_after_seconds"],
+      "properties": {
+        "job_id": { "$ref": "#/$defs/JobId" },
+        "kind": { "enum": ["check", "deploy"] },
+        "state": { "enum": ["queued", "running", "refused"] },
+        "candidate_id": { "$ref": "#/$defs/Sha256Id" },
+        "commit": { "$ref": "#/$defs/Commit" },
+        "poll_after_seconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "check" } } }, "then": { "required": ["candidate_id"] } },
+        { "if": { "properties": { "state": { "const": "refused" } } }, "then": { "required": ["findings"] } }
+      ]
+    },
+
+    "DeployStatusInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": { "$ref": "#/$defs/JobId" },
+        "slug": { "$ref": "#/$defs/Slug" }
+      },
+      "oneOf": [{ "required": ["job_id"] }, { "required": ["slug"] }]
+    },
+
+    "StageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "state"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/Stage" },
+        "state": { "enum": ["pending", "running", "passed", "failed", "skipped"] },
+        "seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+
+    "Finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "stage", "severity", "message", "fix"],
+      "properties": {
+        "code": { "$ref": "#/$defs/FindingCode" },
+        "stage": { "$ref": "#/$defs/Stage" },
+        "severity": { "enum": ["error", "warning"] },
+        "file": { "$ref": "#/$defs/RelativePath" },
+        "line": { "type": "integer", "minimum": 1 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "fix": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "docs": { "type": "string", "pattern": "^https://" },
+        "log_excerpt": { "type": "string", "maxLength": 4096 }
+      },
+      "dependentRequired": { "line": ["file"] }
+    },
+
+    "DeployStatusOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "kind", "slug", "state", "stages", "findings", "summary", "created_at"],
+      "properties": {
+        "job_id": { "$ref": "#/$defs/JobId" },
+        "kind": { "enum": ["check", "deploy"] },
+        "slug": { "$ref": "#/$defs/Slug" },
+        "state": { "enum": ["queued", "running", "passed", "failed", "healthy", "unhealthy", "superseded", "refused"] },
+        "terminal": { "type": "boolean" },
+        "stages": { "type": "array", "items": { "$ref": "#/$defs/StageResult" } },
+        "findings": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/Finding" } },
+        "findings_truncated": { "type": "boolean" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "candidate_id": { "$ref": "#/$defs/Sha256Id" },
+        "candidate_expires_at": { "$ref": "#/$defs/Timestamp" },
+        "commit": { "$ref": "#/$defs/Commit" },
+        "release": { "type": "string" },
+        "url": { "type": "string", "pattern": "^https?://" },
+        "rollback_available": { "type": "boolean" },
+        "run_log": { "type": "string", "pattern": "^https?://" },
+        "created_at": { "$ref": "#/$defs/Timestamp" },
+        "finished_at": { "$ref": "#/$defs/Timestamp" },
+        "poll_after_seconds": { "type": "integer", "minimum": 1, "maximum": 60 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["queued", "running"] } } },
+          "then": { "required": ["poll_after_seconds"] }
+        },
+        {
+          "if": { "properties": { "state": { "const": "passed" } } },
+          "then": { "required": ["candidate_id", "candidate_expires_at"], "properties": { "kind": { "const": "check" } } }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["healthy", "unhealthy"] } } },
+          "then": { "required": ["commit"], "properties": { "kind": { "const": "deploy" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "healthy" } } },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "state": { "const": "unhealthy" } } },
+          "then": { "required": ["rollback_available"] }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["failed", "unhealthy", "refused"] } } },
+          "then": { "properties": { "findings": { "contains": { "properties": { "severity": { "const": "error" } } } } } }
+        }
+      ]
+    }
+  }
+}

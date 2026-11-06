@@ -1,0 +1,7 @@
+{"def": "AppCheckInput", "valid": true, "note": "a new app, whole tree inline",
+ "value": {"slug": "purchase-requests", "base_commit": null, "tree": "full", "files": [
+   {"path": "company-app.yaml", "content": "schema_version: 1\napp:\n  slug: purchase-requests\n"},
+   {"path": "docker-compose.yml", "content": "services:\n  app:\n    build: .\n"},
+   {"path": "Dockerfile", "content": "FROM node:22-slim\n"},
+   {"path": "public/logo.png", "content": "iVBORw0KGgo=", "encoding": "base64"},
+   {"path": ".env.example", "content": "PORT=8080\n"}]}}

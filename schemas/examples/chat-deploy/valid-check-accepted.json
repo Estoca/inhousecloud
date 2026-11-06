@@ -1,0 +1,2 @@
+{"def": "JobAccepted", "valid": true, "note": "a check queued",
+ "value": {"job_id": "job_7h2k9d0s1a", "kind": "check", "state": "queued", "candidate_id": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "poll_after_seconds": 5}}

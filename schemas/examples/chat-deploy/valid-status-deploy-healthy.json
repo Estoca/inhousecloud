@@ -1,0 +1,7 @@
+{"def": "DeployStatusOutput", "valid": true, "note": "a deploy on the air",
+ "value": {"job_id": "job_7h2k9d0s1d", "kind": "deploy", "slug": "purchase-requests", "state": "healthy", "terminal": true,
+   "stages": [{"stage": "commit", "state": "passed"}, {"stage": "build", "state": "passed", "seconds": 40}, {"stage": "apply", "state": "passed", "seconds": 12}, {"stage": "health", "state": "passed"}, {"stage": "auth", "state": "passed"}],
+   "findings": [], "summary": "purchase-requests is on the air behind the company sign-in.",
+   "commit": "0123456789abcdef0123456789abcdef01234567", "release": "20261106T172500Z-0123456", "url": "https://purchase-requests.cloud.example.com",
+   "rollback_available": true, "run_log": "https://git.cloud.example.com/company/purchase-requests/actions/runs/12",
+   "created_at": "2026-11-06T17:24:00Z", "finished_at": "2026-11-06T17:25:30Z"}}

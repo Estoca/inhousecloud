@@ -59,3 +59,7 @@ Standalone public DNS with Let's Encrypt also has no recorded live run.
 - **Self-hosted off-site backup copy** and automated monthly restore rehearsals.
   The self-hosted backup script does not implement these yet. This is separate
   from managed hosting's daily S3 backups. See [backup](backup.md#next).
+- **Apps from the chat.** Build and publish an app from the chat in claude.ai,
+  through the MCP gateway, with a check the agent iterates on and a human approving
+  the deploy. The contract is proposed in [chat deploy contract](chat-deploy-contract.md);
+  checks depend on the item above.
