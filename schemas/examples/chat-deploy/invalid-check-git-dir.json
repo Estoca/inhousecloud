@@ -1,0 +1,2 @@
+{"def": "AppCheckInput", "valid": false, "note": "the repository's own .git is never sent",
+ "value": {"slug": "purchase-requests", "base_commit": null, "tree": "full", "files": [{"path": ".git/config", "content": "x"}]}}

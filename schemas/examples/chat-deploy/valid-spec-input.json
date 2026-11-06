@@ -1,0 +1,2 @@
+{"def": "AppSpecInput", "valid": true, "note": "an existing app, with the starter files and a source link",
+ "value": {"slug": "purchase-requests", "include": ["template", "source"]}}

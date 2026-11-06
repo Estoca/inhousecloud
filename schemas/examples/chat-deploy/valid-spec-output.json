@@ -1,0 +1,26 @@
+{"def": "AppSpecOutput", "valid": true, "note": "the answer for an existing app, with an upload link",
+ "value": {
+  "spec_version": "1",
+  "stack": {"runtime": "docker-compose", "starters": [
+    {"id": "node", "image": "node:22-slim", "description": "Express or any Node server, npm start"},
+    {"id": "python", "image": "python:3.12-slim", "description": "FastAPI or Flask, requirements.txt"}]},
+  "manifest": {"schema_url": "https://github.com/Estoca/inhousecloud/blob/main/schemas/company-app.schema.json",
+    "example": "schema_version: 1\napp:\n  slug: purchase-requests\n  name: Purchase requests\n  owner_email: ana@example.com\n"},
+  "env": {"provided": [
+    {"name": "PORT", "meaning": "listen on 0.0.0.0 and this port"},
+    {"name": "DATABASE_URL", "meaning": "the app's own Postgres database, created empty", "when": "database.required: true"},
+    {"name": "DATA_DIR", "meaning": "/data, kept across deploys"}]},
+  "auth": {"person_header": "X-authentik-email", "notes": "The proxy signs the person in; the app reads who it is from the header."},
+  "rules": [
+    {"code": "IHC-LINT-HOST-NETWORK", "text": "No host network, PID, IPC or user namespace."},
+    {"code": "IHC-LINT-OWN-DATASTORE", "text": "No Postgres, Redis or S3 server in the compose file; use DATABASE_URL, REDIS_URL, S3_*."}],
+  "limits": {"inline_bytes": 524288, "file_bytes": 262144, "files": 300, "upload_bytes": 26214400,
+    "candidate_ttl_seconds": 86400, "checks_per_hour": 30},
+  "check_stages": ["manifest", "lint", "secrets", "build", "start", "migrate", "health", "auth"],
+  "deploy_policy": {"existing_app": "same as push to main in Gitea", "new_app_group": "ihc-admins"},
+  "app": {"slug": "purchase-requests", "exists": true, "head_commit": "0123456789abcdef0123456789abcdef01234567",
+    "url": "https://purchase-requests.cloud.example.com",
+    "files": [{"path": "company-app.yaml", "size": 412, "sha256": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa"}]},
+  "upload": {"url": "https://mcp.cloud.example.com/uploads/up_9f3k2m1x0q", "expires_at": "2026-11-06T17:35:00Z",
+    "upload_id": "up_9f3k2m1x0q", "max_bytes": 26214400}
+ }}

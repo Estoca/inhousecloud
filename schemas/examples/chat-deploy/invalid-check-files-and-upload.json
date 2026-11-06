@@ -1,0 +1,2 @@
+{"def": "AppCheckInput", "valid": false, "note": "files or upload_id, never both",
+ "value": {"slug": "purchase-requests", "base_commit": null, "tree": "full", "upload_id": "up_9f3k2m1x0q", "files": [{"path": "a.js", "content": ""}]}}

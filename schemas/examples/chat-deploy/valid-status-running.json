@@ -1,0 +1,4 @@
+{"def": "DeployStatusOutput", "valid": true, "note": "still running",
+ "value": {"job_id": "job_7h2k9d0s1d", "kind": "deploy", "slug": "purchase-requests", "state": "running", "terminal": false,
+   "stages": [{"stage": "commit", "state": "passed"}, {"stage": "build", "state": "running"}],
+   "findings": [], "summary": "Building the release.", "poll_after_seconds": 10, "created_at": "2026-11-06T17:24:00Z"}}

@@ -1,0 +1,2 @@
+{"def": "AppDeployInput", "valid": false, "note": "a deploy is a write: confirmed_by is required",
+ "value": {"slug": "purchase-requests", "candidate_id": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "base_commit": null, "message": "First version"}}

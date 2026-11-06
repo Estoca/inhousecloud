@@ -1,0 +1,3 @@
+{"def": "AppDeployInput", "valid": true, "note": "deploying a checked candidate over the head of main",
+ "value": {"slug": "purchase-requests", "candidate_id": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "base_commit": "0123456789abcdef0123456789abcdef01234567",
+   "message": "Two approval levels for requests above the limit", "confirmed_by": "ana@example.com"}}

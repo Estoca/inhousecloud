@@ -116,6 +116,7 @@ nav:
       - Doctor contract: doctor-contract.md
       - Portal API: portal-api.md
       - MCP gateway: mcp-gateway.md
+      - Chat deploy contract (proposed): chat-deploy-contract.md
   - Reference:
       - Architecture: architecture.md
       - Smoke tests: smoke-tests.md

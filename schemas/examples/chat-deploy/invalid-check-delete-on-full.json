@@ -1,0 +1,2 @@
+{"def": "AppCheckInput", "valid": false, "note": "delete only makes sense over a base",
+ "value": {"slug": "purchase-requests", "base_commit": null, "tree": "full", "files": [{"path": "a.js", "content": ""}], "delete": ["b.js"]}}
