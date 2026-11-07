@@ -131,7 +131,7 @@ run_deployer() { (set -eu; ensure_chat_deployer) > "$WORK/out" 2>&1; }
 run_deployer
 [ "$(cat "$WORK/generated")" = 1 ]
 [ "$(env_get IHC_CHAT_GITEA_TOKEN)" = fixture-token-1 ]
-[ "$(wc -l < "$WORK/out" | tr -d ' ')" = 1 ]
+[ "$(grep -vc "Broken pipe" "$WORK/out")" = 1 ]  # CI ignores SIGPIPE: tr in random_secret may report it
 ! grep -q 'fixture-token\|password' "$WORK/out"
 pass 'fresh first-run creates a private user, reconciles owner membership and writes a probed scoped token; one secret-free ok line'
 run_deployer
