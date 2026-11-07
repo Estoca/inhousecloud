@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # LAB-169 install/image wiring, offline: real staging and lint, parsed Compose,
 # first-run with fake Gitea API/CLI, and the completed-install upgrade path.
-set -eu
+set -Eeu
+# A failed assertion names its line in CI logs instead of exiting silently.
+trap 'echo "chat-deploy-platform: failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Keep every scratch artifact in one ignored folder in the checkout, never /tmp.
 mkdir -p "$ROOT/local"
