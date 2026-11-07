@@ -84,7 +84,7 @@ export function createIhappTools({ env = process.env, config = ihappConfigFromEn
     const starterImage = template.get('Dockerfile')?.toString().match(/^FROM\s+(\S+)/mi)?.[1];
     if (!starterImage) throw new IhappError('IHC-MANIFEST-INVALID', 'The installed starter has no Dockerfile base image.');
     const out = { spec_version: '1', stack: { runtime: 'docker-compose', starters: [{ id: 'node', image: starterImage, description: 'The installed Node starter; apps may use other container stacks.' }] },
-      manifest: { schema_url: 'https://github.com/Estoca/inhousecloud/blob/main/schemas/company-app.schema.json', schema: JSON.parse(readFileSync(new URL('./ihapp-manifest-schema.json', import.meta.url))), example },
+      manifest: { schema_url: 'schemas/company-app.schema.json', schema: JSON.parse(readFileSync(new URL('./ihapp-manifest-schema.json', import.meta.url))), example },
       env: { provided: PROVIDED_ENV }, auth: { person_header: 'X-authentik-email', notes: 'Trust only the platform proxy; require company sign-in.' },
       rules: RULES.map(([code, , text]) => ({ code, text })), limits: { ...LIMITS, checks_per_hour: config.checksPerHour },
       check_stages: [...STATIC_STAGES, ...SKIPPED_STAGES.map(s => s.stage)],
