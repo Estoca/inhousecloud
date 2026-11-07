@@ -1,7 +1,7 @@
 // The chat deploy contract (docs/chat-deploy-contract.md): every example in
 // schemas/examples/chat-deploy/ must match the schema's definition it names when it says
-// "valid": true, and must be refused when it says false. Proposed contract; the tools do
-// not exist yet, so this only keeps the schema and its examples honest.
+// "valid": true, and must be refused when it says false. In House Apps v1 uses
+// static checks; these examples keep the public contract and its implementation honest.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';

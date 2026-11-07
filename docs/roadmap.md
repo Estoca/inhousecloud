@@ -1,6 +1,6 @@
 # Status and Roadmap
 
-Status as of 2026-11-03.
+Status as of 2026-11-07.
 
 ## Available today
 
@@ -21,6 +21,11 @@ are in [first run](first-run.md).
 - **Use AI clients:** the [MCP gateway](mcp-gateway.md) serves platform read tools
   and each app's tools. App writes require a directory-checked `confirmed_by`
   and a gateway-owned audit record. Access can be narrowed per tool.
+- **In House Apps v1 (LAB-169), done:** chat clients can get the app spec, run static
+  manifest/lint/secrets checks, commit an approved candidate through the deploy
+  account, and poll deploy status. The gateway uses the usual Gitea Actions flow.
+  A passed static check does not prove that the app builds or starts. See
+  [MCP gateway](mcp-gateway.md#in-house-apps-v1-apps-from-chat).
 - **Connect sign-in:** the installer connects Authentik to inhouse.technology
   and redeems a single-use login claim on the server. With this connection,
   opening the portal redirects to inhouse.technology. Local administrator
@@ -51,7 +56,7 @@ Standalone public DNS with Let's Encrypt also has no recorded live run.
 
 ## Next
 
-- **Deploy jobs without the Docker socket.** Today build and apply share a job
+- **Deploy jobs without the Docker socket (LAB-168).** Today build and apply share a job
   with the socket; an app's workflow can bypass the reconciler. Move apply
   outside Actions and run builds without privileged access.
 - **Restore one app** from a snapshot without restoring the whole box. Database
@@ -59,7 +64,7 @@ Standalone public DNS with Let's Encrypt also has no recorded live run.
 - **Self-hosted off-site backup copy** and automated monthly restore rehearsals.
   The self-hosted backup script does not implement these yet. This is separate
   from managed hosting's daily S3 backups. See [backup](backup.md#next).
-- **Apps from the chat.** Build and publish an app from the chat in claude.ai,
-  through the MCP gateway, with a check the agent iterates on and a human approving
-  the deploy. The contract is proposed in [chat deploy contract](chat-deploy-contract.md);
-  checks depend on the item above.
+- **Isolated chat checks (LAB-170, after LAB-168).** Extend In House Apps v1's static
+  check with build, migration, start, health and sign-in checks in an isolated
+  environment without privileged access. The broader target is described in the
+  [chat deploy contract](chat-deploy-contract.md).

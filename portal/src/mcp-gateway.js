@@ -11,6 +11,10 @@ import { createAuthentikDirectory } from './authentik-directory.js';
 import { ConfirmationError, createConfirmerResolver, splitConfirmedBy } from './mcp-policy.js';
 import { ProviderError, createProviderGateway, providersFromApps } from './mcp-providers.js';
 import { PlatformToolError, createPlatformTools, isPlatformTool, platformToolsFor } from './mcp-platform-tools.js';
+import { createIhappTools, isIhappTool } from './ihapp-tools.js';
+import { IhappError } from './ihapp-files.js';
+import { redactText } from './ihapp-rules.js';
+import { validAppSlug } from './validate-manifest.js';
 
 // Gateway MCP do cloud (docs/mcp-gateway.md): segundo entrypoint da imagem do portal,
 // servico `mcp` de docker/compose.yml, em mcp.<BASE_DOMAIN>.
@@ -34,6 +38,7 @@ import { PlatformToolError, createPlatformTools, isPlatformTool, platformToolsFo
 export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']);
 const SERVER_INFO = { name: 'inhousecloud-mcp-gateway', title: 'InHouseCloud', version: '0.1.0' };
 const INSTRUCTIONS = 'Tools of the company cloud. ihc_* tools read the platform (apps, health, and for admins the platform status, people, groups and the audit log of writes). '
+  + 'ihapp_* tools author apps: get the spec, run a static check, approve a git deploy and poll its status; runtime checks run in the deploy job in v1. '
   + 'Tools named <app>__<tool> belong to the apps of the cloud; each app decides what its tools return for the signed-in person. '
   + 'A tool whose readOnlyHint is false writes: before calling it, show the person exactly what will change and ask them to approve; then pass confirmed_by with the email of the person who approved. '
   + 'The gateway checks that person in the company directory and records every write, with who asked and who approved, in its audit log.';
@@ -128,6 +133,7 @@ export function createGatewayApp({
   verifier = null,
   providerGateway = null,
   platformTools = null,
+  ihappTools = null,
   directory = null,
   audit = null,
   confirmers = null,
@@ -161,11 +167,14 @@ export function createGatewayApp({
   const auditLog = audit ?? createAuditLog({ databaseUrl: config.auditDatabaseUrl, log });
   const confirmer = confirmers ?? createConfirmerResolver({ directory: people, userGroup: config.userGroup });
   const platform = platformTools ?? createPlatformTools({ directory: people, audit: auditLog });
+  const ihapp = ihappTools ?? createIhappTools({ directory: people, audit: auditLog });
   const resourceMetadataUrl = `${config.publicUrl}/.well-known/oauth-protected-resource/mcp`;
   const currentProviders = () => providersFromApps(listAppsFn(), { userGroup: config.userGroup });
 
   const app = express();
   app.disable('x-powered-by');
+  // Signed archive bodies must remain streams, before the JSON parser.
+  ihapp.attachRoutes(app);
   app.use(express.json({ limit: '1mb' }));
 
   // Descoberta publica para o cliente ler antes da primeira chamada MCP.
@@ -220,12 +229,22 @@ export function createGatewayApp({
 
   async function listTools(user, requestId) {
     const listed = await providers.listTools(user, currentProviders(), { requestId });
-    return [...platformToolsFor(user), ...listed.tools];
+    return [...platformToolsFor(user), ...ihapp.toolsFor(user), ...listed.tools];
   }
 
   async function callTool(user, params, requestId) {
     const name = typeof params?.name === 'string' ? params.name : '';
     const args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
+    if (isIhappTool(name)) {
+      try {
+        if (!ihapp.toolsFor(user).some(tool => tool.name === name)) throw new IhappError('IHC-DEPLOY-NOT-ALLOWED', 'In House Apps is unavailable for this person.');
+        if (name === 'ihapp_deploy') return await callWriteTool(user, { name, provider: { slug: validAppSlug(args.slug) ? args.slug : 'ihapp' }, execute: (input, context) => ihapp.call(user, name, input, context) }, args, requestId);
+        return toolResult(await ihapp.call(user, name, args, { requestId }));
+      } catch (error) {
+        if (error instanceof IhappError) return toolResult(`${error.code}: ${error.message}`, { isError: true });
+        throw error;
+      }
+    }
     if (isPlatformTool(name)) {
       try {
         return toolResult(await platform.call(user, name, args));
@@ -252,8 +271,11 @@ export function createGatewayApp({
   // gravado. confirmed_by nao vai nos argumentos do app: vai no actor JWT (claim
   // confirmed_by) ja como o e-mail do diretorio.
   async function callWriteTool(user, plan, rawArgs, requestId) {
-    const { confirmedBy: input, args } = splitConfirmedBy(rawArgs);
-    const base = { requestId, actor: user, tool: plan.name, provider: plan.provider.slug, access: 'write', arguments: args, confirmedByInput: input };
+    const { confirmedBy: input, args: originalArgs } = splitConfirmedBy(rawArgs);
+    const args = plan.execute ? Object.fromEntries(Object.entries(originalArgs)
+      .filter(([k, v]) => ['slug', 'candidate_id', 'base_commit', 'message'].includes(k) && (typeof v === 'string' || v === null))
+      .map(([k, v]) => [k, typeof v === 'string' ? redactText(v) : v])) : originalArgs;
+    const base = { requestId, actor: user, tool: plan.name, provider: plan.provider.slug, access: 'write', arguments: args, confirmedByInput: plan.execute ? redactText(input ?? '') : input };
     const refuse = async (code, message, extra = {}) => {
       log(`mcp tools/call ${plan.name} by ${user.email}: refused ${code}`);
       if (auditLog.configured) await auditLog.record({ ...base, ...extra, phase: 'refused', status: code, error: message });
@@ -277,9 +299,11 @@ export function createGatewayApp({
     }
     let outcome;
     try {
-      outcome = await providers.execute(user, plan, args, { requestId, confirmedBy });
+      outcome = plan.execute
+        ? await plan.execute(originalArgs, { requestId, confirmedBy, approver })
+        : await providers.execute(user, plan, args, { requestId, confirmedBy });
     } catch (error) {
-      if (!(error instanceof ProviderError)) {
+      if (!(error instanceof ProviderError) && !(error instanceof IhappError)) {
         await auditLog.record({ ...base, confirmedBy, phase: 'completed', status: 'gateway_error', error: 'the gateway failed while calling the app' });
         throw error;
       }
@@ -292,7 +316,7 @@ export function createGatewayApp({
       ...base,
       confirmedBy,
       phase: 'completed',
-      status: 'ok',
+      status: audit.status ?? 'ok',
       previousValue: 'previous' in audit ? audit.previous : undefined,
       newValue: 'new' in audit ? audit.new : undefined,
       target: typeof audit.target === 'string' ? audit.target : null,

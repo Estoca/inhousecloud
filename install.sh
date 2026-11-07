@@ -1081,7 +1081,15 @@ build_deployer() {
 copy_portal() {
   local ctx="$INSTALL_DIR/portal"
   rm -rf "$ctx" "$INSTALL_DIR/portal-placeholder"; mkdir -p "$ctx"
-  (cd "$IHC_ROOT/portal" && tar --exclude=./node_modules --exclude=./dist --exclude='./.env' -cf - .) | (cd "$ctx" && tar -xf -) || return 1
+  (cd "$IHC_ROOT/portal" && tar --exclude=./node_modules --exclude=./dist --exclude='./.env' --exclude=./.ihc-runtime -cf - .) | (cd "$ctx" && tar -xf -) || return 1
+  # Stage only applint's local import chain and the canonical starter (no duplicate in Git).
+  # Preserve scripts/lib's depth: applint resolves the template relative to that root.
+  mkdir -p "$ctx/.ihc-runtime/scripts/lib" "$ctx/.ihc-runtime/templates"
+  local module
+  for module in applint appmanifest config secretsproxy envfile; do
+    cp "$IHC_ROOT/scripts/lib/$module.py" "$ctx/.ihc-runtime/scripts/lib/" || return 1
+  done
+  cp -R "$IHC_ROOT/templates/app" "$ctx/.ihc-runtime/templates/" || return 1
   # The image runs as `node`, not as the uid that owns the checkout. tar keeps the checkout's
   # modes, and a checkout made with a strict umask (0600 files, seen on macOS) gives a portal
   # that cannot read its own server.js and restart-loops. Normalize the copy, not the checkout.
@@ -1106,6 +1114,7 @@ stage_foundation() {
   # The MCP gateway (service mcp, docs/mcp-gateway.md): its public URL is the actor JWT's
   # issuer and the resource MCP clients connect to.
   env_set MCP_BASE_URL "$MCP_BASE_URL"
+  env_set IHC_INSTALL_DIR "$INSTALL_DIR"
   mkdir -p "$BACKUP_DEST/reports" 2>/dev/null && chmod 755 "$BACKUP_DEST/reports" 2>/dev/null || warn "cannot create $BACKUP_DEST/reports: the portal shows no backup status until it exists"
   mkdir -p "$INSTALL_DIR/docker-ro"
   cp "$IHC_ROOT/docker/agent/docker-ro-proxy.py" "$INSTALL_DIR/docker-ro/docker-ro-proxy.py"
@@ -1242,14 +1251,15 @@ stage_portal() {
   h="$(dc exec -T mcp wget -qO- http://127.0.0.1:8090/health 2>/dev/null)"
   [ "$(printf '%s' "$h" | jsonq get ok)" = true ] || { fail "the MCP gateway does not answer its /health"; dc logs --tail 30 mcp >&2; return 1; }
   ok "MCP gateway healthy (actor key $(printf '%s' "$h" | jsonq get actor_kid))"
-  state stage portal set resources "[\"container:portal\",\"container:docker-ro\",\"container:mcp\",\"image:portal\",\"volume:mcp-keys\",\"postgres:role:$(env_get MCP_AUDIT_DB_ROLE)\"]"
+  state stage portal set resources "[\"container:portal\",\"container:docker-ro\",\"container:mcp\",\"image:portal\",\"volume:mcp-keys\",\"volume:mcp-chat\",\"postgres:role:$(env_get MCP_AUDIT_DB_ROLE)\"]"
 }
 
 stage_first_run() {
   local args="--install-dir $INSTALL_DIR"
   [ "$JSON_OUTPUT" = true ] && args="$args --json"
   "$IHC_ROOT/scripts/first-run.sh" $args || return 1
-  # first-run generates the read-only Gitea token the portal lists deploys with and the
+  # first-run also reconciles the chat deploy account/token; recreating mcp gives it the
+  # new token. It generates the read-only Gitea token the portal lists deploys with and the
   # Authentik token of its People page: recreate the portal so it gets them (Compose
   # recreates only when its environment changed). The MCP gateway reads the same tokens.
   dc up -d portal mcp >&2 || return 1
@@ -1868,8 +1878,19 @@ if [ -n "$IHT_CLAIM" ]; then
   state reset-from foundation
 fi
 
+# One-time upgrade for installs whose completed stages would otherwise be skipped on
+# plain --apply. Mark only after first_run succeeds, so failed upgrades remain resumable.
+ensure_chat_deploy_upgrade() {
+  if [ "$(state get chat_deploy_version)" != 1 ] && [ "$(state stage foundation status)" = completed ]; then
+    state reset-from foundation
+    log "upgrading chat deploy runtime and account from foundation"
+  fi
+}
+ensure_chat_deploy_upgrade
+
 for s in secrets foundation authentik shared_data proxy_ingress gitea portal first_run backup optional_profiles smoke_tests handoff; do
   run_stage "$s"
+  [ "$s" != first_run ] || state set chat_deploy_version 1
 done
 
 [ "$JSON_OUTPUT" = true ] && state status --json

@@ -367,6 +367,16 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "8090"
+      IHC_CHAT_GITEA_TOKEN: ${IHC_CHAT_GITEA_TOKEN:-}
+      IHC_CHAT_GITEA_USER: ${IHC_CHAT_GITEA_USER:-ihc-chat}
+      GITEA_URL: http://gitea:3000
+      GITEA_ORG: ${GITEA_ORGANIZATION}
+      IHC_CHAT_NEW_APP_GROUP: ${IHC_CHAT_NEW_APP_GROUP:-ihc-admins}
+      IHC_CHAT_CHECKS_PER_HOUR: ${IHC_CHAT_CHECKS_PER_HOUR:-30}
+      IHC_INSTALL_DIR: ${IHC_INSTALL_DIR}
+      IHC_CHAT_DIR: /ihc/chat
+      IHC_APPLINT: /app/applint/applint.py
+      IHC_TEMPLATE_DIR: /app/templates/app
       BASE_DOMAIN: ${BASE_DOMAIN}
       PUBLIC_BASE_URL: ${PORTAL_BASE_URL}
       PORTAL_HOST: ${PORTAL_HOST}
@@ -398,6 +408,7 @@ services:
       - ./local/ca/ca.crt:/etc/ihc-ca/ca.crt:ro
       - ./catalog:/ihc/catalog:ro
       - mcp-keys:/ihc/mcp-keys
+      - mcp-chat:/ihc/chat
     networks: [ihc]
     user: "1000:1000"
     cap_drop: [ALL]
@@ -880,3 +891,4 @@ volumes:
   tailscale-state:
   backup-cache:
   mcp-keys:
+  mcp-chat:

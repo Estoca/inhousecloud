@@ -332,6 +332,57 @@ sys.exit(0 if t.get("can_create_org_repo") is True and t.get("includes_all_repos
 fi
 record "gitea:team:$GITEA_ORGANIZATION/$TEAM"
 
+# Chat deploys use a dedicated org owner, never the install admin's token. Reconcile
+# the account and membership every run; keep a valid token (including across upgrades).
+ensure_chat_deployer() {
+  local user email body token owner_id
+  user="$(env_get IHC_CHAT_GITEA_USER)"; user="${user:-ihc-chat}"
+  email="$user@noreply.$BASE_DOMAIN"
+  api_init gt "Authorization: token $TOKEN"
+  api GET "$GT/users/$user"
+  if [ "$API_CODE" = 404 ]; then
+    # Password goes through stdin into the API body, never through a process argv.
+    body="$(random_secret 48 | $PY -c 'import json,sys
+print(json.dumps(dict(username=sys.argv[1], email=sys.argv[2], password=sys.stdin.read(),
+    must_change_password=False, send_notify=False, visibility="private")))' "$user" "$email")"
+    api POST "$GT/admin/users" "$body"
+    api_ok || die "create chat deploy account: HTTP $API_CODE"
+  else
+    api_ok || die "probe chat deploy account: HTTP $API_CODE"
+  fi
+  # CreateUserOption does not honor visibility on all supported Gitea versions.
+  api PATCH "$GT/admin/users/$user" "$(jsonq build email="$email" visibility=private must_change_password:=false)"
+  api_ok || die "reconcile chat deploy account: HTTP $API_CODE"
+  api GET "$GT/orgs/$GITEA_ORGANIZATION/teams?limit=50"
+  api_ok || die "list chat deploy owner team: HTTP $API_CODE"
+  owner_id="$(printf '%s' "$API_BODY" | jsonq find . name Owners id)"
+  [ -n "$owner_id" ] || die "Gitea organization has no Owners team"
+  api PUT "$GT/teams/$owner_id/members/$user"
+  api_ok || die "reconcile chat deploy org ownership: HTTP $API_CODE"
+  # The installer does not set branch protection. Org ownership permits normal pushes
+  # to main; a protection added by an operator must also permit this account.
+  token="$(env_get IHC_CHAT_GITEA_TOKEN)"
+  if [ -n "$token" ]; then
+    gitea_token_valid "$token" || {
+      case "$API_CODE" in
+        401|403|404) token="" ;;
+        *) die "probe chat deploy token: HTTP $API_CODE (kept current token)" ;;
+      esac
+    }
+    if [ -n "$token" ] && [ "$(printf '%s' "$API_BODY" | jsonq get login)" != "$user" ]; then token=""; fi
+  fi
+  if [ -z "$token" ]; then
+    token="$(gitea_cli admin user generate-access-token --username "$user" --token-name "ihc-chat-$(date +%s)-$$" --scopes write:repository,read:organization,read:user --raw | tr -d '[:space:]')"
+    [ -n "$token" ] || die "could not generate chat deploy token"
+    gitea_token_valid "$token" && [ "$(printf '%s' "$API_BODY" | jsonq get login)" = "$user" ] || die "new chat deploy token is not valid"
+    env_set IHC_CHAT_GITEA_TOKEN "$token"
+  fi
+  api_init gt "Authorization: token $TOKEN"
+  record "gitea:user:$user"
+  ok "chat deploy account $user: private, org owner, API token valid (.env)"
+}
+ensure_chat_deployer
+
 # A small private repository for smoke test 12 (authenticated clone). Deploys need no
 # repository of their own: push to main of the app's repository is the approval
 # (docs/gitops-flow.md). A deploy-requests repository left by an older install is kept.

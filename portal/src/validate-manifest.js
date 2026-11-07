@@ -273,6 +273,7 @@ function runDockerCompose(rootDir, composeFile, envExample) {
 }
 
 export function validateManifest(manifest, options = {}) {
+  if (options.staticApp === true) return validateStaticAppManifest(manifest);
   const issues = [];
   const rootDir = options.rootDir ?? process.cwd();
   const skipFileChecks = options.skipFileChecks === true;
@@ -410,4 +411,72 @@ export function validateManifest(manifest, options = {}) {
     port,
     redirects,
   };
+}
+
+// Current executor contract (templates/app/company-app.yaml), without Docker, env
+// loading, or filesystem access. The older portal form above retains its behavior.
+export function validateStaticAppManifest(manifest) {
+  const issues = [];
+  const get = (key, fallback) => key.split('.').reduce((v, k) => v?.[k], manifest) ?? fallback;
+  const requireValue = (key, predicate, message) => { if (!predicate(get(key))) issue(issues, key, message); };
+  if (!isObject(manifest)) return { ok: false, issues: [{ path: '$', message: 'manifest must be a YAML object' }] };
+  validateStaticSchema(STATIC_APP_SCHEMA, manifest, '$', issues);
+  requireValue('schema_version', v => v === 1, 'must be 1');
+  requireValue('app.slug', validAppSlug, 'must be an unreserved slug of 3-32 lowercase letters, digits and hyphens');
+  requireValue('app.name', v => typeof v === 'string' && !!v.trim(), 'must be a non-empty string');
+  requireValue('app.owner_email', v => typeof v === 'string' && EMAIL_RE.test(v), 'must be an email');
+  requireValue('runtime.type', v => v === 'docker-compose', 'must be docker-compose');
+  requireValue('deploy.enabled', v => v === true, 'must be true');
+  if (get('deploy.port', 'auto') !== 'auto') issue(issues, 'deploy.port', 'must be auto');
+  if (get('deploy.domain') && !String(get('deploy.domain')).startsWith(`${get('app.slug')}.`)) issue(issues, 'deploy.domain', 'must start with the app slug followed by a dot');
+  const port = get('runtime.port', 8080), status = get('runtime.healthcheck.expected_status', 200);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) issue(issues, 'runtime.port', 'must be a TCP port');
+  if (!Number.isInteger(status) || status < 100 || status > 599) issue(issues, 'runtime.healthcheck.expected_status', 'must be an HTTP status');
+  if (get('runtime.healthcheck.type', 'http') !== 'http' || !/^\/[A-Za-z0-9/_.-]*$/.test(get('runtime.healthcheck.path', ''))) issue(issues, 'runtime.healthcheck', 'must be http with a path such as /health');
+  if (get('auth.required') !== true || get('auth.provider') !== 'forward-auth') issue(issues, 'auth', 'must require forward-auth company sign-in');
+  if (manifest.secrets_proxy !== undefined) for (const problem of policyErrors(manifest.secrets_proxy)) issue(issues, 'secrets_proxy', problem);
+  if (manifest.mcp !== undefined) validateMcp(issues, manifest.mcp, get('app.slug'), 'mcp');
+  else if (manifest.agent_interface?.mcp !== undefined) validateMcp(issues, manifest.agent_interface.mcp, get('app.slug'), 'agent_interface.mcp');
+  return { ok: issues.length === 0, issues, appSlug: get('app.slug') };
+}
+
+// The packaged schema uses this deliberately small JSON Schema vocabulary. Keeping
+// it here avoids adding a runtime AJV dependency to the gateway image. A contract
+// test checks the packaged schema against schemas/company-app.schema.json.
+const STATIC_APP_SCHEMA = JSON.parse(readFileSync(new URL('./ihapp-manifest-schema.json', import.meta.url), 'utf8'));
+function validateStaticSchema(schema, value, key, issues) {
+  if (schema.$ref) schema = STATIC_APP_SCHEMA.$defs[schema.$ref.split('/').at(-1)];
+  if (schema.anyOf || schema.oneOf) {
+    const branches = schema.anyOf ?? schema.oneOf;
+    const count = branches.filter(branch => { const failures = []; validateStaticSchema(branch, value, key, failures); return failures.length === 0; }).length;
+    if (count === 0 || (schema.oneOf && count !== 1)) issue(issues, key, 'does not match the manifest schema alternatives');
+    return;
+  }
+  if (Object.hasOwn(schema, 'const') && value !== schema.const) issue(issues, key, `must be ${JSON.stringify(schema.const)}`);
+  if (schema.enum && !schema.enum.includes(value)) issue(issues, key, 'must be one of the manifest schema values');
+  const types = { object: isObject, array: Array.isArray, integer: Number.isInteger, boolean: v => typeof v === 'boolean', string: v => typeof v === 'string' };
+  if (schema.type && !types[schema.type](value)) { issue(issues, key, `must be ${schema.type}`); return; }
+  if (typeof value === 'string') {
+    if ((schema.minLength && value.length < schema.minLength) || (schema.pattern && !new RegExp(schema.pattern).test(value)) || (schema.format === 'email' && !EMAIL_RE.test(value))) issue(issues, key, 'does not match the manifest string constraint');
+  }
+  if (typeof value === 'number' && ((schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum))) issue(issues, key, 'is outside the manifest numeric range');
+  if (Array.isArray(value)) {
+    if (schema.minItems && value.length < schema.minItems) issue(issues, key, 'requires more items');
+    if (schema.items) value.forEach((v, i) => validateStaticSchema(schema.items, v, `${key}[${i}]`, issues));
+  } else if (isObject(value)) {
+    if (schema.minProperties && Object.keys(value).length < schema.minProperties) issue(issues, key, 'requires more properties');
+    for (const required of schema.required ?? []) if (!Object.hasOwn(value, required)) issue(issues, key === '$' ? required : `${key}.${required}`, 'is required');
+    for (const [name, item] of Object.entries(value)) {
+      const childKey = key === '$' ? name : `${key}.${name}`;
+      if (schema.propertyNames) validateStaticSchema(schema.propertyNames, name, childKey, issues);
+      if (schema.properties && Object.hasOwn(schema.properties, name)) validateStaticSchema(schema.properties[name], item, childKey, issues);
+      else if (schema.additionalProperties === false) issue(issues, childKey, 'is not a supported property');
+      else if (isObject(schema.additionalProperties)) validateStaticSchema(schema.additionalProperties, item, childKey, issues);
+    }
+  }
+}
+
+const RESERVED_APP_SLUGS = new Set(('proxy authentik-postgres authentik-server authentik-worker postgres redis gitea portal garage gitea-runner portainer glances wetty secrets-proxy agent docker-ro filebrowser terminal files gitea-deployer cloudflared tailscale backup auth git s3 s3-console ihc authentik www api admin localhost ihc-smoke mcp').split(' '));
+export function validAppSlug(value) {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(value) && !RESERVED_APP_SLUGS.has(value) && !/^(?:app|ihc)-/.test(value);
 }

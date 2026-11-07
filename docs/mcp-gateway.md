@@ -2,7 +2,8 @@
 
 One MCP server for the whole cloud, at `https://mcp.<BASE_DOMAIN>/mcp`. A person connects Claude Code, claude.ai or any MCP client once, signs in with the company account (Authentik), and gets:
 
-- the platform's own tools, read only: the app catalog for everyone in `ihc-users`; the platform status, people, groups and the audit log of writes for `ihc-admins`;
+- the platform's read tools: the app catalog for everyone in `ihc-users`; the platform status, people, groups and the audit log of writes for `ihc-admins`;
+- In House Apps v1: `ihapp_spec`, `ihapp_check`, `ihapp_deploy` and `ihapp_deploy_status` for chat deploys, when the deploy token is configured;
 - the tools of every app whose `company-app.yaml` has an `mcp` section ([`app-contract.md`](app-contract.md#mcp)), named `<slug>__<tool>`, each app deciding what it returns for that person.
 
 An app's tool that does not declare itself a read is a write: it needs `confirmed_by` (the person who approved the call, checked in the company directory) and the gateway records it in its audit log before and after calling the app ([Writes](#writes)). The gateway keeps no session and no copy of anyone's permissions: who may use an app's tools is the app's manifest (scopes granted to groups, and per tool to groups or people) plus the app's own checks.
@@ -174,6 +175,52 @@ Then `/mcp` in Claude Code, pick `company`, authenticate: the browser opens Auth
 | `MCP_AUDIT_DB_ROLE`, `MCP_AUDIT_DB_PASSWORD` | `ihc_mcp_audit`, generated | the gateway's role on the portal's database for the audit log (`install.sh`, stage `portal`); the service gets them as `MCP_AUDIT_DATABASE_URL`. No password: writes refused |
 
 Inside the service (compose, not `.env`): `MCP_TOOLS_LIST_TIMEOUT_MS` 10000, `MCP_TOOL_CALL_TIMEOUT_MS` 30000, `MCP_CATALOG_FALLBACK_SECONDS` 86400.
+
+## In House Apps v1: apps from chat
+
+With `IHC_CHAT_GITEA_TOKEN` configured, people in `ihc-users` see four tools:
+
+| Tool | Purpose |
+|---|---|
+| `ihapp_spec` | app rules and starter; optionally the current source and upload links |
+| `ihapp_check` | static manifest, trust-boundary lint and secrets checks; returns a candidate |
+| `ihapp_deploy` | commits a checked candidate on `main` as the deploy account; the usual Gitea Actions job deploys it |
+| `ihapp_deploy_status` | check findings and deploy progress, including the app URL |
+
+Only `ihapp_deploy` is a write: it requires directory-checked `confirmed_by` and an
+append-only audit record, like [app writes](#writes). For an existing app both the
+caller and approver need Gitea push permission; creating an app requires both to
+belong to `IHC_CHAT_NEW_APP_GROUP` (default `ihc-admins`). A changed `main` refuses a
+stale candidate. A successful **static** check does not prove build or runtime health.
+Isolated build/start checks are LAB-170, after LAB-168 removes privileged deploy jobs.
+
+For small trees the agent sends files inline. `ihapp_spec` can return a short-lived
+signed source download link (`include: ["source"]`) and a single-use upload link
+(`include: ["upload"]`). Upload one `.tar.gz` with `PUT`, then pass its `upload_id`
+to `ihapp_check`. Source links expire in five minutes; uploads in fifteen minutes,
+with a 25 MB compressed limit. See [files and candidate rules](chat-deploy-contract.md#files).
+Treat these signed links as credentials; do not post them in logs or shared chats.
+
+`first-run.sh` reconciles `IHC_CHAT_GITEA_USER` (default `ihc-chat`), its org ownership
+and token. Compose sends the gateway `GITEA_URL=http://gitea:3000`, `GITEA_ORG` from
+`GITEA_ORGANIZATION`, `BASE_DOMAIN`, `MCP_PUBLIC_URL` from `MCP_BASE_URL`, and
+`IHC_INSTALL_DIR` as a path string, without mounting the install directory.
+`IHC_CHAT_CHECKS_PER_HOUR` defaults to 30 per person. The writable `mcp-chat` volume
+at `/ihc/chat` retains candidates and jobs across restarts and starts owned by uid
+1000, as does `mcp-keys`.
+
+The portal image includes Python/PyYAML, Git and BusyBox tar. Before building it,
+`install.sh` stages the canonical `scripts/lib` lint imports and `templates/app`
+under the ignored `portal/.ihc-runtime/` build input. In the image,
+`/app/applint` links to `/app/scripts/lib` (preserving lint's template-root lookup),
+and the starter lives at `/app/templates/app`. `USER node` and capability drops stay
+in effect. An older install upgrades on its next `install.sh --apply`: a one-time
+state marker reruns foundation through first-run, builds the image, creates the
+volume/account/token and recreates `mcp` with its new environment.
+
+Removing `IHC_CHAT_GITEA_TOKEN` from `.env` and recreating `mcp` hides all four tools.
+First-run will provision a token again when rerun. For revocation and the account's
+permissions, see [security](security.md#chat-deploy-account).
 
 ## Operating it
 

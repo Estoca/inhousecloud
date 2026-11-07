@@ -24,10 +24,15 @@ declare -f copy_portal >/dev/null || { echo "copy_portal not found in install.sh
 
 IHC_ROOT="$WORK/checkout"; INSTALL_DIR="$WORK/install"
 mkdir -p "$IHC_ROOT/portal/src" "$IHC_ROOT/portal/node_modules/x" "$INSTALL_DIR"
+mkdir -p "$IHC_ROOT/scripts/lib" "$IHC_ROOT/templates/app"
+for module in applint appmanifest config secretsproxy envfile; do
+  echo '# fixture' > "$IHC_ROOT/scripts/lib/$module.py"
+done
+echo 'starter' > "$IHC_ROOT/templates/app/README.md"
 echo 'ok' > "$IHC_ROOT/portal/src/server.js"
 echo 'ok' > "$IHC_ROOT/portal/package.json"
 echo 'x'  > "$IHC_ROOT/portal/node_modules/x/i.js"
-chmod -R go-rwx "$IHC_ROOT/portal"
+chmod -R go-rwx "$IHC_ROOT"
 chmod 0600 "$IHC_ROOT/portal/src/server.js" "$IHC_ROOT/portal/package.json"
 
 copy_portal || { bad "copy_portal failed"; exit 1; }

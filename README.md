@@ -79,7 +79,8 @@ Start at [`AGENTS.md`](AGENTS.md): it routes an install, a new app or "why is it
 Usable on one box with `local` ingress, `private` ingress over Tailscale, or managed
 Cloudflare edge ingress. The portal has people, groups and a read-only status API.
 The MCP gateway serves platform read tools and app tools, with confirmation and
-an audit log for writes. Still ahead: deploy jobs without the Docker socket,
+an audit log for writes. In House Apps v1 adds chat app specs, static checks,
+approved deploy commits and deploy status ([gateway](docs/mcp-gateway.md#in-house-apps-v1-apps-from-chat)). Still ahead: deploy jobs without the Docker socket,
 restoring one app on its own and automated restore rehearsals. Standalone public
 DNS with Let's Encrypt has no recorded live run. The self-hosted backup script's
 off-site copy is also still ahead; managed hosting already backs up daily to S3.

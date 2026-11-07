@@ -2,4 +2,4 @@
  "value": {"job_id": "job_7h2k9d0s1b", "kind": "deploy", "state": "refused", "poll_after_seconds": 1, "findings": [
    {"code": "IHC-DEPLOY-STALE-BASE", "stage": "commit", "severity": "error",
     "message": "main of purchase-requests is at a newer commit than base_commit",
-    "fix": "Call ihc_app_spec for the new head_commit, check your changes over it, then deploy that candidate."}]}}
+    "fix": "Call ihapp_spec for the new head_commit, check your changes over it, then deploy that candidate."}]}}

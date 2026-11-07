@@ -92,8 +92,8 @@ The gateway ([`mcp-gateway.md`](mcp-gateway.md)) lets an AI client act as the si
 - **The app decides.** The gateway proves who is asking; the app filters what that person may see, exactly as for a browser user. A tool that ignores `actor.email` shows everyone everything to anyone the manifest grants.
 - **Grants per tool.** Beyond the scopes, `mcp.tools.<tool>.groups` and `.people` in the manifest narrow one tool to some Authentik groups or some people. The gateway hides that tool from everyone else and refuses their call without calling the app. A tool without an entry keeps the scope as its only rule, which is how every install worked before. A malformed entry takes the whole app out of the gateway rather than granting more.
 - **Reaching apps.** The gateway calls apps on the cloud network at `http://<slug>:<runtime.port>` and the paths of their manifest (paths only, no host: an app cannot point the gateway elsewhere). Their `/mcp/*` routes are also behind the forward auth through the proxy, where a browser without an actor JWT gets 401.
-- **The platform's tools read.** The `ihc_*` tools read the inventory, the portal's status API, Authentik with the read-only account and, for admins, the audit log. Writes exist only as app tools, under the rules below.
-- **What the gateway holds:** the portal's status token and the read-only Authentik token (the same as the portal's), the inventory read only, its signing key, and the password of its audit role (`MCP_AUDIT_DB_PASSWORD`), which can insert into and read one table. No Docker access, no `.env`, not the portal's database role. Its logs name the person and the tool, never a token.
+- **The platform's tools.** The `ihc_*` tools read the inventory, the portal's status API, Authentik with the read-only account and, for admins, the audit log. In House Apps v1 adds the platform write `ihapp_deploy`, under the same approval and audit rules as app writes below.
+- **What the gateway holds:** the portal's status token and the read-only Authentik token (the same as the portal's), the inventory read only, its signing key, the chat deploy token described below, and the password of its audit role (`MCP_AUDIT_DB_PASSWORD`), which can insert into and read one table. No Docker access, no `.env`, not the portal's database role. Its logs name the person and the tool, never a token.
 - **What a leaked access token gives:** one hour of that person's tools: the reads, and the writes their grants allow, each of which still needs an approver who exists in the directory and lands in the audit log under that person's name. Revoke it in Authentik (the user's sessions and tokens).
 
 ### Writes need a human
@@ -109,6 +109,41 @@ In the cloud's agent products a write happens only after a person approves it on
 - **Secrets.** Arguments and the previous and new values are stored with secrets redacted: any key that looks like a secret (`password`, `token`, `api_key`, `authorization`, `cookie`, `secret`, `credential`, `private_key`, …) and any value that looks like one (a JWT, `Bearer …`, a PEM private key, tokens with a known prefix). Long strings, lists and nesting are cut, and a payload over 64 KiB is stored as a preview. Redaction is a net, not a guarantee: an app should not take secrets as tool arguments.
 - **Who reads it.** Admins (`ihc-admins`): the MCP tool `ihc_audit_log` and the portal's `GET /api/mcp/audit` (filters: app, tool, actor, confirmed_by, since). Nobody edits it through either.
 - **Off until configured.** Without `MCP_AUDIT_DATABASE_URL` (an install that has not re-run `install.sh --apply --from foundation`), every write is refused with a message saying so; reads work as before.
+
+## Chat deploy account
+
+In House Apps v1 gives the gateway a dedicated Gitea account,
+`IHC_CHAT_GITEA_USER` (default `ihc-chat`), with a random password, no forced password
+change, private visibility and `ihc-chat@noreply.<BASE_DOMAIN>` as its non-mailbox
+address. It uses a token rather than an interactive password login. First-run
+reconciles the account and membership every run, probes the token's identity, and
+writes `IHC_CHAT_GITEA_TOKEN` to the install's private `.env` only when missing or
+invalid. The token has `write:repository,read:organization,read:user` scopes.
+
+The account is an **owner of `GITEA_ORGANIZATION`** because the gateway must create
+private app repositories and read collaborator permissions, which requires repo
+admin access. It can read and change every repository in that org, including its
+workflows, and push deploy commits to `main`. It is not a Gitea instance admin.
+The installer adds no branch protection; an operator who adds protection must allow
+this account's pushes explicitly. The gateway still checks both the signed-in
+caller and `confirmed_by` before committing, and records them with the candidate in
+the audit log and commit trailers.
+
+**Compromise of the gateway exposes this token.** An attacker could bypass those
+application checks, read or change org repositories and workflows, and trigger the
+normal deploy jobs. Those jobs currently have the Docker socket, so this can extend
+to control of the box and its app data. Capability drops and the lack of a socket in
+`mcp` do not remove that indirect path. Static `ihapp_check` never builds or runs the
+uploaded code; isolated checks await LAB-170 after LAB-168.
+
+To revoke access, delete the account's token in Gitea (or delete the deploy user).
+Remove `IHC_CHAT_GITEA_TOKEN` from `.env` and recreate `mcp` to hide all four chat tools
+and clear the running container's token. Deletion alone revokes API access but does
+not change tool discovery until the container's environment is cleared. First-run
+repairs a missing user or invalid token on its next run; keep this in mind when
+maintaining a deliberate revocation. The gateway retains candidates in `mcp-chat`,
+not in the install directory, and logs must never contain tokens or signed source
+and upload URLs.
 
 ## Private ingress: the tailnet and the CA
 

@@ -3,6 +3,8 @@
 # docker-ro, the cloud's read-only Docker API (DOCKER_HOST): no docker CLI, no socket.
 FROM node:20-alpine
 
+RUN apk add --no-cache python3 py3-yaml git
+
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -15,10 +17,14 @@ COPY frontend ./frontend
 COPY src ./src
 COPY inventory/apps.example.json ./inventory/apps.example.json
 COPY db ./db
+# install.sh stages these from scripts/lib and templates/app before the build.
+COPY .ihc-runtime/ ./
+RUN ln -s scripts/lib /app/applint
 COPY company-app.yaml llms.txt mcp-llms.txt ./
 
 RUN npm run build && npm prune --omit=dev \
-  && mkdir -p /ihc/mcp-keys && chown node:node /ihc/mcp-keys && chmod 700 /ihc/mcp-keys
+  && mkdir -p /ihc/mcp-keys /ihc/chat \
+  && chown node:node /ihc/mcp-keys /ihc/chat && chmod 700 /ihc/mcp-keys /ihc/chat
 
 # The image's own user (uid 1000); compose also drops every capability.
 USER node
