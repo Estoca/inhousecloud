@@ -1,7 +1,7 @@
 # Chat Deploy Contract
 
-**Status: proposed (2026-11-06), not implemented.** This page is the contract the
-implementation will follow; nothing below exists in the gateway yet. Schema:
+**Status: v1 implemented: static check (LAB-169).** The gateway validates files, the
+manifest, trust boundaries and secrets. It never builds or executes candidate code. Schema:
 [`schemas/chat-deploy.schema.json`](../schemas/chat-deploy.schema.json), with valid and
 invalid examples in [`schemas/examples/chat-deploy/`](../schemas/examples/chat-deploy/)
 checked by `portal/test/chat-deploy-contract.test.js`.
@@ -21,40 +21,42 @@ in between, and a human approving only the step that puts something on the air.
 ## The loop
 
 ```text
-ihc_app_spec        what the cloud expects: stack, manifest, variables, rules, limits, template
+ihapp_spec        what the cloud expects: stack, manifest, variables, rules, limits, template
       │             (and, for an app that exists, its head commit and files)
       ▼
 agent writes the app in its own sandbox
       │
       ▼
-ihc_app_check       the files go up; lint, build, migrate and start run in a throwaway
-      │             area on the box; nothing goes on the air; no approval needed
+ihapp_check       the files go up; manifest, static lint and secrets run
+      │             on the box; runtime stages are skipped; no approval needed
       ▼
-ihc_deploy_status   poll until a terminal state; read the findings; fix; check again
+ihapp_deploy_status   poll until a terminal state; read the findings; fix; check again
       │             (repeat until "passed")
       ▼
-ihc_app_deploy      write, needs confirmed_by: the checked candidate becomes a commit on
+ihapp_deploy      write, needs confirmed_by: the checked candidate becomes a commit on
       │             main of the app's repository, and the usual deploy runs
       ▼
-ihc_deploy_status   poll until "healthy" (the URL) or "unhealthy" (findings, rollback)
+ihapp_deploy_status   poll until "healthy" (the URL) or "unhealthy" (findings, rollback)
 ```
 
 Four tools, not three: splitting `check` from `deploy` is what lets the agent iterate
-without asking a person to approve every attempt. Only `ihc_app_deploy` changes what
+without asking a person to approve every attempt. Only `ihapp_deploy` changes what
 people use, and only it needs a human.
 
-The deploy itself is not new. `ihc_app_deploy` ends in a commit on `main`, and from
+The deploy itself is not new. `ihapp_deploy` ends in a commit on `main`, and from
 there it is the same build, apply, journal and rollback as a `git push`
 ([the deploy job](gitops-flow.md#3-what-the-deploy-job-does)). Git stays the record of
 what runs; the chat is another way to write to it.
 
 ## Tools
 
-All four are platform tools of the gateway (`ihc_*`), listed for `ihc-users`. Through
+All four are app-authoring tools of the gateway (`ihapp_*`), listed only for
+`USER_GROUP` members when `IHC_CHAT_GITEA_TOKEN` configures the deploy account.
+Machine operations keep the `ihc_` prefix. Through
 inhouse.technology they are called as `ihc_call(tool, arguments)`. Inputs and outputs
 are the `$defs` of the schema named in each heading.
 
-### `ihc_app_spec` (read) — `AppSpecInput` → `AppSpecOutput`
+### `ihapp_spec` (read) — `AppSpecInput` → `AppSpecOutput`
 
 | Input | Meaning |
 |---|---|
@@ -70,7 +72,7 @@ rules as `{code, text}` (the same codes as [findings](#findings)), the limits of
 contract, the stages a check runs, and who may deploy (below). It is the agent's single
 source: it should not need to read this page.
 
-### `ihc_app_check` (read, rate-limited) — `AppCheckInput` → `JobAccepted`
+### `ihapp_check` (read, rate-limited) — `AppCheckInput` → `JobAccepted`
 
 | Input | Meaning |
 |---|---|
@@ -81,28 +83,28 @@ source: it should not need to read this page.
 | `delete` | paths to remove, only with `tree: changes` |
 | `upload_id` | instead of `files`: a tree sent to the upload link |
 
-It returns at once with a `job_id`, `candidate_id` and `poll_after_seconds`. The
+It materializes the tree and returns `JobAccepted` with `job_id`, `candidate_id`
+and `poll_after_seconds`, while the static stages finish asynchronously. A refused
+job can have no candidate when files were refused before materialization. The
 candidate is the exact tree that was checked, addressed by the sha256 of its content.
 
-What runs, in order, each a [stage](#stages): the manifest against the schema and the
-slug; the [trust boundary lint](app-contract.md#lint-before-build); a secrets scan of
-the tree; the build (`ihc-app build` rules: no build secrets, no host network, nothing
-outside the repository); the app started on an isolated network with a throwaway
-database and Redis prefix, its migrations run on start; the healthcheck; and the
-sign-in check (the app reads the person from the header and does not serve anonymous
-content when `auth.required`). Nothing gets a route, an Authentik application, a
-database on the shared Postgres or an inventory record.
+What runs in v1: `manifest` (static `validate-manifest.js`, current executor
+format, and the requested slug), `lint` (the deploy job's Python trust-boundary
+linter), and `secrets` (deterministic credential patterns). All three run so a
+single check can report independent errors. `passed` means no error finding.
+`build`, `start`, `migrate`, `health` and `auth` are `skipped`, each with reason
+"runs in the deploy job in v1; the isolated check comes with LAB-170".
+Nothing from the candidate is executed or built by the gateway. A passed static
+check does not prove the app builds, starts, migrates or answers HTTP.
 
 Why it needs no `confirmed_by`: it changes nothing a person uses. It is still recorded
 in the audit log (status `check`), and limited per person: one check running at a time,
 and `IHC_CHAT_CHECKS_PER_HOUR` (default 30).
 
-**Precondition for implementing it:** a check builds and starts code nobody has
-reviewed, so it must not run where a job is root on the box. It depends on the
-roadmap item [deploy jobs without the Docker socket](roadmap.md#next): an unprivileged
-builder and a runtime with no access to the install directory.
+The isolated runtime check belongs to LAB-170 and needs an unprivileged builder
+and runtime with no access to the install directory or Docker socket.
 
-### `ihc_app_deploy` (write) — `AppDeployInput` → `JobAccepted`
+### `ihapp_deploy` (write) — `AppDeployInput` → `JobAccepted`
 
 | Input | Meaning |
 |---|---|
@@ -135,7 +137,7 @@ Who may deploy, checked for both the caller and `confirmed_by`:
 
 It answers with `job_id`, `commit` and the state of the deploy run.
 
-### `ihc_deploy_status` (read) — `DeployStatusInput` → `DeployStatusOutput`
+### `ihapp_deploy_status` (read) — `DeployStatusInput` → `DeployStatusOutput`
 
 `job_id`, or `slug` for that app's latest job. The answer: `kind` (`check` or `deploy`),
 `state`, the [stages](#stages) with their state and duration, the [findings](#findings),
@@ -190,22 +192,33 @@ Rules:
   when more were cut. Messages at most 500 characters.
 - **Deterministic.** Findings come from rules and tool output, never from a model running
   on the box: whoever reviews the code is the person's own agent, with these findings and
-  the rules from `ihc_app_spec`. The same tree gives the same findings up to the runtime
+  the rules from `ihapp_spec`. The same tree gives the same findings up to the runtime
   stages.
 
 ### Stages
 
 `manifest`, `lint`, `secrets`, `build`, `start`, `migrate`, `health`, `auth`, and for a
 deploy also `commit` and `apply`. Each has a state `pending`, `running`, `passed`,
-`failed` or `skipped` (a stage after a failed one).
+`failed` or `skipped`. Skipped runtime stages carry a `reason` in v1.
 
 ### First codes
 
-Mapped from what `ihc-app lint`, `provision` and `wait` report today, so the
-implementation tags existing messages instead of inventing checks.
+Mapped from what `ihc-app lint`, `provision` and `wait` report today. The running
+code table is `portal/src/ihapp-rules.js`, shared by spec, check and deploy. Runtime
+codes remain reserved for deploy/runtime reporting; v1 checks emit only findings
+in the manifest, lint and secrets stages.
 
 | Code | Stage | From today's message |
 |---|---|---|
+| `IHC-FILES-PATH` | manifest | unsafe, duplicate or conflicting path; symlink or submodule in the base tree |
+| `IHC-FILES-ENV` | manifest | `.env` or `.env.*` other than `.env.example` |
+| `IHC-FILES-LIMIT` | manifest | file count, encoded inline bytes, expanded tree or per-file byte limit |
+| `IHC-FILES-ARCHIVE` | manifest | invalid archive, link/device/sparse entry, unavailable or expired upload |
+| `IHC-FILES-MODE` | manifest | a rule in `ihapp_spec`, not a finding: a file that starts with `#!` is committed `100755`, every other file `100644` |
+| `IHC-CHECK-LIMIT` | manifest | another check running or hourly allowance exhausted |
+| `IHC-LINT-OTHER` | lint | any unmapped linter output line (error, never silently ignored) |
+| `IHC-LINT-FAILED` | lint | linter crash, timeout, unavailable reader or interrupted check |
+| `IHC-DEPLOY-FAILED` | commit | Gitea or git operation could not complete; inspect main before retrying |
 | `IHC-MANIFEST-INVALID` | manifest | the manifest fails the schema |
 | `IHC-MANIFEST-SLUG` | manifest | the slug breaks the rules or differs from the argument |
 | `IHC-LINT-COMPOSE-INCLUDE` | lint | `compose: include can import files outside review` |
@@ -218,9 +231,9 @@ implementation tags existing messages instead of inventing checks.
 | `IHC-LINT-EXTERNAL-VOLUME` | lint | `uses driver_opts or external storage`, `adopts an external platform resource` |
 | `IHC-LINT-OWN-DATASTORE` | lint | the compose file brings its own Postgres, Redis or S3 server |
 | `IHC-LINT-BUILD-VARIABLE` | lint | `unresolved build variable` |
-| `IHC-SECRETS-IN-TREE` | secrets | a credential-shaped value or a committed `.env` |
-| `IHC-BUILD-CONTEXT` | build | context, Dockerfile or extra context outside the repository |
-| `IHC-BUILD-FAILED` | build | `docker compose build` failed; with `log_excerpt` |
+| `IHC-SECRETS-IN-TREE` | secrets | a credential-shaped value (env files are refused earlier) |
+| `IHC-BUILD-CONTEXT` | lint | context, Dockerfile or extra context outside the repository |
+| `IHC-BUILD-FAILED` | build | Actions deploy failed; `run_log` links to Gitea |
 | `IHC-START-EXITED` | start | the container exited; with its last lines |
 | `IHC-START-PORT` | start | nothing listens on `0.0.0.0:PORT` |
 | `IHC-MIGRATE-FAILED` | migrate | the app's migrations failed on the throwaway database |
@@ -239,7 +252,46 @@ The agent sends the tree in the call when it fits, and through a link when it do
 | inline, whole call | 512 KB of `content` |
 | inline, one file | 256 KB |
 | files per tree | 300 |
-| through `upload` | one `.tar.gz` up to 25 MB, `PUT` to the signed URL from `ihc_app_spec`, 15 minutes, single use; then `upload_id` in the check |
+| through `upload` | one `.tar.gz` up to 25 MB, `PUT` to the signed URL from `ihapp_spec`, 15 minutes, single use; then `upload_id` in the check |
+
+Upload: request `include: ["upload"]` from `ihapp_spec`, PUT a gzip tar archive to
+its URL, then pass its `upload_id` to `ihapp_check`. The HMAC credential is stored
+only in the signed URL; no bearer is needed. PUT is single use, including failed
+attempts. Check must use the same person's unexpired upload. The gateway lists
+with `tar -tzvf`, validates all headers, then materializes only regular files in a
+fresh directory. Links, devices, sparse entries and unsafe paths are refused.
+Expanded trees are bounded to 25 MB, 300 files and 256 KB per file. The archive
+may contain at most 1,000 entries including directories. Leading `./` from ordinary
+tar is normalized. Inline counts UTF-8 bytes of the encoded `content` strings,
+plus decoded per-file and tree limits.
+
+Source: `include: ["source"]` with an existing slug signs a GET URL for that head of
+main, valid for five minutes. It serves a `.tar.gz` without a bearer. Both routes
+are on `MCP_PUBLIC_URL`, do not log tokens, and return `Cache-Control: no-store`.
+Clients must treat signed links as credentials. Source uses the same safe tree limits.
+
+Secrets scan: private-key blocks, AWS AKIA/ASIA keys, GitHub, prefixed Gitea, Slack,
+Anthropic and OpenAI token shapes, plus long literal assignments to names containing
+`password`, `secret`, `token` or `api_key`. Assignment heuristics skip example files;
+credential shapes do not. Values are replaced with `[redacted]` in diagnostics.
+
+Jobs are visible only to the submitting person (also for slug lookup). Status reuses
+Gitea Actions tasks and the platform's HTTP/SSO probes. v1 provides a bounded `run_log`
+link, without a log excerpt: compose takes `GITEA_IMAGE` from the environment
+(the repository example pins `gitea/gitea:28.2`), while the existing Actions adapter
+uses the tasks endpoint. A job-log API for the installed version has not been
+verified, so v1 does not fetch or return log excerpts. A previous commit makes rollback available; the
+gateway does not perform rollback.
+
+Storage under `IHC_CHAT_DIR` (default `/ihc/chat`): `candidates/<sha256>/tree/` and
+`meta.json`, `jobs/job_<id>.json`, `links/<id>.json` plus uploaded archives, a private
+`link-key`, and transient `work/`. JSON and candidate publication are atomic. The
+canonical hash encodes sorted `[path, base64-content]` pairs as compact JSON, with
+all files normalized to regular files. Jobs and candidates expire after 24 hours;
+a pending deploy retains its candidate until terminal. Pruning runs on tool use.
+No new runtime dependencies: inputs use a small hand-written validator; AJV remains
+a test dependency. A packaged copy of the manifest schema is tested against the
+repository source so spec works in the gateway image.
 
 Paths are relative, `/`-separated, without `..`, `.git/` or absolute parts; the check
 refuses anything else before it unpacks. `.env` files are refused (the cloud writes the
@@ -247,9 +299,8 @@ app's env); `.env.example` is how an app asks for a variable.
 
 ## What this contract does not cover yet
 
-- **Preview per attempt.** A `passed` check proves the app builds, starts and answers
-  with a throwaway database; it is not a URL a person can click. A preview address per
-  candidate is a later step.
+- **Runtime check and preview.** v1 proves static rules only. LAB-170 adds an isolated
+  build and runtime check; a preview address per candidate is a later step.
 - **The app catalog.** `start_from` in the spec is reserved for starting from an app
   another company published; the catalog, its manifests of permissions and its licence
   are a separate design.

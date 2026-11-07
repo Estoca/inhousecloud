@@ -12,3 +12,6 @@ data/
 inventory/apps.json
 backup-reports/
 .mcp-actor-key.pem
+
+# Installer-staged applint and starter app build inputs.
+.ihc-runtime/

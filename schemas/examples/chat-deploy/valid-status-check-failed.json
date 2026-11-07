@@ -1,17 +1,70 @@
-{"def": "DeployStatusOutput", "valid": true, "note": "a check that failed in lint and build",
- "value": {"job_id": "job_7h2k9d0s1a", "kind": "check", "slug": "purchase-requests", "state": "failed", "terminal": true,
-   "stages": [{"stage": "manifest", "state": "passed", "seconds": 0.1}, {"stage": "lint", "state": "failed", "seconds": 0.4},
-              {"stage": "secrets", "state": "passed"}, {"stage": "build", "state": "failed", "seconds": 31.2},
-              {"stage": "start", "state": "skipped"}, {"stage": "migrate", "state": "skipped"},
-              {"stage": "health", "state": "skipped"}, {"stage": "auth", "state": "skipped"}],
-   "findings": [
-     {"code": "IHC-LINT-HOST-NETWORK", "stage": "lint", "severity": "error", "file": "docker-compose.yml", "line": 6,
-      "message": "service 'app' shares a host namespace; apps must be isolated",
-      "fix": "Remove network_mode: host; the app joins the ihc network and listens on PORT.",
-      "docs": "https://inhouse.technology/cloud/docs/app-contract/#lint-before-build"},
-     {"code": "IHC-BUILD-FAILED", "stage": "build", "severity": "error", "file": "Dockerfile", "line": 4,
-      "message": "npm ci exited 1: package-lock.json is missing",
-      "fix": "Send package-lock.json with the tree, or use npm install in the Dockerfile.",
-      "log_excerpt": "#7 [3/4] RUN npm ci\nnpm ERR! The npm ci command can only install with an existing package-lock.json"}],
-   "summary": "The check failed: 2 errors (lint, build). Nothing went on the air.",
-   "candidate_id": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881", "created_at": "2026-11-06T17:20:00Z", "finished_at": "2026-11-06T17:20:40Z"}}
+{
+  "def": "DeployStatusOutput",
+  "valid": true,
+  "note": "a static check that failed in lint",
+  "value": {
+    "job_id": "job_7h2k9d0s1a",
+    "kind": "check",
+    "slug": "purchase-requests",
+    "state": "failed",
+    "terminal": true,
+    "stages": [
+      {
+        "stage": "manifest",
+        "state": "passed",
+        "seconds": 0.1
+      },
+      {
+        "stage": "lint",
+        "state": "failed",
+        "seconds": 0.1
+      },
+      {
+        "stage": "secrets",
+        "state": "passed",
+        "seconds": 0.1
+      },
+      {
+        "stage": "build",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "start",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "migrate",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "health",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "auth",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      }
+    ],
+    "findings": [
+      {
+        "code": "IHC-LINT-HOST-NETWORK",
+        "stage": "lint",
+        "severity": "error",
+        "file": "docker-compose.yml",
+        "line": 6,
+        "message": "service 'app' shares a host namespace; apps must be isolated",
+        "fix": "Remove network_mode: host; the app joins the ihc network and listens on PORT.",
+        "docs": "https://inhouse.technology/cloud/docs/app-contract/#lint-before-build"
+      }
+    ],
+    "summary": "The static check failed in lint; fix the finding and check again.",
+    "candidate_id": "sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "created_at": "2026-11-06T17:20:00Z",
+    "finished_at": "2026-11-06T17:20:40Z"
+  }
+}

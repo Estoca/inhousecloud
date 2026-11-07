@@ -50,6 +50,9 @@ jobs:
       - name: copy_portal leaves a tree the image's node user can read
         working-directory: .
         run: scripts/tests/copy-portal-perms.sh
+      - name: chat deploy image, compose, account and upgrade wiring (offline)
+        working-directory: .
+        run: scripts/tests/chat-deploy-platform.sh
       - name: ihc-app init, an existing app adopted from a laptop (fake Gitea)
         working-directory: .
         run: scripts/tests/ihc-app-init.sh

@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/company-app.schema.json",
+  "title": "Company App Manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "app",
+    "runtime",
+    "deploy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "app": {
+      "type": "object",
+      "required": [
+        "slug",
+        "name",
+        "owner_email"
+      ],
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$",
+          "description": "Repository name, hostname <slug>.<BASE_DOMAIN> and base of every resource name. Names the platform uses, app-* and ihc-* are refused by ihc-app provision."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_email": {
+          "type": "string",
+          "format": "email"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "docker-compose",
+            "documentation"
+          ]
+        },
+        "compose_file": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "healthcheck": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "http"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "expected_status": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 599
+            }
+          },
+          "additionalProperties": false
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8080,
+          "description": "Port the service listens on inside its container; the proxy forwards to it on the ihc network."
+        }
+      },
+      "additionalProperties": true
+    },
+    "deploy": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "port": {
+          "oneOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          ],
+          "description": "auto: the app publishes no host port. Anything else is refused by ihc-app provision."
+        },
+        "env_file": {
+          "type": "string"
+        },
+        "env_example": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "engine": {
+          "const": "postgres"
+        },
+        "shared": {
+          "const": true,
+          "description": "Always the shared Postgres; false is refused."
+        },
+        "migrations_command": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "redis": {
+          "type": "object",
+          "properties": {
+            "required": {
+              "type": "boolean"
+            },
+            "shared": {
+              "const": true
+            },
+            "prefix": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "object_storage": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "shared": {
+          "const": true
+        },
+        "bucket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "mcp": {
+      "description": "Tools for AI agents through the cloud's MCP gateway (docs/app-contract.md, MCP). Audience and scopes start with app.slug and a dot.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 3
+        },
+        "tools_path": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9/_.{}-]*$"
+        },
+        "execute_path": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9/_.{}-]*\\{tool\\}[A-Za-z0-9/_.{}-]*$"
+        },
+        "scopes": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "tools": {
+          "description": "Per tool, read or write and who may use it beyond the scope (docs/app-contract.md, MCP). A map tool name -> {access, groups, people}; a list of {name, ...} is accepted too.",
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "read",
+                      "write"
+                    ],
+                    "description": "read or write; a tool nobody declares read is a write (the gateway asks confirmed_by and audits it)"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "only these Authentik groups may list and call the tool (with people: either)"
+                  },
+                  "people": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+                    },
+                    "description": "only these people (emails) may list and call the tool (with groups: either)"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "read",
+                      "write"
+                    ],
+                    "description": "read or write; a tool nobody declares read is a write (the gateway asks confirmed_by and audits it)"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "only these Authentik groups may list and call the tool (with people: either)"
+                  },
+                  "people": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+                    },
+                    "description": "only these people (emails) may list and call the tool (with groups: either)"
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  }
+                },
+                "additionalProperties": true,
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "secrets_proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slack": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "github": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "linear": {
+          "$ref": "#/$defs/secretsProxyRule"
+        },
+        "hubspot": {
+          "$ref": "#/$defs/secretsProxyRule"
+        }
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "secretsProxyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methods",
+        "path_prefixes"
+      ],
+      "properties": {
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS"
+            ]
+          }
+        },
+        "path_prefixes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^/(?!/)(?!\\.{1,2}(?:/|$))(?!.*(/\\.{1,2})(/|$))(?!.*//)[A-Za-z0-9/_~.-]*(?![\\s\\S])"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,26 +1,133 @@
-{"def": "AppSpecOutput", "valid": true, "note": "the answer for an existing app, with an upload link",
- "value": {
-  "spec_version": "1",
-  "stack": {"runtime": "docker-compose", "starters": [
-    {"id": "node", "image": "node:22-slim", "description": "Express or any Node server, npm start"},
-    {"id": "python", "image": "python:3.12-slim", "description": "FastAPI or Flask, requirements.txt"}]},
-  "manifest": {"schema_url": "https://github.com/Estoca/inhousecloud/blob/main/schemas/company-app.schema.json",
-    "example": "schema_version: 1\napp:\n  slug: purchase-requests\n  name: Purchase requests\n  owner_email: ana@example.com\n"},
-  "env": {"provided": [
-    {"name": "PORT", "meaning": "listen on 0.0.0.0 and this port"},
-    {"name": "DATABASE_URL", "meaning": "the app's own Postgres database, created empty", "when": "database.required: true"},
-    {"name": "DATA_DIR", "meaning": "/data, kept across deploys"}]},
-  "auth": {"person_header": "X-authentik-email", "notes": "The proxy signs the person in; the app reads who it is from the header."},
-  "rules": [
-    {"code": "IHC-LINT-HOST-NETWORK", "text": "No host network, PID, IPC or user namespace."},
-    {"code": "IHC-LINT-OWN-DATASTORE", "text": "No Postgres, Redis or S3 server in the compose file; use DATABASE_URL, REDIS_URL, S3_*."}],
-  "limits": {"inline_bytes": 524288, "file_bytes": 262144, "files": 300, "upload_bytes": 26214400,
-    "candidate_ttl_seconds": 86400, "checks_per_hour": 30},
-  "check_stages": ["manifest", "lint", "secrets", "build", "start", "migrate", "health", "auth"],
-  "deploy_policy": {"existing_app": "same as push to main in Gitea", "new_app_group": "ihc-admins"},
-  "app": {"slug": "purchase-requests", "exists": true, "head_commit": "0123456789abcdef0123456789abcdef01234567",
-    "url": "https://purchase-requests.cloud.example.com",
-    "files": [{"path": "company-app.yaml", "size": 412, "sha256": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa"}]},
-  "upload": {"url": "https://mcp.cloud.example.com/uploads/up_9f3k2m1x0q", "expires_at": "2026-11-06T17:35:00Z",
-    "upload_id": "up_9f3k2m1x0q", "max_bytes": 26214400}
- }}
+{
+  "def": "AppSpecOutput",
+  "valid": true,
+  "note": "the answer for an existing app, with an upload link",
+  "value": {
+    "spec_version": "1",
+    "stack": {
+      "runtime": "docker-compose",
+      "starters": [
+        {
+          "id": "node",
+          "image": "node:22-alpine",
+          "description": "The installed Node starter"
+        }
+      ]
+    },
+    "manifest": {
+      "schema_url": "https://github.com/Estoca/inhousecloud/blob/main/schemas/company-app.schema.json",
+      "example": "# The app's operational contract (docs/app-contract.md, schemas/company-app.schema.json).\n# ihc-app provision reads it on every push to main.\nschema_version: 1\n\napp:\n  slug: purchase-requests\n  name: Purchase requests\n  owner_email: ana@example.com\n  description: Internal app built on the company cloud.\n\nruntime:\n  type: docker-compose\n  compose_file: docker-compose.yml\n  service: app\n  port: 8080\n  healthcheck:\n    type: http\n    path: /health\n    expected_status: 200\n\ndeploy:\n  enabled: true\n  domain: purchase-requests.cloud.example.com\n  port: auto\n  env_example: .env.example\n\nauth:\n  required: true\n  provider: forward-auth\n\ndatabase:\n  required: true\n  engine: postgres\n\ndependencies:\n  redis:\n    required: true\n\n# Files (uploads, exports): set true for a bucket of the app's own on the shared S3 storage\n# (the cloud's storage profile must be on). The deploy writes S3_ENDPOINT, S3_BUCKET,\n# S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION into the app's env (README.md, \"Files\").\nobject_storage:\n  required: false\n\n# Tools for AI agents through the cloud's MCP gateway (docs/app-contract.md, \"MCP\"). The\n# gateway lists GET tools_path and calls POST execute_path on this app's container with an\n# actor JWT (aud = audience, scope = the scopes below granted to the caller's groups);\n# server.js checks it. In the gateway the tools are named <slug>__<tool>. Delete the\n# section to keep the app out of the gateway.\nmcp:\n  audience: purchase-requests.mcp\n  tools_path: /mcp/tools\n  execute_path: /mcp/tools/{tool}/execute\n  scopes:\n    purchase-requests.read:\n      - ihc-users\n\nchecks:\n  build_command: docker compose build\n  test_command: npm test\n"
+    },
+    "env": {
+      "provided": [
+        {
+          "name": "PORT",
+          "meaning": "listen on 0.0.0.0 and this port"
+        },
+        {
+          "name": "DATABASE_URL",
+          "meaning": "the app's own Postgres database, created empty",
+          "when": "database.required: true"
+        },
+        {
+          "name": "DATA_DIR",
+          "meaning": "/data, kept across deploys"
+        }
+      ]
+    },
+    "auth": {
+      "person_header": "X-authentik-email",
+      "notes": "The proxy signs the person in; the app reads who it is from the header."
+    },
+    "rules": [
+      {
+        "code": "IHC-LINT-HOST-NETWORK",
+        "text": "No host network, PID, IPC or user namespace."
+      },
+      {
+        "code": "IHC-LINT-OWN-DATASTORE",
+        "text": "No Postgres, Redis or S3 server in the compose file; use DATABASE_URL, REDIS_URL, S3_*."
+      }
+    ],
+    "limits": {
+      "inline_bytes": 524288,
+      "file_bytes": 262144,
+      "files": 300,
+      "upload_bytes": 26214400,
+      "candidate_ttl_seconds": 86400,
+      "checks_per_hour": 30
+    },
+    "check_stages": [
+      "manifest",
+      "lint",
+      "secrets",
+      "build",
+      "start",
+      "migrate",
+      "health",
+      "auth"
+    ],
+    "deploy_policy": {
+      "existing_app": "same as push to main in Gitea",
+      "new_app_group": "ihc-admins"
+    },
+    "app": {
+      "slug": "purchase-requests",
+      "exists": true,
+      "head_commit": "0123456789abcdef0123456789abcdef01234567",
+      "url": "https://purchase-requests.cloud.example.com",
+      "files": [
+        {
+          "path": "company-app.yaml",
+          "size": 412,
+          "sha256": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa"
+        }
+      ]
+    },
+    "upload": {
+      "url": "https://mcp.cloud.example.com/ihapp/upload/signed-credential",
+      "expires_at": "2026-11-06T17:35:00Z",
+      "upload_id": "up_9f3k2m1x0q",
+      "max_bytes": 26214400
+    },
+    "check_stage_states": [
+      {
+        "stage": "manifest",
+        "state": "pending"
+      },
+      {
+        "stage": "lint",
+        "state": "pending"
+      },
+      {
+        "stage": "secrets",
+        "state": "pending"
+      },
+      {
+        "stage": "build",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "start",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "migrate",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "health",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      },
+      {
+        "stage": "auth",
+        "state": "skipped",
+        "reason": "runs in the deploy job in v1; the isolated check comes with LAB-170"
+      }
+    ]
+  }
+}

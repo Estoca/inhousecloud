@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/server.js';
 import { createGatewayApp } from '../src/mcp-gateway.js';
 import { PLATFORM_TOOLS } from '../src/mcp-platform-tools.js';
+import { IHAPP_TOOLS } from '../src/ihapp-tools.js';
 import { catalogMcpTools } from '../src/catalog-mcp.js';
 
 const portalText = readFileSync(new URL('../llms.txt', import.meta.url), 'utf8');
@@ -18,13 +19,13 @@ const gateway = createGatewayApp({ signer: {}, verifier: {} });
 function toolSignature(tool, schema, access, role) {
   const required = new Set(schema.required ?? []);
   const args = Object.entries(schema.properties ?? {}).map(([name, property]) => (
-    `${name}${required.has(name) ? '' : '?'}: ${property.type}`
+    `${name}${required.has(name) ? '' : '?'}: ${property.type ?? (property.anyOf ? property.anyOf.map(item => item.type).join('|') : 'string')}`
   ));
   return `${tool.name}(${args.join(', ')}) [${access}; ${role}]`;
 }
 
 function documentedTools(text) {
-  return [...text.matchAll(/^- (ihc_\w+\([^\n]*?\) \[[^\]\n]+\]):/gm)].map((match) => match[1]).sort();
+  return [...text.matchAll(/^- ((?:ihc_|ihapp_)\w+\([^\n]*?\) \[[^\]\n]+\]):/gm)].map((match) => match[1]).sort();
 }
 
 function registeredRoutes(app) {
@@ -50,14 +51,15 @@ const platformSignatures = PLATFORM_TOOLS.map((tool) => toolSignature(
   tool, tool.inputSchema, tool.annotations.readOnlyHint ? 'read' : 'write', tool.admin ? 'ihc-admins' : 'ihc-users',
 ));
 const catalogSignatures = catalogMcpTools.map((tool) => toolSignature(tool, tool.input_schema, tool.access, 'catalog-token'));
+const ihappSignatures = IHAPP_TOOLS.map(tool => toolSignature(tool, tool.inputSchema, tool.annotations.readOnlyHint ? 'read' : 'write', 'ihc-users; deploy-account'));
 
 for (const [name, app, text, tools] of [
-  ['portal', portal, portalText, [...platformSignatures, ...catalogSignatures]],
-  ['gateway', gateway, gatewayText, platformSignatures],
+  ['portal', portal, portalText, [...platformSignatures, ...catalogSignatures, ...ihappSignatures]],
+  ['gateway', gateway, gatewayText, [...platformSignatures, ...ihappSignatures]],
 ]) {
   test(`${name} llms.txt matches tool names, arguments, read/write and access from the registries`, () => {
     assert.deepEqual(documentedTools(text), tools.sort(), 'update the tool descriptions in llms.txt');
-    const mentionedNames = [...new Set(text.match(/\bihc_[a-z]\w*/g))].sort();
+    const mentionedNames = [...new Set(text.match(/\b(?:ihc_|ihapp_)[a-z]\w*/g))].sort();
     assert.deepEqual(mentionedNames, tools.map((signature) => signature.split('(')[0]).sort(), 'remove obsolete tool references too');
   });
 

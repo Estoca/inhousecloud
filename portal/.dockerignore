@@ -8,3 +8,9 @@ tmp
 data
 .DS_Store
 .mcp-actor-key.pem
+
+# Include the canonical starter env example; never include developer-staged extras.
+!.ihc-runtime/templates/app/.env.example
+.ihc-runtime/**/__pycache__
+.ihc-runtime/**/node_modules
+.ihc-runtime/**/.git

@@ -23,6 +23,8 @@ Gateway routes (GET also accepts HEAD; all routes except POST /mcp are public):
 - GET /.well-known/oauth-protected-resource/mcp — same metadata for /mcp (RFC 9728).
 - GET /.well-known/oauth-authorization-server — Authentik OAuth endpoints, issuer and supported scopes.
 - GET /.well-known/jwks.json — public actor JWT signing keys for apps; never private keys.
+- PUT /ihapp/upload/:token — signed single-use tar.gz upload, up to 25 MB; configured deploy account only.
+- GET /ihapp/source/:token — signed tar.gz source download; configured deploy account only.
 - POST /mcp — authenticated JSON-RPC, streamable HTTP with JSON responses; one message or batch.
 - ALL /mcp — remaining methods return 405; no persistent session, GET stream or DELETE session.
 MCP methods: initialize, ping, tools/list, tools/call; resources/list and prompts/list return empty lists.
@@ -35,6 +37,15 @@ Platform tools on the MCP gateway (all read-only; arguments marked ? are optiona
 - ihc_list_people() [read; ihc-admins]: directory people, activity and groups.
 - ihc_list_groups() [read; ihc-admins]: directory groups and members.
 - ihc_audit_log(limit?: integer, app?: string, tool?: string, actor?: string, confirmed_by?: string, since?: string) [read; ihc-admins]: newest writes; limit 1..200 (default 50), app slug, full tool name, actor/approver emails, since ISO date/time.
+
+In House Apps v1 (only USER_GROUP members when the deploy account is configured):
+- ihapp_spec(slug?: string, include?: array, start_from?: string) [read; ihc-users; deploy-account]: contract, static rules and stages, template, existing head/files, signed upload and source links.
+- ihapp_check(slug: string, base_commit: string|null, tree: string, files?: array, delete?: array, upload_id?: string) [read; ihc-users; deploy-account]: read annotation; uploads files and runs manifest, static lint and secrets only. Audit status check. Poll ihapp_deploy_status.
+- ihapp_deploy(slug: string, candidate_id: string, base_commit: string|null, message: string, confirmed_by: string) [write; ihc-users; deploy-account]: write, needs confirmed_by and an auditable human approval. Both people need Gitea push permission; new apps require the configured new-app group.
+- ihapp_deploy_status(job_id?: string, slug?: string) [read; ihc-users; deploy-account]: check/deploy state by job_id, or this person's latest job for a slug; findings, summary, URL and polling interval.
+No candidate code is built or executed by the gateway. Build, start, migrate, health and auth check stages are skipped in v1 (LAB-170).
+The deploy writes a non-force commit on main; the usual Actions job builds and applies it. Candidates expire in 24 hours.
+Signed links are credentials; no bearer is needed. Upload PUT expires in 15 minutes and is single use; source GET expires in five minutes.
 
 App tools:
 Call tools/list to discover the current <slug>__<tool> names and inputSchema.
